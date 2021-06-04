@@ -1,18 +1,6 @@
-[package]
-name = "rusty-teos"
-version = "0.0.1"
-authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
-license = "MIT"
-edition = "2018"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-lightning-block-sync = {version = "0.0.14", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
-lightning-net-tokio = { version = "0.0.14", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
-
-base64 = "0.13.0"
-bitcoin = "0.26"
-
-futures = "0.3"
-tokio = { version = "1.5", features = [ "io-util", "macros", "rt", "rt-multi-thread", "sync", "net", "time" ] }
+members = [
+    "teos",
+    "teos-common",
+]
