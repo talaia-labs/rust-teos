@@ -7,12 +7,14 @@
  * at your option.
 */
 
-use crate::convert::{BlockchainInfo, LocalBlockHash};
+use crate::convert::BlockchainInfo;
 use base64;
 use bitcoin::hash_types::BlockHash;
+use bitcoin::Block;
 use futures::executor::block_on;
 use lightning_block_sync::http::HttpEndpoint;
 use lightning_block_sync::rpc::RpcClient;
+use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -22,6 +24,36 @@ pub struct BitcoindClient {
     port: u16,
     rpc_user: String,
     rpc_password: String,
+}
+
+impl BlockSource for &BitcoindClient {
+    fn get_header<'a>(
+        &'a mut self,
+        header_hash: &'a BlockHash,
+        height_hint: Option<u32>,
+    ) -> AsyncBlockSourceResult<'a, BlockHeaderData> {
+        Box::pin(async move {
+            let mut rpc = self.bitcoind_rpc_client.lock().await;
+            rpc.get_header(header_hash, height_hint).await
+        })
+    }
+
+    fn get_block<'a>(
+        &'a mut self,
+        header_hash: &'a BlockHash,
+    ) -> AsyncBlockSourceResult<'a, Block> {
+        Box::pin(async move {
+            let mut rpc = self.bitcoind_rpc_client.lock().await;
+            rpc.get_block(header_hash).await
+        })
+    }
+
+    fn get_best_block<'a>(&'a mut self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
+        Box::pin(async move {
+            let mut rpc = self.bitcoind_rpc_client.lock().await;
+            rpc.get_best_block().await
+        })
+    }
 }
 
 impl BitcoindClient {
@@ -65,16 +97,5 @@ impl BitcoindClient {
         let mut rpc = self.bitcoind_rpc_client.lock().await;
         rpc.call_method::<BlockchainInfo>("getblockchaininfo", &vec![])
             .await
-    }
-
-    pub async fn get_best_block_hash(&self) -> Result<BlockHash, std::io::Error> {
-        let mut rpc = self.bitcoind_rpc_client.lock().await;
-        match rpc
-            .call_method::<LocalBlockHash>("getbestblockhash", &vec![])
-            .await
-        {
-            Ok(x) => Ok(x.0),
-            Err(x) => Err(x),
-        }
     }
 }

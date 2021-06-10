@@ -18,8 +18,6 @@ pub struct BlockchainInfo {
     pub chain: String,
 }
 
-pub struct LocalBlockHash(pub BlockHash);
-
 impl TryInto<BlockchainInfo> for JsonResponse {
     type Error = std::io::Error;
     fn try_into(self) -> std::io::Result<BlockchainInfo> {
@@ -29,14 +27,5 @@ impl TryInto<BlockchainInfo> for JsonResponse {
                 .unwrap(),
             chain: self.0["chain"].as_str().unwrap().to_string(),
         })
-    }
-}
-
-impl TryInto<LocalBlockHash> for JsonResponse {
-    type Error = std::io::Error;
-    fn try_into(self) -> std::io::Result<LocalBlockHash> {
-        Ok(LocalBlockHash(
-            BlockHash::from_hex(self.0.as_str().unwrap()).unwrap(),
-        ))
     }
 }

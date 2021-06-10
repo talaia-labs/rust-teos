@@ -17,19 +17,19 @@ pub async fn main() {
 
     tokio::spawn(async move {
         loop {
-            let block = rx.recv().await.unwrap();
+            let block = rx.recv().await;
             println!("r1: received = {:?}", block);
         }
     });
 
     tokio::spawn(async move {
         loop {
-            let block = rx2.recv().await.unwrap();
+            let block = rx2.recv().await;
             println!("r2: received = {:?}", block);
         }
     });
 
-    // Initialize our bitcoind client.
+    // // Initialize our bitcoind client.
     let bitcoin_cli = match BitcoindClient::new(host, port, user, password).await {
         Ok(client) => Arc::new(client),
         Err(e) => {
