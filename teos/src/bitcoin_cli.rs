@@ -7,6 +7,7 @@
  * at your option.
 */
 
+use crate::convert::BlockCount;
 use crate::convert::BlockchainInfo;
 use base64;
 use bitcoin::hash_types::BlockHash;
@@ -97,5 +98,13 @@ impl BitcoindClient {
         let mut rpc = self.bitcoind_rpc_client.lock().await;
         rpc.call_method::<BlockchainInfo>("getblockchaininfo", &vec![])
             .await
+    }
+
+    pub async fn get_block_count(&self) -> Result<u64, std::io::Error> {
+        let mut rpc = self.bitcoind_rpc_client.lock().await;
+        match rpc.call_method::<BlockCount>("getblockcount", &[]).await {
+            Ok(x) => Ok(x.0),
+            Err(e) => Err(e),
+        }
     }
 }

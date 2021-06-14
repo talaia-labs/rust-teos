@@ -18,6 +18,8 @@ pub struct BlockchainInfo {
     pub chain: String,
 }
 
+pub struct BlockCount(pub u64);
+
 impl TryInto<BlockchainInfo> for JsonResponse {
     type Error = std::io::Error;
     fn try_into(self) -> std::io::Result<BlockchainInfo> {
@@ -27,5 +29,19 @@ impl TryInto<BlockchainInfo> for JsonResponse {
                 .unwrap(),
             chain: self.0["chain"].as_str().unwrap().to_string(),
         })
+    }
+}
+
+impl TryInto<BlockCount> for JsonResponse {
+    type Error = std::io::Error;
+
+    fn try_into(self) -> std::io::Result<BlockCount> {
+        match self.0.as_u64() {
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "not a number",
+            )),
+            Some(n) => Ok(BlockCount(n)),
+        }
     }
 }
