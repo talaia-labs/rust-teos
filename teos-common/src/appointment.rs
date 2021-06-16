@@ -1,10 +1,27 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
 
+use bitcoin::Txid;
+
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Hash)]
+pub struct Locator([u8; 16]);
+
+impl Locator {
+    pub fn new(txid: Txid) -> Self {
+        let mut raw_locator = [0; 16];
+        raw_locator.copy_from_slice(&txid[..16]);
+        Locator(raw_locator)
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.0.to_vec()
+    }
+}
+
 /// Contains data regarding an appointment between a client and the Watchtower. An appointment is requested for every new channel update.
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct Appointment {
-    pub locator: [u8; 16],
+    pub locator: Locator,
     pub encrypted_blob: Vec<u8>,
     pub to_self_delay: u32,
 }
@@ -19,7 +36,7 @@ pub enum AppointmentStatus {
 impl Appointment {
     pub fn new(locator: [u8; 16], encrypted_blob: Vec<u8>, to_self_delay: u32) -> Self {
         Appointment {
-            locator,
+            locator: Locator(locator),
             encrypted_blob,
             to_self_delay,
         }
@@ -49,7 +66,7 @@ impl Appointment {
 
 #[cfg(test)]
 mod tests {
-    use super::Appointment;
+    use super::*;
     use serde_json::json;
 
     #[test]
@@ -62,7 +79,7 @@ mod tests {
         let data = json!(appointment).to_string();
         let a = Appointment::from_json(&data).unwrap();
 
-        assert_eq!(a.locator, locator);
+        assert_eq!(a.locator, Locator(locator));
         assert_eq!(a.encrypted_blob, encrypted_blob);
         assert_eq!(a.to_self_delay, to_self_delay);
     }

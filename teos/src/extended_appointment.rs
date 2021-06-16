@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
-use teos_common::appointment::Appointment;
+use teos_common::appointment::{Appointment, Locator};
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 struct ExtendedAppointment {
@@ -12,7 +12,7 @@ struct ExtendedAppointment {
 
 #[derive(Serialize, Deserialize)]
 struct AppointmentSummary {
-    locator: [u8; 16],
+    locator: Locator,
     user_id: [u8; 16],
 }
 
@@ -33,7 +33,7 @@ impl ExtendedAppointment {
 
     fn get_summary(&self) -> AppointmentSummary {
         AppointmentSummary {
-            locator: self.appointment.locator,
+            locator: self.appointment.locator.clone(),
             user_id: self.user_id,
         }
     }
