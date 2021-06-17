@@ -1,31 +1,47 @@
-use crate::bitcoin_cli::BitcoindClient;
 use bitcoin::hash_types::BlockHash;
-use bitcoin::network::constants::Network;
 use bitcoin::Transaction;
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlockHeader};
-use std::{collections::HashMap, ops::Deref};
+use lightning_block_sync::BlockSource;
+use std::collections::HashMap;
+use std::fmt;
+use std::ops::DerefMut;
 use teos_common::appointment::Locator;
 
-struct LocatorCache<'a> {
-    bitcoin_cli: &'a BitcoindClient,
+struct LocatorCache<B: DerefMut<Target = T> + Sized, T: BlockSource> {
+    poller: ChainPoller<B, T>,
     cache: HashMap<Locator, Transaction>,
     blocks: Vec<BlockHash>,
     tx_in_block: HashMap<BlockHash, Vec<Locator>>,
     size: u8,
 }
 
-impl<'a> LocatorCache<'a> {
+impl<B, T> fmt::Display for LocatorCache<B, T>
+where
+    B: DerefMut<Target = T> + Sized + Send + Sync,
+    T: BlockSource,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "cache: {:?}\n\nblocks: {:?}\n\ntx_in_block: {:?}\n\nsize: {}",
+            self.cache, self.blocks, self.tx_in_block, self.size
+        )
+    }
+}
+
+impl<B, T> LocatorCache<B, T>
+where
+    B: DerefMut<Target = T> + Sized + Send + Sync,
+    T: BlockSource,
+{
     async fn new(
         last_known_block_header: ValidatedBlockHeader,
         cache_size: u8,
-        bitcoin_cli: &'a BitcoindClient,
-    ) -> LocatorCache<'a> {
+        mut poller: ChainPoller<B, T>,
+    ) -> LocatorCache<B, T> {
         let mut cache = HashMap::new();
         let mut blocks = Vec::new();
         let mut tx_in_block = HashMap::new();
-
-        let mut derefed = bitcoin_cli.deref();
-        let mut poller = ChainPoller::new(&mut derefed, Network::Bitcoin);
 
         let mut target_block_header = last_known_block_header;
         for _ in 0..cache_size {
@@ -47,7 +63,7 @@ impl<'a> LocatorCache<'a> {
         }
 
         LocatorCache {
-            bitcoin_cli: bitcoin_cli,
+            poller: poller,
             cache,
             blocks,
             tx_in_block,
@@ -105,9 +121,6 @@ impl<'a> LocatorCache<'a> {
         let mut tmp_blocks = Vec::new();
         let mut tmp_tx_in_block = HashMap::new();
 
-        let mut derefed = self.bitcoin_cli.deref();
-        let mut poller = ChainPoller::new(&mut derefed, Network::Bitcoin);
-
         let mut target_block_header = new_tip;
         for _ in 0..self.size {
             match self
@@ -125,7 +138,7 @@ impl<'a> LocatorCache<'a> {
                     }
                 }
                 None => {
-                    let block = poller.fetch_block(&target_block_header).await.unwrap();
+                    let block = self.poller.fetch_block(&target_block_header).await.unwrap();
                     let mut locators = Vec::new();
                     for tx in block.txdata.clone() {
                         let locator = Locator::new(tx.txid());
@@ -138,7 +151,8 @@ impl<'a> LocatorCache<'a> {
                 }
             }
 
-            target_block_header = poller
+            target_block_header = self
+                .poller
                 .look_up_previous_header(&target_block_header)
                 .await
                 .unwrap();
@@ -148,5 +162,24 @@ impl<'a> LocatorCache<'a> {
         self.tx_in_block = tmp_tx_in_block;
         self.blocks = tmp_blocks;
         self.blocks.reverse();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::network::constants::Network;
+    use lightning_block_sync::test_utils::Blockchain;
+
+    #[tokio::test]
+    async fn test_cache() {
+        let mut chain = Blockchain::default().with_height(10);
+        let tip = chain.tip();
+        let size = 6;
+
+        let poller = ChainPoller::new(&mut chain, Network::Bitcoin);
+        let cache = LocatorCache::new(tip, size, poller).await;
+
+        assert_eq!(size, cache.size)
     }
 }
