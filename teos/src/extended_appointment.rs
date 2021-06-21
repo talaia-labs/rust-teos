@@ -3,7 +3,7 @@ use serde_json::{Error as JSONError, Value};
 use teos_common::appointment::{Appointment, Locator};
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
-struct ExtendedAppointment {
+pub struct ExtendedAppointment {
     appointment: Appointment,
     user_id: [u8; 16],
     user_signature: Vec<u8>,

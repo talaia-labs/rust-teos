@@ -10,13 +10,14 @@ edition = "2018"
 [dependencies]
 teos-common = {path = "../teos-common"}
 
-lightning-block-sync = {version = "0.0.14", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
-lightning-net-tokio = { version = "0.0.14", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+lightning-block-sync = {version = "0.0.98", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
+lightning-net-tokio = { version = "0.0.98", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
 
-base64 = "0.13.0"
 bitcoin = "0.26"
 
+base64 = "0.13.0"
 futures = "0.3"
 serde = "1.0.126"
 serde_json = { version = "1.0"}
+uuid = { version = "0.8", features = ["serde", "v4"] }
 tokio = { version = "1.5", features = [ "io-util", "macros", "rt", "rt-multi-thread", "sync", "net", "time" ] }
