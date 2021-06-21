@@ -41,12 +41,23 @@ impl ChainMonitor {
                     ChainTip::Better(new_best) => {
                         println!("New tip found: {:?}", new_best);
                         current_best = new_best;
-                        self.tx.send(new_best).unwrap();
+                        self.tx.send(current_best).unwrap();
                     }
 
-                    ChainTip::Worse(x) => {
-                        // I don't think this is actually possible using bitcoind as block source, but if so we can at least log it
-                        println!("Worse tip found: {:?}", x);
+                    ChainTip::Worse(worse) => {
+                        // This would happen both if a block has less chainwork than the previous one, or if it has the same chainwork
+                        // but it forks from the parent. The former should not matter, given a reorg will be detected by the subscribers
+                        // once we reach the same work*. The latter is a valid case and should be passed along.
+                        // The only caveat here would be that the caches of the subscribers are smaller than the reorg, which should
+                        // never happen under reasonable assumptions (e.g. cache of 6 blocks).
+                        println!("Worse tip found: {:?}", worse);
+
+                        if worse.chainwork == current_best.chainwork {
+                            current_best = worse;
+                            self.tx.send(current_best).unwrap();
+                        } else {
+                            println!("New tip has less work than the previous one")
+                        }
                     }
                 },
                 Err(_) => println!("Connection lost with bitcoind"),
