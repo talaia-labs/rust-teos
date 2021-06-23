@@ -1,6 +1,6 @@
 use crate::extended_appointment::ExtendedAppointment;
 use bitcoin::hash_types::BlockHash;
-use bitcoin::Transaction;
+use bitcoin::{BlockHeader, Transaction};
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlockHeader};
 use lightning_block_sync::BlockSource;
 use std::cell::RefCell;
@@ -9,13 +9,14 @@ use std::fmt;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use teos_common::appointment::Locator;
+use teos_common::cryptography::{self, DecryptingError};
 use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
 
 struct LocatorCache<B: DerefMut<Target = T> + Sized, T: BlockSource> {
     poller: Rc<RefCell<ChainPoller<B, T>>>,
     cache: HashMap<Locator, Transaction>,
-    blocks: Vec<BlockHash>,
+    blocks: Vec<BlockHeader>,
     tx_in_block: HashMap<BlockHash, Vec<Locator>>,
     size: u8,
 }
@@ -31,6 +32,23 @@ where
             "cache: {:?}\n\nblocks: {:?}\n\ntx_in_block: {:?}\n\nsize: {}",
             self.cache, self.blocks, self.tx_in_block, self.size
         )
+    }
+}
+
+#[derive(Debug)]
+struct Breach<'a> {
+    locator: &'a Locator,
+    dispute_tx: &'a Transaction,
+    penalty_tx: Transaction,
+}
+
+impl<'a> Breach<'a> {
+    fn new(locator: &'a Locator, dispute_tx: &'a Transaction, penalty_tx: Transaction) -> Self {
+        Breach {
+            locator,
+            dispute_tx,
+            penalty_tx,
+        }
     }
 }
 
@@ -60,7 +78,7 @@ where
             }
 
             tx_in_block.insert(block.block_hash(), locators);
-            blocks.push(block.block_hash());
+            blocks.push(block.header);
 
             target_block_header = derefed
                 .look_up_previous_header(&target_block_header)
@@ -85,10 +103,10 @@ where
     // FIXME: This needs mutex
     pub fn update(
         &mut self,
-        new_tip: ValidatedBlockHeader,
+        tip_header: ValidatedBlockHeader,
         locator_tx_map: HashMap<Locator, Transaction>,
     ) {
-        self.blocks.push(new_tip.header.block_hash());
+        self.blocks.push(tip_header.header);
 
         let mut locators = Vec::new();
         for (locator, tx) in locator_tx_map {
@@ -97,9 +115,9 @@ where
         }
 
         self.tx_in_block
-            .insert(new_tip.header.block_hash(), locators);
+            .insert(tip_header.header.block_hash(), locators);
 
-        println!("Block added to cache {}", new_tip.header.block_hash());
+        println!("Block added to cache {}", tip_header.header.block_hash());
         println!("Cache :{:#?}", self.blocks);
 
         if self.is_full() {
@@ -115,38 +133,37 @@ where
     // FIXME: This needs mutex
     pub fn remove_oldest_block(&mut self) {
         let oldest = self.blocks.remove(0);
-        for locator in self.tx_in_block.remove(&oldest).unwrap() {
+        let oldest_hash = oldest.block_hash();
+        for locator in self.tx_in_block.remove(&oldest_hash).unwrap() {
             self.cache.remove(&locator);
         }
 
-        println!("Block removed from cache {}", oldest);
+        println!("Block removed from cache {}", oldest_hash);
     }
 
     // FIXME: This needs mutex
-    pub async fn fix(&mut self, new_tip: ValidatedBlockHeader) {
+    pub async fn fix(&mut self, mut tip_header: ValidatedBlockHeader) {
         let mut tmp_cache = HashMap::new();
         let mut tmp_blocks = Vec::new();
         let mut tmp_tx_in_block = HashMap::new();
         let mut derefed = self.poller.borrow_mut();
 
-        let mut target_block_header = new_tip;
         for _ in 0..self.size {
             match self
                 .tx_in_block
-                .get(&target_block_header.header.block_hash())
+                .get(&tip_header.header.block_hash())
                 .cloned()
             {
                 Some(locators) => {
-                    tmp_tx_in_block
-                        .insert(target_block_header.header.block_hash(), locators.clone());
-                    tmp_blocks.push(target_block_header.header.block_hash());
+                    tmp_tx_in_block.insert(tip_header.header.block_hash(), locators.clone());
+                    tmp_blocks.push(tip_header.header);
                     for locator in locators {
                         tmp_cache
                             .insert(locator.clone(), self.cache.get(&locator).unwrap().clone());
                     }
                 }
                 None => {
-                    let block = derefed.fetch_block(&target_block_header).await.unwrap();
+                    let block = derefed.fetch_block(&tip_header).await.unwrap();
                     let mut locators = Vec::new();
                     for tx in block.txdata.clone() {
                         let locator = Locator::new(tx.txid());
@@ -155,14 +172,11 @@ where
                     }
 
                     tmp_tx_in_block.insert(block.block_hash(), locators);
-                    tmp_blocks.push(block.block_hash());
+                    tmp_blocks.push(block.header);
                 }
             }
 
-            target_block_header = derefed
-                .look_up_previous_header(&target_block_header)
-                .await
-                .unwrap();
+            tip_header = derefed.look_up_previous_header(&tip_header).await.unwrap();
         }
 
         self.cache = tmp_cache;
@@ -208,66 +222,109 @@ where
     pub async fn do_watch(&mut self) {
         println!("Starting to watch");
         loop {
-            let new_tip = self.block_queue.recv().await.unwrap();
-            let block = {
+            let new_tip_header = self.block_queue.recv().await.unwrap();
+            let new_tip = {
                 let mut derefed = self.poller.borrow_mut();
-                derefed.fetch_block(&new_tip).await.unwrap()
+                derefed.fetch_block(&new_tip_header).await.unwrap()
             };
 
             let mut locator_tx_map = HashMap::new();
-            for tx in block.txdata.iter() {
+            for tx in new_tip.txdata.iter() {
                 locator_tx_map.insert(Locator::new(tx.txid()), tx.clone());
             }
 
             if self.appointments.len() > 0 {
-                let breaches = self.get_breaches(locator_tx_map.clone());
-                println!("BREACHES: {:?}", breaches);
+                let (valid_breaches, invalid_breaches) =
+                    self.filter_breaches(self.get_breaches(&locator_tx_map));
+                println!("BREACHES: {:?}, {:?}", valid_breaches, invalid_breaches);
             }
 
             // Update the cache
             if new_tip.header.prev_blockhash == self.last_known_block_header.header.block_hash() {
-                self.locator_cache.update(new_tip, locator_tx_map);
+                self.locator_cache.update(new_tip_header, locator_tx_map);
             } else {
                 println!("Reorg");
-                self.locator_cache.fix(new_tip).await;
+                self.locator_cache.fix(new_tip_header).await;
             }
 
-            self.last_known_block_header = new_tip;
+            self.last_known_block_header = new_tip_header;
         }
     }
 
-    fn get_breaches(
+    fn get_breaches<'a>(
         &self,
-        locator_tx_map: HashMap<Locator, Transaction>,
-    ) -> HashMap<Locator, Transaction> {
+        locator_tx_map: &'a HashMap<Locator, Transaction>,
+    ) -> HashMap<&'a Locator, &'a Transaction> {
         let local_set: HashSet<Locator> = self.locator_uuid_map.keys().cloned().collect();
         let new_set = locator_tx_map.keys().cloned().collect();
         let intersection = local_set.intersection(&new_set);
 
         let mut breaches = HashMap::new();
-
         for locator in intersection {
-            breaches.insert(
-                locator.clone(),
-                locator_tx_map.get(locator).unwrap().clone(),
-            );
+            let (k, v) = locator_tx_map.get_key_value(locator).unwrap();
+            breaches.insert(k, v);
         }
 
         if breaches.len() > 0 {
-            println!("List of breaches: {:?}", breaches);
+            println!("List of breaches: {:?}", breaches.keys());
         } else {
             println!("No breaches found")
         }
 
         breaches
     }
+
+    fn filter_breaches<'a>(
+        &'a self,
+        breaches: HashMap<&'a Locator, &'a Transaction>,
+    ) -> (
+        HashMap<&'a Uuid, Breach>,
+        HashMap<&'a Uuid, DecryptingError>,
+    ) {
+        let mut valid_breaches = HashMap::new();
+        let mut invalid_breaches = HashMap::new();
+
+        // A cache of the already decrypted blobs so replicate decryption can be avoided
+        let mut decrypted_blobs: HashMap<Vec<u8>, Transaction> = HashMap::new();
+
+        for (locator, tx) in breaches.into_iter() {
+            for uuid in self.locator_uuid_map.get(locator) {
+                // FIXME: this should load data from the DB
+                let appointment = self.appointments.get(uuid).unwrap();
+
+                if decrypted_blobs.contains_key(&appointment.inner.encrypted_blob) {
+                    let penalty_tx = decrypted_blobs
+                        .get(&appointment.inner.encrypted_blob)
+                        .unwrap();
+                    valid_breaches.insert(uuid, Breach::new(locator, tx, penalty_tx.clone()));
+                } else {
+                    match cryptography::decrypt(&appointment.inner.encrypted_blob, &tx.txid()) {
+                        Ok(penalty_tx) => {
+                            decrypted_blobs.insert(
+                                appointment.inner.encrypted_blob.clone(),
+                                penalty_tx.clone(),
+                            );
+                            valid_breaches.insert(uuid, Breach::new(locator, tx, penalty_tx));
+                        }
+                        Err(e) => {
+                            invalid_breaches.insert(uuid, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        (valid_breaches, invalid_breaches)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::generate_dummy_appointment;
+    use crate::test_utils::Blockchain;
+
     use bitcoin::network::constants::Network;
-    use lightning_block_sync::test_utils::Blockchain;
     use tokio::sync::broadcast;
 
     #[tokio::test]
@@ -283,12 +340,72 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_watcher() {
-        let (tx, mut rx) = broadcast::channel(100);
-        let mut chain = Blockchain::default().with_height(10);
-        let tip = chain.tip();
-        let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
+    async fn test_get_breaches() {
+        let (_, rx) = broadcast::channel(100);
 
-        let mut watcher = Watcher::new(rx, poller, tip).await;
+        let mut chain = Blockchain::default().with_height_and_txs(10);
+        let tip = chain.tip();
+        let txs = chain.blocks.last().unwrap().txdata.clone();
+
+        let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
+        let mut watcher = Watcher::new(rx, poller.clone(), tip).await;
+
+        // Let's create some locators based on the transactions in the last block
+        let mut locator_tx_map = HashMap::new();
+        for tx in txs {
+            locator_tx_map.insert(Locator::new(tx.txid()), tx.clone());
+        }
+
+        // Add some of them to the Watcher
+        for (i, locator) in locator_tx_map.keys().enumerate() {
+            if i % 2 == 0 {
+                watcher
+                    .locator_uuid_map
+                    .insert(locator.clone(), Uuid::new_v4());
+            }
+        }
+
+        // Check that breaches are correctly detected
+        let breaches = watcher.get_breaches(&locator_tx_map);
+        assert!(
+            breaches.len() == watcher.locator_uuid_map.len()
+                && breaches
+                    .keys()
+                    .all(|k| watcher.locator_uuid_map.contains_key(k))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_filter_breaches() {
+        let (_, rx) = broadcast::channel(100);
+
+        let mut chain = Blockchain::default().with_height_and_txs(10);
+        let tip = chain.tip();
+        let txs = chain.blocks.last().unwrap().txdata.clone();
+
+        let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
+        let mut watcher = Watcher::new(rx, poller.clone(), tip).await;
+
+        // Let's create some locators based on the transactions in the last block
+        let mut locator_tx_map = HashMap::new();
+        for tx in txs {
+            locator_tx_map.insert(Locator::new(tx.txid()), tx.clone());
+        }
+
+        // Add some of them to the Watcher
+        for (i, (locator, tx)) in locator_tx_map.iter().enumerate() {
+            if i % 2 == 0 {
+                let uuid = Uuid::new_v4();
+                watcher
+                    .appointments
+                    .insert(uuid, generate_dummy_appointment(Some(&tx.txid()), true));
+                watcher.locator_uuid_map.insert(locator.clone(), uuid);
+            }
+        }
+
+        let breaches = watcher.get_breaches(&locator_tx_map);
+        let (valid, invalid) = watcher.filter_breaches(breaches);
+
+        println!("VALID: {:?} \nINVALID: {:?}", valid, invalid);
     }
 }

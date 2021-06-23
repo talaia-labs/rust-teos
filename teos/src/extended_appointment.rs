@@ -4,36 +4,36 @@ use teos_common::appointment::{Appointment, Locator};
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct ExtendedAppointment {
-    appointment: Appointment,
+    pub inner: Appointment,
     user_id: [u8; 16],
     user_signature: Vec<u8>,
     start_block: u32,
 }
 
 #[derive(Serialize, Deserialize)]
-struct AppointmentSummary {
+pub struct AppointmentSummary {
     locator: Locator,
     user_id: [u8; 16],
 }
 
 impl ExtendedAppointment {
-    fn new(
-        appointment: Appointment,
+    pub fn new(
+        inner: Appointment,
         user_id: [u8; 16],
         user_signature: Vec<u8>,
         start_block: u32,
     ) -> Self {
         ExtendedAppointment {
-            appointment,
+            inner,
             user_id,
             user_signature,
             start_block,
         }
     }
 
-    fn get_summary(&self) -> AppointmentSummary {
+    pub fn get_summary(&self) -> AppointmentSummary {
         AppointmentSummary {
-            locator: self.appointment.locator.clone(),
+            locator: self.inner.locator.clone(),
             user_id: self.user_id,
         }
     }
@@ -63,7 +63,7 @@ mod tests {
 
         let s = e.get_summary();
 
-        assert_eq!(e.appointment.locator, s.locator);
+        assert_eq!(e.inner.locator, s.locator);
         assert_eq!(e.user_id, s.user_id);
     }
 
@@ -88,7 +88,7 @@ mod tests {
 
         let e = ExtendedAppointment::from_json(&data).unwrap();
 
-        assert_eq!(e.appointment, appointment);
+        assert_eq!(e.inner, appointment);
         assert_eq!(e.user_id, user_id);
         assert_eq!(e.user_signature, user_signature);
         assert_eq!(e.start_block, start_block);
@@ -112,6 +112,8 @@ mod tests {
             start_block,
         );
         let e_json = extended_appointment.to_json();
+
+        println!("{}", e_json);
 
         assert_eq!(e_json["appointment"], json!(appointment));
         assert_eq!(e_json["user_id"], json!(user_id));

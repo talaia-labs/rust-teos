@@ -15,6 +15,7 @@ lightning-net-tokio = { version = "0.0.98", git = "https://github.com/rust-bitco
 
 bitcoin = "0.26"
 
+rand = "0.8.4"
 base64 = "0.13.0"
 futures = "0.3"
 serde = "1.0.126"

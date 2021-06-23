@@ -4,3 +4,6 @@ pub mod chain_monitor;
 pub mod convert;
 pub mod extended_appointment;
 pub mod watcher;
+
+#[cfg(test)]
+mod test_utils;
