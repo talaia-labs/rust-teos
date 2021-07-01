@@ -320,6 +320,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::iter::FromIterator;
+
     use super::*;
     use crate::test_utils::generate_dummy_appointment;
     use crate::test_utils::Blockchain;
@@ -343,7 +345,7 @@ mod tests {
     async fn test_get_breaches() {
         let (_, rx) = broadcast::channel(100);
 
-        let mut chain = Blockchain::default().with_height_and_txs(10);
+        let mut chain = Blockchain::default().with_height_and_txs(12, None);
         let tip = chain.tip();
         let txs = chain.blocks.last().unwrap().txdata.clone();
 
@@ -379,7 +381,7 @@ mod tests {
     async fn test_filter_breaches() {
         let (_, rx) = broadcast::channel(100);
 
-        let mut chain = Blockchain::default().with_height_and_txs(10);
+        let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
         let tip = chain.tip();
         let txs = chain.blocks.last().unwrap().txdata.clone();
 
@@ -393,12 +395,27 @@ mod tests {
         }
 
         // Add some of them to the Watcher
+        let mut local_valid = Vec::new();
+        let mut local_invalid = Vec::new();
+
         for (i, (locator, tx)) in locator_tx_map.iter().enumerate() {
-            if i % 2 == 0 {
-                let uuid = Uuid::new_v4();
+            let uuid = Uuid::new_v4();
+            let tx_id = tx.txid();
+            let mut dispute_txid = None;
+
+            // Add 1/3 as valid breaches, 1/3 as invalid, leave 1/3 out
+            if i % 3 < 2 {
+                match i % 3 {
+                    0 => {
+                        dispute_txid = Some(&tx_id);
+                        local_valid.push(uuid);
+                    }
+                    _ => local_invalid.push(uuid),
+                }
+
                 watcher
                     .appointments
-                    .insert(uuid, generate_dummy_appointment(Some(&tx.txid()), true));
+                    .insert(uuid, generate_dummy_appointment(dispute_txid));
                 watcher.locator_uuid_map.insert(locator.clone(), uuid);
             }
         }
@@ -406,6 +423,21 @@ mod tests {
         let breaches = watcher.get_breaches(&locator_tx_map);
         let (valid, invalid) = watcher.filter_breaches(breaches);
 
-        println!("VALID: {:?} \nINVALID: {:?}", valid, invalid);
+        // Check valid + invalid add up to 2/3
+        assert_eq!(2 * locator_tx_map.len() / 3, valid.len() + invalid.len());
+
+        // Check valid breaches match
+        assert!(valid.len() == local_valid.len() && valid.keys().all(|k| local_valid.contains(k)));
+
+        // Check invalid breaches match
+        assert!(
+            invalid.len() == local_invalid.len()
+                && invalid.keys().all(|k| local_invalid.contains(k))
+        );
+
+        // All invalid breaches should be AED errors (the decryption key was invalid)
+        invalid
+            .values()
+            .all(|v| matches!(v, DecryptingError::AED { .. }));
     }
 }

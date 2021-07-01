@@ -72,10 +72,15 @@ impl Blockchain {
         self
     }
 
-    pub fn with_height_and_txs(mut self, height: usize) -> Self {
+    pub fn with_height_and_txs(mut self, height: usize, tx_count: Option<u8>) -> Self {
+        let tx_count = match tx_count {
+            Some(x) => x,
+            None => 10,
+        };
+
         for _ in 1..=height {
             let mut txs = Vec::new();
-            for _ in 0..10 {
+            for _ in 0..tx_count {
                 txs.push(get_random_tx());
             }
 
@@ -259,10 +264,7 @@ pub fn get_random_tx() -> Transaction {
     }
 }
 
-pub(crate) fn generate_dummy_appointment(
-    dispute_txid: Option<&Txid>,
-    real_penalty: bool,
-) -> ExtendedAppointment {
+pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> ExtendedAppointment {
     let dispute_txid = match dispute_txid {
         Some(l) => l.clone(),
         None => Txid::from_slice(&[1; 32]).unwrap(),
@@ -274,14 +276,11 @@ pub(crate) fn generate_dummy_appointment(
     let mut locator = [0; 16];
     locator.copy_from_slice(&dispute_txid[..16]);
 
-    let encrypted_blob = match real_penalty {
-        true => encrypt(&penalty_tx, &dispute_txid).unwrap(),
-        false => [3; 32].to_vec(),
-    };
-
+    let encrypted_blob = encrypt(&penalty_tx, &dispute_txid).unwrap();
     let appointment = Appointment::new(locator, encrypted_blob, 21);
     let user_id = [2; 16];
     let user_signature = [5, 6, 7, 8].to_vec();
     let start_block = 42;
+
     ExtendedAppointment::new(appointment, user_id, user_signature, start_block)
 }
