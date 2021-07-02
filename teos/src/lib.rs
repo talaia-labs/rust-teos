@@ -1,5 +1,4 @@
 pub mod bitcoin_cli;
-pub mod block_processor;
 pub mod chain_monitor;
 mod convert;
 mod extended_appointment;

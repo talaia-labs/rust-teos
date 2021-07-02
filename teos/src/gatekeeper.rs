@@ -1,5 +1,10 @@
 use bitcoin::secp256k1::PublicKey;
+use lightning_block_sync::poll::{ChainPoller, ValidatedBlockHeader};
+use lightning_block_sync::BlockSource;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::DerefMut;
+use std::rc::Rc;
 use teos_common::cryptography;
 use tokio::sync::broadcast::Receiver;
 
@@ -7,9 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
 use uuid::Uuid;
 
-use lightning_block_sync::poll::ValidatedBlockHeader;
-
-use crate::{block_processor::BlockProcessor, extended_appointment::ExtendedAppointment};
+use crate::extended_appointment::ExtendedAppointment;
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE_HEX;
 
 #[derive(Clone, Eq, PartialEq, Hash)]
@@ -18,12 +21,12 @@ pub struct UserId(PublicKey);
 #[derive(Serialize, Deserialize)]
 pub struct UserInfo {
     available_slots: u32,
-    subscription_expiry: u64,
+    subscription_expiry: u32,
     appointments: HashMap<Uuid, u32>,
 }
 
 impl UserInfo {
-    pub fn new(available_slots: u32, subscription_expiry: u64) -> Self {
+    pub fn new(available_slots: u32, subscription_expiry: u32) -> Self {
         UserInfo {
             available_slots,
             subscription_expiry,
@@ -39,20 +42,48 @@ impl UserInfo {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct AuthenticationFailure<'a>(&'a str);
+
+#[derive(Debug, PartialEq)]
 pub struct NotEnoughSlots;
 
-pub struct Gatekeeper {
-    subscription_slots: u32,
-    subscription_duration: u64,
-    expiry_delta: u32,
+pub struct Gatekeeper<B: DerefMut<Target = T> + Sized, T: BlockSource> {
+    poller: Rc<RefCell<ChainPoller<B, T>>>,
+    last_known_block_header: ValidatedBlockHeader,
     block_queue: Receiver<ValidatedBlockHeader>,
-    block_processor: BlockProcessor,
+    subscription_slots: u32,
+    subscription_duration: u32,
+    expiry_delta: u32,
     registered_users: HashMap<UserId, UserInfo>,
     outdated_users_cache: HashMap<UserId, UserInfo>,
 }
 
-impl Gatekeeper {
+impl<B, T> Gatekeeper<B, T>
+where
+    B: DerefMut<Target = T> + Sized + Send + Sync,
+    T: BlockSource,
+{
+    pub fn new(
+        poller: Rc<RefCell<ChainPoller<B, T>>>,
+        last_known_block_header: ValidatedBlockHeader,
+        block_queue: Receiver<ValidatedBlockHeader>,
+        subscription_slots: u32,
+        subscription_duration: u32,
+        expiry_delta: u32,
+    ) -> Self {
+        Gatekeeper {
+            poller: poller.clone(),
+            last_known_block_header,
+            block_queue,
+            subscription_slots,
+            subscription_duration,
+            expiry_delta,
+            registered_users: HashMap::new(),
+            outdated_users_cache: HashMap::new(),
+        }
+    }
+
     pub fn authenticate_user(
         &self,
         message: &[u8],
@@ -71,8 +102,8 @@ impl Gatekeeper {
             Err(_) => Err(AuthenticationFailure("Wrong message or signature.")),
         }
     }
-    pub async fn add_update_user(&mut self, user_id: &UserId) -> &UserInfo {
-        let block_count = self.block_processor.get_block_count().await;
+    pub fn add_update_user(&mut self, user_id: &UserId) -> &UserInfo {
+        let block_count = self.last_known_block_header.height;
 
         //FIXME: This may need mutex
         if self.registered_users.contains_key(user_id) {
@@ -135,18 +166,66 @@ impl Gatekeeper {
         }
     }
 
-    pub async fn has_subscription_expired(
+    pub fn has_subscription_expired(
         &self,
         user_id: &UserId,
-    ) -> Result<(bool, u64), AuthenticationFailure<'_>> {
+    ) -> Result<(bool, u32), AuthenticationFailure<'_>> {
         if self.registered_users.contains_key(&user_id) {
             let expiry = self.registered_users[&user_id].subscription_expiry;
-            Ok((
-                self.block_processor.get_block_count().await >= expiry,
-                expiry,
-            ))
+            Ok((self.last_known_block_header.height >= expiry, expiry))
         } else {
             Err(AuthenticationFailure("User not found."))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::Blockchain;
+    use bitcoin::network::constants::Network;
+    use bitcoin::secp256k1::key::ONE_KEY;
+    use bitcoin::secp256k1::Secp256k1;
+    use tokio::sync::broadcast;
+
+    #[test]
+    fn test_has_subscription_expired() {
+        let slots = 21;
+        let duration = 500;
+        let expiry_delta = 42;
+        let start_height = 100;
+
+        let mut chain = Blockchain::default().with_height(start_height);
+        let tip = chain.tip();
+        let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
+        let (_, rx) = broadcast::channel(100);
+
+        let mut gatekeeper = Gatekeeper::new(poller, tip, rx, slots, duration, expiry_delta);
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
+
+        // If the user is not registered, querying for a subscription expiry check should return an error
+        matches!(
+            gatekeeper.has_subscription_expired(&user_id),
+            Err(AuthenticationFailure { .. })
+        );
+
+        // If the user is registered and the subscription is active we should get (false, expiry)
+        gatekeeper.add_update_user(&user_id);
+        assert_eq!(
+            gatekeeper.has_subscription_expired(&user_id),
+            Ok((false, duration + start_height as u32))
+        );
+
+        // If the subscription has expired, we should get (true, expiry). Let's modify the user entry
+        let expiry = start_height as u32;
+        gatekeeper
+            .registered_users
+            .get_mut(&user_id)
+            .unwrap()
+            .subscription_expiry = expiry;
+        assert_eq!(
+            gatekeeper.has_subscription_expired(&user_id),
+            Ok((true, expiry))
+        );
     }
 }

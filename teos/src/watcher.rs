@@ -9,7 +9,7 @@ use std::fmt;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use teos_common::appointment::Locator;
-use teos_common::cryptography::{self, DecryptingError};
+use teos_common::cryptography;
 use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
 
@@ -279,7 +279,7 @@ where
         breaches: HashMap<&'a Locator, &'a Transaction>,
     ) -> (
         HashMap<&'a Uuid, Breach>,
-        HashMap<&'a Uuid, DecryptingError>,
+        HashMap<&'a Uuid, cryptography::DecryptingError>,
     ) {
         let mut valid_breaches = HashMap::new();
         let mut invalid_breaches = HashMap::new();
@@ -438,6 +438,6 @@ mod tests {
         // All invalid breaches should be AED errors (the decryption key was invalid)
         invalid
             .values()
-            .all(|v| matches!(v, DecryptingError::AED { .. }));
+            .all(|v| matches!(v, cryptography::DecryptingError::AED { .. }));
     }
 }

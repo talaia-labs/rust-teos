@@ -181,6 +181,10 @@ impl Blockchain {
         }
         cache
     }
+
+    pub async fn get_block_count(&self) -> usize {
+        self.blocks.len()
+    }
 }
 
 impl BlockSource for Blockchain {
@@ -241,7 +245,7 @@ impl BlockSource for Blockchain {
     }
 }
 
-pub fn get_random_tx() -> Transaction {
+pub(crate) fn get_random_tx() -> Transaction {
     let mut rng = rand::thread_rng();
     let prev_txid_bytes = rng.gen::<[u8; 32]>();
 
