@@ -29,7 +29,7 @@ use teos_common::cryptography::encrypt;
 
 use crate::extended_appointment::ExtendedAppointment;
 
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct Blockchain {
     pub blocks: Vec<Block>,
     without_blocks: Option<std::ops::RangeFrom<usize>>,
