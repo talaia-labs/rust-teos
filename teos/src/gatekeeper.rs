@@ -1,4 +1,3 @@
-use bitcoin::secp256k1::PublicKey;
 use lightning_block_sync::poll::{ChainPoller, ValidatedBlockHeader};
 use lightning_block_sync::BlockSource;
 use std::cell::RefCell;
@@ -6,6 +5,8 @@ use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use teos_common::cryptography;
+use teos_common::receipts::RegistrationReceipt;
+use teos_common::UserId;
 use tokio::sync::broadcast::Receiver;
 
 use serde::{Deserialize, Serialize};
@@ -14,9 +15,6 @@ use uuid::Uuid;
 
 use crate::extended_appointment::ExtendedAppointment;
 use teos_common::constants::{ENCRYPTED_BLOB_MAX_SIZE, OUTDATED_USERS_CACHE_SIZE_BLOCKS};
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct UserId(PublicKey);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
@@ -116,7 +114,10 @@ impl Gatekeeper {
             Err(_) => Err(AuthenticationFailure("Wrong message or signature.")),
         }
     }
-    pub fn add_update_user(&mut self, user_id: &UserId) -> Result<UserInfo, MaxSlotsReached> {
+    pub fn add_update_user(
+        &mut self,
+        user_id: &UserId,
+    ) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let block_count = self.last_known_block_header.height;
 
         if self.registered_users.contains_key(user_id) {
@@ -147,7 +148,13 @@ impl Gatekeeper {
             );
         }
 
-        Ok(self.registered_users[user_id].clone())
+        let user = self.registered_users[user_id].clone();
+        let receipt = RegistrationReceipt::new(
+            user_id.clone(),
+            user.available_slots,
+            user.subscription_expiry,
+        );
+        Ok(receipt)
     }
 
     pub fn add_update_appointment(
@@ -284,7 +291,7 @@ mod tests {
     use super::*;
     use crate::test_utils::{generate_dummy_appointment, Blockchain};
     use bitcoin::secp256k1::key::{SecretKey, ONE_KEY};
-    use bitcoin::secp256k1::Secp256k1;
+    use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use tokio::sync::broadcast;
     use uuid::Uuid;
 
@@ -339,24 +346,24 @@ mod tests {
 
         // Let's start by adding new user
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
-        let user_info = gatekeeper.add_update_user(&user_id);
-        matches!(user_info, Ok(UserInfo { .. }));
-        let user_info = user_info.unwrap();
+        let receipt = gatekeeper.add_update_user(&user_id);
+        matches!(receipt, Ok(RegistrationReceipt { .. }));
+        let receipt = receipt.unwrap();
 
         // Let generate a new block and add the user again to check that both the slots and expiry are updated.
         chain.generate_with_txs(Vec::new());
         gatekeeper.last_known_block_header = chain.tip();
-        let updated_user_info = gatekeeper.add_update_user(&user_id);
-        matches!(updated_user_info, Ok(UserInfo { .. }));
-        let updated_user_info = updated_user_info.unwrap();
+        let updated_receipt = gatekeeper.add_update_user(&user_id);
+        matches!(updated_receipt, Ok(RegistrationReceipt { .. }));
+        let updated_receipt = updated_receipt.unwrap();
 
         assert_eq!(
-            updated_user_info.available_slots,
-            user_info.available_slots * 2
+            updated_receipt.available_slots(),
+            receipt.available_slots() * 2
         );
         assert_eq!(
-            updated_user_info.subscription_expiry,
-            user_info.subscription_expiry + 1
+            updated_receipt.subscription_expiry(),
+            receipt.subscription_expiry() + 1
         );
 
         // If the slot count reaches u32::MAX we should receive an error
