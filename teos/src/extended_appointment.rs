@@ -79,7 +79,7 @@ mod tests {
         let start_block = 42;
 
         let data = json!({
-            "appointment": appointment,
+            "inner": appointment,
             "user_id": user_id,
             "user_signature": user_signature,
             "start_block": start_block
@@ -115,7 +115,7 @@ mod tests {
 
         println!("{}", e_json);
 
-        assert_eq!(e_json["appointment"], json!(appointment));
+        assert_eq!(e_json["inner"], json!(appointment));
         assert_eq!(e_json["user_id"], json!(user_id));
         assert_eq!(e_json["user_signature"], json!(user_signature));
         assert_eq!(e_json["start_block"], json!(start_block));
