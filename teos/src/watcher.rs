@@ -1,5 +1,7 @@
 use crate::extended_appointment::ExtendedAppointment;
+use crate::gatekeeper::{Gatekeeper, MaxSlotsReached, UserInfo};
 use bitcoin::hash_types::BlockHash;
+use bitcoin::secp256k1::SecretKey;
 use bitcoin::{BlockHeader, Transaction};
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlockHeader};
 use lightning_block_sync::BlockSource;
@@ -10,6 +12,8 @@ use std::ops::DerefMut;
 use std::rc::Rc;
 use teos_common::appointment::Locator;
 use teos_common::cryptography;
+use teos_common::receipts::RegistrationReceipt;
+use teos_common::UserId;
 use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
 
@@ -191,8 +195,10 @@ pub struct Watcher<B: DerefMut<Target = T> + Sized, T: BlockSource> {
     locator_uuid_map: HashMap<Locator, Uuid>,
     block_queue: Receiver<ValidatedBlockHeader>,
     poller: Rc<RefCell<ChainPoller<B, T>>>,
+    gatekeeper: Gatekeeper,
     last_known_block_header: ValidatedBlockHeader,
     locator_cache: LocatorCache<B, T>,
+    signing_key: SecretKey,
 }
 
 impl<B, T> Watcher<B, T>
@@ -203,7 +209,9 @@ where
     pub async fn new(
         block_queue: Receiver<ValidatedBlockHeader>,
         poller: Rc<RefCell<ChainPoller<B, T>>>,
+        gatekeeper: Gatekeeper,
         last_known_block_header: ValidatedBlockHeader,
+        signing_key: SecretKey,
     ) -> Self {
         let appointments = HashMap::new();
         let locator_uuid_map = HashMap::new();
@@ -214,8 +222,20 @@ where
             locator_uuid_map,
             block_queue,
             poller,
+            gatekeeper,
             last_known_block_header,
             locator_cache,
+            signing_key,
+        }
+    }
+
+    pub fn register(&mut self, user_id: &UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
+        match self.gatekeeper.add_update_user(user_id) {
+            Ok(mut receipt) => {
+                receipt.sign(self.signing_key);
+                Ok(receipt)
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -327,7 +347,11 @@ mod tests {
     use crate::test_utils::Blockchain;
 
     use bitcoin::network::constants::Network;
+    use bitcoin::secp256k1::key::ONE_KEY;
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
     use tokio::sync::broadcast;
+
+    const SK: SecretKey = ONE_KEY;
 
     #[tokio::test]
     async fn test_cache() {
@@ -342,15 +366,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_register() {
+        let start_height = 100;
+        let slots = 21;
+        let duration = 500;
+        let expiry_delta = 42;
+
+        let (tx, rx) = broadcast::channel(100);
+        let rx2 = tx.subscribe();
+
+        let mut chain = Blockchain::default().with_height_and_txs(start_height, None);
+        let tip = chain.tip();
+
+        let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
+        let gatekeeper = Gatekeeper::new(tip, rx, slots, duration, expiry_delta);
+        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, SK).await;
+
+        // register calls Gatekeeper::add_update_user and signs the UserInfo returned by it.
+        // Not testing the update / rejection logic, since that's already covered in the Gatekeeper, just that the data makes
+        // sense and the signature verifies.
+
+        let user_pk = PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY);
+        let user_id = UserId(user_pk);
+        let receipt = watcher.register(&user_id);
+
+        matches!(receipt, Ok(RegistrationReceipt { .. }));
+        let receipt = receipt.unwrap();
+
+        assert_eq!(receipt.user_id(), &user_id);
+        assert_eq!(receipt.available_slots(), slots);
+        assert_eq!(
+            receipt.subscription_expiry(),
+            start_height as u32 + duration
+        );
+
+        assert!(cryptography::verify(
+            &receipt.serialize(),
+            &receipt.signature().unwrap(),
+            user_pk
+        ));
+    }
+
+    #[tokio::test]
     async fn test_get_breaches() {
-        let (_, rx) = broadcast::channel(100);
+        let (tx, rx) = broadcast::channel(100);
+        let rx2 = tx.subscribe();
 
         let mut chain = Blockchain::default().with_height_and_txs(12, None);
         let tip = chain.tip();
         let txs = chain.blocks.last().unwrap().txdata.clone();
 
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
-        let mut watcher = Watcher::new(rx, poller.clone(), tip).await;
+        let gatekeeper = Gatekeeper::new(tip, rx, 1000, 1000, 42);
+
+        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, SK).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -379,14 +448,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_breaches() {
-        let (_, rx) = broadcast::channel(100);
+        let (tx, rx) = broadcast::channel(100);
+        let rx2 = tx.subscribe();
 
         let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
         let tip = chain.tip();
         let txs = chain.blocks.last().unwrap().txdata.clone();
 
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
-        let mut watcher = Watcher::new(rx, poller.clone(), tip).await;
+        let gatekeeper = Gatekeeper::new(tip, rx, 1000, 1000, 42);
+
+        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, SK).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
