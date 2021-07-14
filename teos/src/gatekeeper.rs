@@ -11,16 +11,15 @@ use tokio::sync::broadcast::Receiver;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
-use uuid::Uuid;
 
-use crate::extended_appointment::ExtendedAppointment;
+use crate::extended_appointment::{ExtendedAppointment, UUID};
 use teos_common::constants::{ENCRYPTED_BLOB_MAX_SIZE, OUTDATED_USERS_CACHE_SIZE_BLOCKS};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
     available_slots: u32,
     subscription_expiry: u32,
-    appointments: HashMap<Uuid, u32>,
+    appointments: HashMap<UUID, u32>,
 }
 
 impl UserInfo {
@@ -57,7 +56,7 @@ pub struct Gatekeeper {
     subscription_duration: u32,
     expiry_delta: u32,
     registered_users: HashMap<UserId, UserInfo>,
-    outdated_users_cache: HashMap<u32, HashMap<UserId, Vec<Uuid>>>,
+    outdated_users_cache: HashMap<u32, HashMap<UserId, Vec<UUID>>>,
 }
 
 impl Gatekeeper {
@@ -160,7 +159,7 @@ impl Gatekeeper {
     pub fn add_update_appointment(
         &mut self,
         user_id: &UserId,
-        uuid: Uuid,
+        uuid: UUID,
         appointment: ExtendedAppointment,
     ) -> Result<u32, NotEnoughSlots> {
         // For updates, the difference between the existing appointment size and the update is computed.
@@ -198,7 +197,7 @@ impl Gatekeeper {
         }
     }
 
-    pub fn get_outdated_users(&self, block_height: &u32) -> HashMap<UserId, Vec<Uuid>> {
+    pub fn get_outdated_users(&self, block_height: &u32) -> HashMap<UserId, Vec<UUID>> {
         match self.outdated_users_cache.get(&block_height) {
             Some(users) => users.clone(),
             None => {
@@ -223,10 +222,10 @@ impl Gatekeeper {
             .collect()
     }
 
-    pub fn get_outdated_appointments(&self, block_height: &u32) -> Vec<Uuid> {
+    pub fn get_outdated_appointments(&self, block_height: &u32) -> Vec<UUID> {
         let mut appointments = Vec::new();
 
-        for (_, uuids) in self.get_outdated_users(block_height).iter() {
+        for (_, uuids) in self.get_outdated_users(block_height).into_iter() {
             appointments.extend(uuids);
         }
 
@@ -236,7 +235,7 @@ impl Gatekeeper {
     pub fn updated_outdated_users_cache(
         &mut self,
         block_height: &u32,
-    ) -> HashMap<UserId, Vec<Uuid>> {
+    ) -> HashMap<UserId, Vec<UUID>> {
         let mut outdated_users = HashMap::new();
 
         if !self.outdated_users_cache.contains_key(&block_height) {
@@ -262,7 +261,7 @@ impl Gatekeeper {
         outdated_users
     }
 
-    pub fn delete_appointments(&mut self, appointments: &HashMap<Uuid, UserId>) {
+    pub fn delete_appointments(&mut self, appointments: &HashMap<UUID, UserId>) {
         for (uuid, user_id) in appointments {
             if self.registered_users.contains_key(&user_id)
                 && self.registered_users[&user_id]
@@ -289,11 +288,10 @@ impl Gatekeeper {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{generate_dummy_appointment, Blockchain};
+    use crate::test_utils::{generate_dummy_appointment, generate_uuid, Blockchain};
     use bitcoin::secp256k1::key::{SecretKey, ONE_KEY};
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use tokio::sync::broadcast;
-    use uuid::Uuid;
 
     const SLOTS: u32 = 21;
     const DURATION: u32 = 500;
@@ -396,7 +394,7 @@ mod tests {
             .get(&user_id)
             .unwrap()
             .available_slots;
-        let uuid = Uuid::new_v4();
+        let uuid = generate_uuid();
         let appointment = generate_dummy_appointment(None);
         let available_slots =
             gatekeeper.add_update_appointment(&user_id, uuid, appointment.clone());
@@ -438,7 +436,7 @@ mod tests {
         assert_eq!(update_slot_count.unwrap(), available_slots);
 
         // Adding an appointment with a different uuid should not count as an update
-        let new_uuid = Uuid::new_v4();
+        let new_uuid = generate_uuid();
         let update_slot_count =
             gatekeeper.add_update_appointment(&user_id, new_uuid, appointment.clone());
         matches!(update_slot_count, Ok { .. });
@@ -454,7 +452,7 @@ mod tests {
             .unwrap()
             .available_slots = 0;
         matches!(
-            gatekeeper.add_update_appointment(&user_id, Uuid::new_v4(), appointment),
+            gatekeeper.add_update_appointment(&user_id, generate_uuid(), appointment),
             Err(NotEnoughSlots)
         );
     }
@@ -513,7 +511,7 @@ mod tests {
 
         // Add also an appointment so we can check the returned data
         let appointment = generate_dummy_appointment(None);
-        let uuid = Uuid::new_v4();
+        let uuid = generate_uuid();
         gatekeeper
             .add_update_appointment(&user_id, uuid, appointment)
             .unwrap();
@@ -584,8 +582,8 @@ mod tests {
             .unwrap()
             .subscription_expiry = START_HEIGHT as u32;
 
-        let uuid1 = Uuid::new_v4();
-        let uuid2 = Uuid::new_v4();
+        let uuid1 = generate_uuid();
+        let uuid2 = generate_uuid();
         let appointment = generate_dummy_appointment(None);
 
         gatekeeper
@@ -676,7 +674,7 @@ mod tests {
                 &Secp256k1::new(),
                 &SecretKey::from_slice(&[i; 32]).unwrap(),
             ));
-            let uuid = Uuid::new_v4();
+            let uuid = generate_uuid();
             all_appointments.insert(uuid, user_id.clone());
 
             if i % 2 == 0 {

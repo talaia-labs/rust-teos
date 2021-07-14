@@ -16,6 +16,8 @@ use bitcoin::hash_types::Txid;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::Hash;
 use bitcoin::network::constants::Network;
+use bitcoin::secp256k1::key::ONE_KEY;
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::util::hash::bitcoin_merkle_root;
 use bitcoin::util::psbt::serialize::Deserialize;
 use bitcoin::util::uint::Uint256;
@@ -26,8 +28,9 @@ use lightning_block_sync::{
 use rand::Rng;
 use teos_common::appointment::Appointment;
 use teos_common::cryptography::encrypt;
+use teos_common::UserId;
 
-use crate::extended_appointment::ExtendedAppointment;
+use crate::extended_appointment::{ExtendedAppointment, UUID};
 
 #[derive(Clone, Default, Debug)]
 pub(crate) struct Blockchain {
@@ -245,6 +248,12 @@ impl BlockSource for Blockchain {
     }
 }
 
+pub(crate) fn generate_uuid() -> UUID {
+    let mut rng = rand::thread_rng();
+
+    UUID(rng.gen())
+}
+
 pub(crate) fn get_random_tx() -> Transaction {
     let mut rng = rand::thread_rng();
     let prev_txid_bytes = rng.gen::<[u8; 32]>();
@@ -282,8 +291,8 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
 
     let encrypted_blob = encrypt(&penalty_tx, &dispute_txid).unwrap();
     let appointment = Appointment::new(locator, encrypted_blob, 21);
-    let user_id = [2; 16];
-    let user_signature = [5, 6, 7, 8].to_vec();
+    let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
+    let user_signature = String::new();
     let start_block = 42;
 
     ExtendedAppointment::new(appointment, user_id, user_signature, start_block)

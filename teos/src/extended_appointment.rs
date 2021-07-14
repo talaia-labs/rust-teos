@@ -1,26 +1,32 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
-use teos_common::appointment::{Appointment, Locator};
+use teos_common::{
+    appointment::{Appointment, Locator},
+    UserId,
+};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash)]
+pub struct UUID(pub [u8; 20]);
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct ExtendedAppointment {
     pub inner: Appointment,
-    user_id: [u8; 16],
-    user_signature: Vec<u8>,
-    start_block: u32,
+    pub user_id: UserId,
+    pub user_signature: String,
+    pub start_block: u32,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct AppointmentSummary {
     locator: Locator,
-    user_id: [u8; 16],
+    user_id: UserId,
 }
 
 impl ExtendedAppointment {
     pub fn new(
         inner: Appointment,
-        user_id: [u8; 16],
-        user_signature: Vec<u8>,
+        user_id: UserId,
+        user_signature: String,
         start_block: u32,
     ) -> Self {
         ExtendedAppointment {
@@ -50,16 +56,20 @@ impl ExtendedAppointment {
 #[cfg(test)]
 mod tests {
     use super::ExtendedAppointment;
+    use bitcoin::secp256k1::key::ONE_KEY;
+    use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use serde_json::json;
     use teos_common::appointment::Appointment;
+    use teos_common::UserId;
 
     #[test]
     fn test_get_summary() {
         let locator = [1; 16];
-        let user_id = [3; 16];
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
+        let signature = String::new();
 
         let a = Appointment::new(locator, [2; 32].to_vec(), 42);
-        let e = ExtendedAppointment::new(a, user_id, [4; 32].to_vec(), 21);
+        let e = ExtendedAppointment::new(a, user_id, signature, 21);
 
         let s = e.get_summary();
 
@@ -74,8 +84,8 @@ mod tests {
         let to_self_delay = 21;
         let appointment = Appointment::new(locator, encrypted_blob, to_self_delay);
 
-        let user_id = [2; 16];
-        let user_signature = [5, 6, 7, 8].to_vec();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
+        let user_signature = String::new();
         let start_block = 42;
 
         let data = json!({
@@ -101,8 +111,8 @@ mod tests {
         let to_self_delay = 21;
         let appointment = Appointment::new(locator, encrypted_blob, to_self_delay);
 
-        let user_id = [2; 16];
-        let user_signature = [5, 6, 7, 8].to_vec();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
+        let user_signature = String::new();
         let start_block = 42;
 
         let extended_appointment = ExtendedAppointment::new(
@@ -112,8 +122,6 @@ mod tests {
             start_block,
         );
         let e_json = extended_appointment.to_json();
-
-        println!("{}", e_json);
 
         assert_eq!(e_json["inner"], json!(appointment));
         assert_eq!(e_json["user_id"], json!(user_id));
