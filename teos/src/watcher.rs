@@ -1,6 +1,7 @@
-use crate::extended_appointment::ExtendedAppointment;
-use crate::gatekeeper::{Gatekeeper, MaxSlotsReached, UserInfo};
+use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::gatekeeper::{AuthenticationFailure, Gatekeeper, MaxSlotsReached, NotEnoughSlots};
 use bitcoin::hash_types::BlockHash;
+use bitcoin::hashes::{ripemd160, Hash};
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::{BlockHeader, Transaction};
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlockHeader};
@@ -10,12 +11,11 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use teos_common::appointment::Locator;
+use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
-use teos_common::receipts::RegistrationReceipt;
+use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::UserId;
 use tokio::sync::broadcast::Receiver;
-use uuid::Uuid;
 
 struct LocatorCache<B: DerefMut<Target = T> + Sized, T: BlockSource> {
     poller: Rc<RefCell<ChainPoller<B, T>>>,
@@ -190,9 +190,15 @@ where
     }
 }
 
+#[derive(Debug)]
+pub enum AddAppointmentFailure {
+    AuthenticationFailure,
+    NotEnoughSlots,
+    SubscriptionExpired(u32),
+}
 pub struct Watcher<B: DerefMut<Target = T> + Sized, T: BlockSource> {
-    appointments: HashMap<Uuid, ExtendedAppointment>,
-    locator_uuid_map: HashMap<Locator, Uuid>,
+    appointments: HashMap<UUID, ExtendedAppointment>,
+    locator_uuid_map: HashMap<Locator, Vec<UUID>>,
     block_queue: Receiver<ValidatedBlockHeader>,
     poller: Rc<RefCell<ChainPoller<B, T>>>,
     gatekeeper: Gatekeeper,
@@ -236,6 +242,74 @@ where
                 Ok(receipt)
             }
             Err(e) => Err(e),
+        }
+    }
+
+    pub fn add_appointment(
+        &mut self,
+        appointment: Appointment,
+        user_signature: String,
+    ) -> Result<(AppointmentReceipt, u32, u32), AddAppointmentFailure> {
+        match self
+            .gatekeeper
+            .authenticate_user(&appointment.serialize(), &user_signature)
+        {
+            Ok(user_id) => {
+                let (has_subscription_expired, expiry) =
+                    self.gatekeeper.has_subscription_expired(&user_id).unwrap();
+
+                if has_subscription_expired {
+                    return Err(AddAppointmentFailure::SubscriptionExpired(expiry));
+                }
+
+                let extended_appointment = ExtendedAppointment::new(
+                    appointment,
+                    user_id,
+                    user_signature,
+                    self.last_known_block_header.height,
+                );
+
+                // TODO: Double check this
+                let mut data = extended_appointment.inner.locator.to_vec();
+                data.extend(&user_id.0.serialize());
+                let uuid = UUID(ripemd160::Hash::hash(&data).into_inner());
+
+                let available_slots = match self.gatekeeper.add_update_appointment(
+                    &user_id,
+                    uuid,
+                    extended_appointment.clone(),
+                ) {
+                    Ok(x) => x,
+                    Err(_) => return Err(AddAppointmentFailure::NotEnoughSlots),
+                };
+
+                // TODO: Skip if appointment already in Responder
+                // TODO: Check if data already in the cache
+
+                self.appointments.insert(uuid, extended_appointment.clone());
+                let locator = &extended_appointment.inner.locator;
+
+                if self.locator_uuid_map.contains_key(locator) {
+                    // If the uuid is already in the map it means this is an update, so no need to modify the map
+                    if !self.locator_uuid_map[locator].contains(&uuid) {
+                        // Otherwise two users have sent an appointment with the same locator, so we need to store both.
+                        self.locator_uuid_map.get_mut(locator).unwrap().push(uuid);
+                    }
+                } else {
+                    // The locator is not in the map, so we need to create a new entry for it
+                    self.locator_uuid_map.insert(locator.clone(), vec![uuid]);
+                }
+
+                let mut receipt = AppointmentReceipt::new(
+                    extended_appointment.user_signature.clone(),
+                    extended_appointment.start_block.clone(),
+                );
+                receipt.sign(self.signing_key);
+
+                Ok((receipt, available_slots, expiry))
+            }
+
+            Err(_) => Err(AddAppointmentFailure::AuthenticationFailure),
         }
     }
 
@@ -298,8 +372,8 @@ where
         &'a self,
         breaches: HashMap<&'a Locator, &'a Transaction>,
     ) -> (
-        HashMap<&'a Uuid, Breach>,
-        HashMap<&'a Uuid, cryptography::DecryptingError>,
+        HashMap<&'a UUID, Breach>,
+        HashMap<&'a UUID, cryptography::DecryptingError>,
     ) {
         let mut valid_breaches = HashMap::new();
         let mut invalid_breaches = HashMap::new();
@@ -308,7 +382,7 @@ where
         let mut decrypted_blobs: HashMap<Vec<u8>, Transaction> = HashMap::new();
 
         for (locator, tx) in breaches.into_iter() {
-            for uuid in self.locator_uuid_map.get(locator) {
+            for uuid in self.locator_uuid_map.get(locator).unwrap() {
                 // FIXME: this should load data from the DB
                 let appointment = self.appointments.get(uuid).unwrap();
 
@@ -340,18 +414,20 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::iter::FromIterator;
-
     use super::*;
-    use crate::test_utils::generate_dummy_appointment;
     use crate::test_utils::Blockchain;
+    use crate::test_utils::{generate_dummy_appointment, generate_uuid};
 
     use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::key::ONE_KEY;
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
     use tokio::sync::broadcast;
 
-    const SK: SecretKey = ONE_KEY;
+    const TOWER_SK: SecretKey = ONE_KEY;
+    const SLOTS: u32 = 21;
+    const DURATION: u32 = 500;
+    const EXPIRY_DELTA: u32 = 42;
+    const START_HEIGHT: usize = 100;
 
     #[tokio::test]
     async fn test_cache() {
@@ -367,20 +443,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_register() {
-        let start_height = 100;
-        let slots = 21;
-        let duration = 500;
-        let expiry_delta = 42;
-
         let (tx, rx) = broadcast::channel(100);
         let rx2 = tx.subscribe();
 
-        let mut chain = Blockchain::default().with_height_and_txs(start_height, None);
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let tip = chain.tip();
 
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
-        let gatekeeper = Gatekeeper::new(tip, rx, slots, duration, expiry_delta);
-        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, SK).await;
+        let gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
 
         // register calls Gatekeeper::add_update_user and signs the UserInfo returned by it.
         // Not testing the update / rejection logic, since that's already covered in the Gatekeeper, just that the data makes
@@ -394,10 +465,10 @@ mod tests {
         let receipt = receipt.unwrap();
 
         assert_eq!(receipt.user_id(), &user_id);
-        assert_eq!(receipt.available_slots(), slots);
+        assert_eq!(receipt.available_slots(), SLOTS);
         assert_eq!(
             receipt.subscription_expiry(),
-            start_height as u32 + duration
+            START_HEIGHT as u32 + DURATION
         );
 
         assert!(cryptography::verify(
@@ -405,6 +476,40 @@ mod tests {
             &receipt.signature().unwrap(),
             user_pk
         ));
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment() {
+        let (tx, rx) = broadcast::channel(100);
+        let rx2 = tx.subscribe();
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let tip = chain.tip();
+
+        let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
+        let gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
+        let tower_id: UserId = UserId(PublicKey::from_secret_key(
+            &Secp256k1::new(),
+            &watcher.signing_key,
+        ));
+
+        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        watcher.register(&user_id).unwrap();
+
+        let appointment = generate_dummy_appointment(None).inner;
+        let user_sig = cryptography::sign(&appointment.serialize(), user_sk).unwrap();
+        let (receipt, slots, expiry) = watcher
+            .add_appointment(appointment.clone(), user_sig.clone())
+            .unwrap();
+
+        assert_eq!(slots, SLOTS - 1);
+        assert_eq!(expiry, START_HEIGHT as u32 + DURATION);
+        assert_eq!(receipt.start_block(), START_HEIGHT as u32);
+        assert_eq!(receipt.user_signature(), user_sig);
+        let recovered_pk =
+            cryptography::recover_pk(&receipt.serialize(), &receipt.signature().unwrap()).unwrap();
+        assert_eq!(UserId(recovered_pk), tower_id);
     }
 
     #[tokio::test]
@@ -419,7 +524,7 @@ mod tests {
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
         let gatekeeper = Gatekeeper::new(tip, rx, 1000, 1000, 42);
 
-        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, SK).await;
+        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -432,7 +537,7 @@ mod tests {
             if i % 2 == 0 {
                 watcher
                     .locator_uuid_map
-                    .insert(locator.clone(), Uuid::new_v4());
+                    .insert(locator.clone(), vec![generate_uuid()]);
             }
         }
 
@@ -458,7 +563,7 @@ mod tests {
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
         let gatekeeper = Gatekeeper::new(tip, rx, 1000, 1000, 42);
 
-        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, SK).await;
+        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -471,7 +576,7 @@ mod tests {
         let mut local_invalid = Vec::new();
 
         for (i, (locator, tx)) in locator_tx_map.iter().enumerate() {
-            let uuid = Uuid::new_v4();
+            let uuid = generate_uuid();
             let tx_id = tx.txid();
             let mut dispute_txid = None;
 
@@ -488,7 +593,7 @@ mod tests {
                 watcher
                     .appointments
                     .insert(uuid, generate_dummy_appointment(dispute_txid));
-                watcher.locator_uuid_map.insert(locator.clone(), uuid);
+                watcher.locator_uuid_map.insert(locator.clone(), vec![uuid]);
             }
         }
 
