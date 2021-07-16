@@ -17,8 +17,8 @@ use teos_common::constants::{ENCRYPTED_BLOB_MAX_SIZE, OUTDATED_USERS_CACHE_SIZE_
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
-    available_slots: u32,
-    subscription_expiry: u32,
+    pub(crate) available_slots: u32,
+    pub(crate) subscription_expiry: u32,
     appointments: HashMap<UUID, u32>,
 }
 
@@ -55,7 +55,7 @@ pub struct Gatekeeper {
     subscription_slots: u32,
     subscription_duration: u32,
     expiry_delta: u32,
-    registered_users: HashMap<UserId, UserInfo>,
+    pub(crate) registered_users: HashMap<UserId, UserInfo>,
     outdated_users_cache: HashMap<u32, HashMap<UserId, Vec<UUID>>>,
 }
 
