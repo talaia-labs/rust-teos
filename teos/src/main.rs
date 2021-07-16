@@ -1,7 +1,8 @@
-use rusty_teos::bitcoin_cli::BitcoindClient;
-use rusty_teos::chain_monitor::ChainMonitor;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+
+use rusty_teos::bitcoin_cli::BitcoindClient;
+use rusty_teos::chain_monitor::ChainMonitor;
 
 #[tokio::main]
 pub async fn main() {

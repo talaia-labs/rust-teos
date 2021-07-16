@@ -1,12 +1,14 @@
-use crate::bitcoin_cli::BitcoindClient;
-use bitcoin::network::constants::Network;
-use lightning_block_sync::init::validate_best_block_header;
-use lightning_block_sync::poll::{ChainPoller, ChainTip, Poll, ValidatedBlockHeader};
-use lightning_block_sync::BlockSourceError;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::{thread, time};
 use tokio::sync::broadcast::Sender;
+
+use bitcoin::network::constants::Network;
+use lightning_block_sync::init::validate_best_block_header;
+use lightning_block_sync::poll::{ChainPoller, ChainTip, Poll, ValidatedBlockHeader};
+use lightning_block_sync::BlockSourceError;
+
+use crate::bitcoin_cli::BitcoindClient;
 
 pub struct ChainMonitor {
     bitcoin_cli: Arc<BitcoindClient>,

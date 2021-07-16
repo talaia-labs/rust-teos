@@ -7,17 +7,19 @@
  * at your option.
 */
 
-use crate::convert::BlockCount;
-use crate::convert::BlockchainInfo;
 use base64;
+use futures::executor::block_on;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
 use bitcoin::hash_types::BlockHash;
 use bitcoin::Block;
-use futures::executor::block_on;
 use lightning_block_sync::http::HttpEndpoint;
 use lightning_block_sync::rpc::RpcClient;
 use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
-use std::sync::Arc;
-use tokio::sync::Mutex;
+
+use crate::convert::BlockCount;
+use crate::convert::BlockchainInfo;
 
 pub struct BitcoindClient {
     bitcoind_rpc_client: Arc<Mutex<RpcClient>>,

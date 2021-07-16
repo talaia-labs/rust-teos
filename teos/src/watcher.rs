@@ -1,21 +1,24 @@
-use crate::extended_appointment::{ExtendedAppointment, UUID};
-use crate::gatekeeper::{Gatekeeper, MaxSlotsReached};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::ops::DerefMut;
+use std::rc::Rc;
+use tokio::sync::broadcast::Receiver;
+
 use bitcoin::hash_types::BlockHash;
 use bitcoin::hashes::{ripemd160, Hash};
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::{BlockHeader, Transaction};
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlockHeader};
 use lightning_block_sync::BlockSource;
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::ops::DerefMut;
-use std::rc::Rc;
+
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::UserId;
-use tokio::sync::broadcast::Receiver;
+
+use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::gatekeeper::{Gatekeeper, MaxSlotsReached};
 
 struct LocatorCache<B: DerefMut<Target = T> + Sized, T: BlockSource> {
     poller: Rc<RefCell<ChainPoller<B, T>>>,

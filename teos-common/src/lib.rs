@@ -1,12 +1,13 @@
-use bitcoin::secp256k1::PublicKey;
-use serde::de::{self, SeqAccess, Unexpected, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt;
-
 pub mod appointment;
 pub mod constants;
 pub mod cryptography;
 pub mod receipts;
+
+use serde::de::{self, SeqAccess, Unexpected, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
+
+use bitcoin::secp256k1::PublicKey;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct UserId(pub PublicKey);

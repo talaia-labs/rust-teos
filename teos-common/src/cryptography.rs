@@ -1,9 +1,10 @@
+use chacha20poly1305::aead::{Aead, NewAead};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Error, PublicKey, SecretKey};
 use bitcoin::util::psbt::serialize::{Deserialize, Serialize};
 use bitcoin::{Transaction, Txid};
-use chacha20poly1305::aead::{Aead, NewAead};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use lightning::util::message_signing;
 
 /// Enum representing the possible errors when decrypting an encrypted blob.

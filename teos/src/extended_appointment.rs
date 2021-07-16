@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
-use teos_common::{
-    appointment::{Appointment, Locator},
-    UserId,
-};
+
+use teos_common::appointment::{Appointment, Locator};
+use teos_common::UserId;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct UUID(pub [u8; 20]);

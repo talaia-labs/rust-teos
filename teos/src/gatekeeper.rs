@@ -1,19 +1,16 @@
-use lightning_block_sync::poll::{ChainPoller, ValidatedBlockHeader};
-use lightning_block_sync::BlockSource;
-use std::cell::RefCell;
+use serde::{Deserialize, Serialize};
+use serde_json::{Error as JSONError, Value};
 use std::collections::HashMap;
-use std::ops::DerefMut;
-use std::rc::Rc;
+use tokio::sync::broadcast::Receiver;
+
+use lightning_block_sync::poll::ValidatedBlockHeader;
+
+use teos_common::constants::{ENCRYPTED_BLOB_MAX_SIZE, OUTDATED_USERS_CACHE_SIZE_BLOCKS};
 use teos_common::cryptography;
 use teos_common::receipts::RegistrationReceipt;
 use teos_common::UserId;
-use tokio::sync::broadcast::Receiver;
-
-use serde::{Deserialize, Serialize};
-use serde_json::{Error as JSONError, Value};
 
 use crate::extended_appointment::{ExtendedAppointment, UUID};
-use teos_common::constants::{ENCRYPTED_BLOB_MAX_SIZE, OUTDATED_USERS_CACHE_SIZE_BLOCKS};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {

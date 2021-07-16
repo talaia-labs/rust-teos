@@ -7,10 +7,11 @@
  * at your option.
 */
 
+use std::convert::TryInto;
+
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::BlockHash;
 use lightning_block_sync::http::JsonResponse;
-use std::convert::TryInto;
 
 pub struct BlockchainInfo {
     pub latest_height: usize,
