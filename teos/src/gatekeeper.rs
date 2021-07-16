@@ -344,16 +344,12 @@ mod tests {
 
         // Let's start by adding new user
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
-        let receipt = gatekeeper.add_update_user(&user_id);
-        matches!(receipt, Ok(RegistrationReceipt { .. }));
-        let receipt = receipt.unwrap();
+        let receipt = gatekeeper.add_update_user(&user_id).unwrap();
 
         // Let generate a new block and add the user again to check that both the slots and expiry are updated.
         chain.generate_with_txs(Vec::new());
         gatekeeper.last_known_block_header = chain.tip();
-        let updated_receipt = gatekeeper.add_update_user(&user_id);
-        matches!(updated_receipt, Ok(RegistrationReceipt { .. }));
-        let updated_receipt = updated_receipt.unwrap();
+        let updated_receipt = gatekeeper.add_update_user(&user_id).unwrap();
 
         assert_eq!(
             updated_receipt.available_slots(),
@@ -371,7 +367,10 @@ mod tests {
             .unwrap()
             .available_slots = u32::MAX;
 
-        matches!(gatekeeper.add_update_user(&user_id), Err(MaxSlotsReached));
+        assert!(matches!(
+            gatekeeper.add_update_user(&user_id),
+            Err(MaxSlotsReached)
+        ));
     }
 
     #[test]
@@ -396,54 +395,54 @@ mod tests {
             .available_slots;
         let uuid = generate_uuid();
         let appointment = generate_dummy_appointment(None);
-        let available_slots =
-            gatekeeper.add_update_appointment(&user_id, uuid, appointment.clone());
+        let available_slots = gatekeeper
+            .add_update_appointment(&user_id, uuid, appointment.clone())
+            .unwrap();
 
-        matches!(available_slots, Ok { .. });
         assert!(gatekeeper.registered_users[&user_id]
             .appointments
             .contains_key(&uuid));
-        let available_slots = available_slots.unwrap();
+
         assert_eq!(slots_before, available_slots + 1);
 
         // Adding the exact same appointment should leave the slots count unchanged
-        let update_slot_count =
-            gatekeeper.add_update_appointment(&user_id, uuid, appointment.clone());
-        matches!(update_slot_count, Ok { .. });
+        let update_slot_count = gatekeeper
+            .add_update_appointment(&user_id, uuid, appointment.clone())
+            .unwrap();
         assert!(gatekeeper.registered_users[&user_id]
             .appointments
             .contains_key(&uuid));
-        assert_eq!(update_slot_count.unwrap(), available_slots);
+        assert_eq!(update_slot_count, available_slots);
 
         // If we add an update to an existing appointment with a bigger data blob (modulo ENCRYPTED_BLOB_MAX_SIZE), additional slots should be taken
         let mut bigger_appointment = appointment.clone();
         bigger_appointment.inner.encrypted_blob = Vec::from([0; ENCRYPTED_BLOB_MAX_SIZE + 1]);
-        let update_slot_count =
-            gatekeeper.add_update_appointment(&user_id, uuid, bigger_appointment);
-        matches!(update_slot_count, Ok { .. });
+        let update_slot_count = gatekeeper
+            .add_update_appointment(&user_id, uuid, bigger_appointment)
+            .unwrap();
         assert!(gatekeeper.registered_users[&user_id]
             .appointments
             .contains_key(&uuid));
-        assert_eq!(update_slot_count.unwrap(), available_slots - 1);
+        assert_eq!(update_slot_count, available_slots - 1);
 
         // Adding back a smaller update (modulo ENCRYPTED_BLOB_MAX_SIZE) should reduce the count
-        let update_slot_count =
-            gatekeeper.add_update_appointment(&user_id, uuid, appointment.clone());
-        matches!(update_slot_count, Ok { .. });
+        let update_slot_count = gatekeeper
+            .add_update_appointment(&user_id, uuid, appointment.clone())
+            .unwrap();
         assert!(gatekeeper.registered_users[&user_id]
             .appointments
             .contains_key(&uuid));
-        assert_eq!(update_slot_count.unwrap(), available_slots);
+        assert_eq!(update_slot_count, available_slots);
 
         // Adding an appointment with a different uuid should not count as an update
         let new_uuid = generate_uuid();
-        let update_slot_count =
-            gatekeeper.add_update_appointment(&user_id, new_uuid, appointment.clone());
-        matches!(update_slot_count, Ok { .. });
+        let update_slot_count = gatekeeper
+            .add_update_appointment(&user_id, new_uuid, appointment.clone())
+            .unwrap();
         assert!(gatekeeper.registered_users[&user_id]
             .appointments
             .contains_key(&new_uuid));
-        assert_eq!(update_slot_count.unwrap(), available_slots - 1);
+        assert_eq!(update_slot_count, available_slots - 1);
 
         // Finally, trying to add an appointment when the user has no enough slots should fail
         gatekeeper
@@ -451,10 +450,10 @@ mod tests {
             .get_mut(&user_id)
             .unwrap()
             .available_slots = 0;
-        matches!(
+        assert!(matches!(
             gatekeeper.add_update_appointment(&user_id, generate_uuid(), appointment),
             Err(NotEnoughSlots)
-        );
+        ));
     }
 
     #[test]
@@ -467,10 +466,10 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
 
         // If the user is not registered, querying for a subscription expiry check should return an error
-        matches!(
+        assert!(matches!(
             gatekeeper.has_subscription_expired(&user_id),
             Err(AuthenticationFailure { .. })
-        );
+        ));
 
         // If the user is registered and the subscription is active we should get (false, expiry)
         gatekeeper.add_update_user(&user_id).unwrap();

@@ -470,10 +470,7 @@ mod tests {
 
         let user_pk = PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY);
         let user_id = UserId(user_pk);
-        let receipt = watcher.register(&user_id);
-
-        matches!(receipt, Ok(RegistrationReceipt { .. }));
-        let receipt = receipt.unwrap();
+        let receipt = watcher.register(&user_id).unwrap();
 
         assert_eq!(receipt.user_id(), &user_id);
         assert_eq!(receipt.available_slots(), SLOTS);
@@ -588,10 +585,10 @@ mod tests {
         // computed using ECRecovery, we can simulate a non-registered user by creating a "random" signature
         let user3_sig = String::from(" ");
 
-        matches!(
+        assert!(matches!(
             watcher.add_appointment(appointment.clone(), user3_sig.clone()),
             Err(AddAppointmentFailure::AuthenticationFailure)
-        );
+        ));
 
         // If the user has no enough slots, the appointment is rejected. We do not test all possible cases since updates are
         // already tested int he Gatekeeper. Testing that it is  rejected if the condition is met should suffice.
@@ -606,10 +603,10 @@ mod tests {
         let new_appointment = generate_dummy_appointment(Some(&dispute_txid)).inner;
         let new_app_sig = cryptography::sign(&new_appointment.serialize(), user_sk).unwrap();
 
-        matches!(
+        assert!(matches!(
             watcher.add_appointment(new_appointment, new_app_sig),
             Err(AddAppointmentFailure::NotEnoughSlots)
-        );
+        ));
 
         // If the user subscription has expired, the appointment should be rejected.
         watcher
@@ -619,10 +616,10 @@ mod tests {
             .unwrap()
             .subscription_expiry = START_HEIGHT as u32 - EXPIRY_DELTA;
 
-        matches!(
+        assert!(matches!(
             watcher.add_appointment(appointment.clone(), user2_sig.clone()),
             Err(AddAppointmentFailure::SubscriptionExpired { .. })
-        );
+        ));
     }
 
     #[tokio::test]
