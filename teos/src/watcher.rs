@@ -197,6 +197,14 @@ pub enum AddAppointmentFailure {
     SubscriptionExpired(u32),
     AlreadyTriggered,
 }
+
+#[derive(Debug)]
+pub enum GetAppointmentFailure {
+    AuthenticationFailure,
+    SubscriptionExpired(u32),
+    NotFound,
+}
+
 pub struct Watcher<B: DerefMut<Target = T> + Sized, T: BlockSource> {
     appointments: HashMap<UUID, ExtendedAppointment>,
     locator_uuid_map: HashMap<Locator, Vec<UUID>>,
@@ -326,6 +334,39 @@ where
         Ok((receipt, available_slots, expiry))
     }
 
+    pub fn get_appointment(
+        &self,
+        locator: Locator,
+        user_signature: String,
+    ) -> Result<ExtendedAppointment, GetAppointmentFailure> {
+        let message = format!("get appointment {}", locator);
+
+        let user_id = self
+            .gatekeeper
+            .authenticate_user(message.as_bytes(), &user_signature)
+            .map_err(|_| GetAppointmentFailure::AuthenticationFailure)?;
+
+        let (has_subscription_expired, expiry) =
+            self.gatekeeper.has_subscription_expired(&user_id).unwrap();
+
+        if has_subscription_expired {
+            return Err(GetAppointmentFailure::SubscriptionExpired(expiry));
+        }
+
+        let mut uui_data = locator.to_vec();
+        uui_data.extend(&user_id.0.serialize());
+        let uuid = UUID(ripemd160::Hash::hash(&uui_data).into_inner());
+
+        // TODO: This should also check if the appointment is in the Responder
+        match self.appointments.get(&uuid) {
+            Some(extended_appointment) => Ok(extended_appointment.clone()),
+            None => {
+                println! {"Cannot find {}", locator};
+                Err(GetAppointmentFailure::NotFound)
+            }
+        }
+    }
+
     pub async fn do_watch(&mut self) {
         println!("Starting to watch");
         loop {
@@ -428,6 +469,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extended_appointment::AppointmentStatus;
     use crate::test_utils::Blockchain;
     use crate::test_utils::{generate_dummy_appointment, generate_uuid};
 
@@ -586,7 +628,7 @@ mod tests {
 
         // If the user is not registered, trying to add an appointment should fail. Since user_ids are
         // computed using ECRecovery, we can simulate a non-registered user by creating a "random" signature
-        let user3_sig = String::from(" ");
+        let user3_sig = String::from_utf8((0..65).collect()).unwrap();
 
         assert!(matches!(
             watcher.add_appointment(appointment.clone(), user3_sig.clone()),
@@ -617,11 +659,76 @@ mod tests {
             .registered_users
             .get_mut(&user2_id)
             .unwrap()
-            .subscription_expiry = START_HEIGHT as u32 - EXPIRY_DELTA;
+            .subscription_expiry = START_HEIGHT as u32;
 
         assert!(matches!(
             watcher.add_appointment(appointment.clone(), user2_sig.clone()),
             Err(AddAppointmentFailure::SubscriptionExpired { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment() {
+        let (tx, rx) = broadcast::channel(100);
+        let rx2 = tx.subscribe();
+
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let tip = chain.tip();
+
+        let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
+        let gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
+
+        let appointment = generate_dummy_appointment(None).inner;
+
+        //  If the user cannot be properly identified, the request will fail. This can be simulated by providing a wrong signature
+        let wrong_sig = String::from_utf8((0..65).collect()).unwrap();
+        assert!(matches!(
+            watcher.get_appointment(appointment.locator.clone(), wrong_sig),
+            Err(GetAppointmentFailure::AuthenticationFailure)
+        ));
+
+        // If the user does exist and there's an appointment with the given locator belonging to him, it will be returned
+        let user_sk = ONE_KEY;
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        watcher.register(&user_id).unwrap();
+        watcher
+            .add_appointment(
+                appointment.clone(),
+                cryptography::sign(&appointment.serialize(), user_sk).unwrap(),
+            )
+            .unwrap();
+
+        let message = format!("get appointment {}", appointment.locator.clone());
+        let signature = cryptography::sign(message.as_bytes(), user_sk).unwrap();
+        let r_app = watcher
+            .get_appointment(appointment.locator.clone(), signature.clone())
+            .unwrap();
+        assert_eq!(r_app.status, AppointmentStatus::BeingWatched);
+
+        // If the user does exists but the requested locator does not belong to any of their associated appointments, NotFound
+        // should be returned.
+        let user2_sk = SecretKey::from_slice(&[2; 32]).unwrap();
+        let user2_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user2_sk));
+        watcher.register(&user2_id).unwrap();
+
+        let signature2 = cryptography::sign(message.as_bytes(), user2_sk).unwrap();
+        assert!(matches!(
+            watcher.get_appointment(appointment.locator.clone(), signature2),
+            Err(GetAppointmentFailure::NotFound { .. })
+        ));
+
+        // If the user subscription has expired, the request will fail
+        watcher
+            .gatekeeper
+            .registered_users
+            .get_mut(&user_id)
+            .unwrap()
+            .subscription_expiry = START_HEIGHT as u32;
+
+        assert!(matches!(
+            watcher.get_appointment(appointment.locator.clone(), signature),
+            Err(GetAppointmentFailure::SubscriptionExpired { .. })
         ));
     }
 

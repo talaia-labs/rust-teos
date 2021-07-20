@@ -1,5 +1,7 @@
+use hex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
+use std::fmt;
 
 use bitcoin::Txid;
 
@@ -15,6 +17,12 @@ impl Locator {
 
     pub fn to_vec(&self) -> Vec<u8> {
         self.0.to_vec()
+    }
+}
+
+impl std::fmt::Display for Locator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", hex::encode(self.to_vec()))
     }
 }
 

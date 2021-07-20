@@ -7,12 +7,19 @@ use teos_common::UserId;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct UUID(pub [u8; 20]);
 
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum AppointmentStatus {
+    BeingWatched,
+    DisputeResponded,
+}
+
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct ExtendedAppointment {
     pub inner: Appointment,
     pub user_id: UserId,
     pub user_signature: String,
     pub start_block: u32,
+    pub status: AppointmentStatus,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -33,7 +40,12 @@ impl ExtendedAppointment {
             user_id,
             user_signature,
             start_block,
+            status: AppointmentStatus::BeingWatched,
         }
+    }
+
+    pub fn triggered(&mut self) {
+        self.status = AppointmentStatus::DisputeResponded;
     }
 
     pub fn get_summary(&self) -> AppointmentSummary {
