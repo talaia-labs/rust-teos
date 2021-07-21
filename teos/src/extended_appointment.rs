@@ -1,11 +1,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
+use std::fmt;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::UserId;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct UUID(pub [u8; 20]);
+
+impl std::fmt::Display for UUID {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum AppointmentStatus {
@@ -66,7 +73,7 @@ impl ExtendedAppointment {
 
 #[cfg(test)]
 mod tests {
-    use super::ExtendedAppointment;
+    use super::*;
     use bitcoin::secp256k1::key::ONE_KEY;
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use serde_json::json;
@@ -98,12 +105,14 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
         let user_signature = String::new();
         let start_block = 42;
+        let status = AppointmentStatus::BeingWatched;
 
         let data = json!({
             "inner": appointment,
             "user_id": user_id,
             "user_signature": user_signature,
-            "start_block": start_block
+            "start_block": start_block,
+            "status":status
         })
         .to_string();
 
@@ -138,5 +147,6 @@ mod tests {
         assert_eq!(e_json["user_id"], json!(user_id));
         assert_eq!(e_json["user_signature"], json!(user_signature));
         assert_eq!(e_json["start_block"], json!(start_block));
+        assert_eq!(e_json["status"], json!(AppointmentStatus::BeingWatched));
     }
 }

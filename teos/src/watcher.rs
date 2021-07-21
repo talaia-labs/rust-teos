@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::iter::FromIterator;
+use std::ops::Deref;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use tokio::sync::broadcast::Receiver;
@@ -19,6 +21,7 @@ use teos_common::UserId;
 
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, MaxSlotsReached};
+use crate::responder::Responder;
 
 struct LocatorCache<B: DerefMut<Target = T> + Sized, T: BlockSource> {
     poller: Rc<RefCell<ChainPoller<B, T>>>,
@@ -43,7 +46,7 @@ where
 }
 
 #[derive(Debug)]
-struct Breach<'a> {
+pub struct Breach<'a> {
     locator: &'a Locator,
     dispute_tx: &'a Transaction,
     penalty_tx: Transaction,
@@ -110,14 +113,14 @@ where
     pub fn update(
         &mut self,
         tip_header: ValidatedBlockHeader,
-        locator_tx_map: HashMap<Locator, Transaction>,
+        locator_tx_map: &HashMap<Locator, Transaction>,
     ) {
         self.blocks.push(tip_header.header);
 
         let mut locators = Vec::new();
         for (locator, tx) in locator_tx_map {
-            self.cache.insert(locator.clone(), tx);
-            locators.push(locator);
+            self.cache.insert(locator.clone(), tx.clone());
+            locators.push(locator.clone());
         }
 
         self.tx_in_block
@@ -207,12 +210,13 @@ pub enum GetAppointmentFailure {
 
 pub struct Watcher<B: DerefMut<Target = T> + Sized, T: BlockSource> {
     appointments: HashMap<UUID, ExtendedAppointment>,
-    locator_uuid_map: HashMap<Locator, Vec<UUID>>,
+    locator_uuid_map: HashMap<Locator, HashSet<UUID>>,
+    locator_cache: LocatorCache<B, T>,
     block_queue: Receiver<ValidatedBlockHeader>,
     poller: Rc<RefCell<ChainPoller<B, T>>>,
-    gatekeeper: Gatekeeper,
+    responder: Responder<B, T>,
+    gatekeeper: Rc<RefCell<Gatekeeper>>,
     last_known_block_header: ValidatedBlockHeader,
-    locator_cache: LocatorCache<B, T>,
     signing_key: SecretKey,
 }
 
@@ -224,7 +228,8 @@ where
     pub async fn new(
         block_queue: Receiver<ValidatedBlockHeader>,
         poller: Rc<RefCell<ChainPoller<B, T>>>,
-        gatekeeper: Gatekeeper,
+        gatekeeper: Rc<RefCell<Gatekeeper>>,
+        responder: Responder<B, T>,
         last_known_block_header: ValidatedBlockHeader,
         signing_key: SecretKey,
     ) -> Self {
@@ -235,17 +240,18 @@ where
         Watcher {
             appointments,
             locator_uuid_map,
+            locator_cache,
             block_queue,
             poller,
+            responder,
             gatekeeper,
             last_known_block_header,
-            locator_cache,
             signing_key,
         }
     }
 
     pub fn register(&mut self, user_id: &UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
-        match self.gatekeeper.add_update_user(user_id) {
+        match self.gatekeeper.borrow_mut().add_update_user(user_id) {
             Ok(mut receipt) => {
                 receipt.sign(self.signing_key);
                 Ok(receipt)
@@ -261,11 +267,15 @@ where
     ) -> Result<(AppointmentReceipt, u32, u32), AddAppointmentFailure> {
         let user_id = self
             .gatekeeper
+            .borrow_mut()
             .authenticate_user(&appointment.serialize(), &user_signature)
             .map_err(|_| AddAppointmentFailure::AuthenticationFailure)?;
 
-        let (has_subscription_expired, expiry) =
-            self.gatekeeper.has_subscription_expired(&user_id).unwrap();
+        let (has_subscription_expired, expiry) = self
+            .gatekeeper
+            .borrow_mut()
+            .has_subscription_expired(&user_id)
+            .unwrap();
 
         if has_subscription_expired {
             return Err(AddAppointmentFailure::SubscriptionExpired(expiry));
@@ -286,6 +296,7 @@ where
 
         let available_slots = self
             .gatekeeper
+            .borrow_mut()
             .add_update_appointment(&user_id, uuid, extended_appointment.clone())
             .map_err(|_| AddAppointmentFailure::NotEnoughSlots)?;
 
@@ -316,11 +327,12 @@ where
                     // If the uuid is already in the map it means this is an update, so no need to modify the map
                     if !self.locator_uuid_map[locator].contains(&uuid) {
                         // Otherwise two users have sent an appointment with the same locator, so we need to store both.
-                        self.locator_uuid_map.get_mut(locator).unwrap().push(uuid);
+                        self.locator_uuid_map.get_mut(locator).unwrap().insert(uuid);
                     }
                 } else {
                     // The locator is not in the map, so we need to create a new entry for it
-                    self.locator_uuid_map.insert(locator.clone(), vec![uuid]);
+                    self.locator_uuid_map
+                        .insert(locator.clone(), HashSet::from_iter(vec![uuid]));
                 }
             }
         }
@@ -343,11 +355,15 @@ where
 
         let user_id = self
             .gatekeeper
+            .borrow_mut()
             .authenticate_user(message.as_bytes(), &user_signature)
             .map_err(|_| GetAppointmentFailure::AuthenticationFailure)?;
 
-        let (has_subscription_expired, expiry) =
-            self.gatekeeper.has_subscription_expired(&user_id).unwrap();
+        let (has_subscription_expired, expiry) = self
+            .gatekeeper
+            .borrow_mut()
+            .has_subscription_expired(&user_id)
+            .unwrap();
 
         if has_subscription_expired {
             return Err(GetAppointmentFailure::SubscriptionExpired(expiry));
@@ -368,6 +384,7 @@ where
     }
 
     pub async fn do_watch(&mut self) {
+        // TODO: this may need a Cleaner to take care of data deletion
         println!("Starting to watch");
         loop {
             let new_tip_header = self.block_queue.recv().await.unwrap();
@@ -381,21 +398,90 @@ where
                 locator_tx_map.insert(Locator::new(tx.txid()), tx.clone());
             }
 
-            if self.appointments.len() > 0 {
-                let (valid_breaches, invalid_breaches) =
-                    self.filter_breaches(self.get_breaches(&locator_tx_map));
-                println!("BREACHES: {:?}, {:?}", valid_breaches, invalid_breaches);
-            }
-
             // Update the cache
             if new_tip.header.prev_blockhash == self.last_known_block_header.header.block_hash() {
-                self.locator_cache.update(new_tip_header, locator_tx_map);
+                self.locator_cache.update(new_tip_header, &locator_tx_map);
             } else {
                 println!("Reorg");
                 self.locator_cache.fix(new_tip_header).await;
             }
 
+            if self.appointments.len() > 0 {
+                // Get a list of outdated appointments from the Gatekeeper. This appointments may be either in the Watcher
+                // or in the Responder.
+                let outdated_appointments = self
+                    .gatekeeper
+                    .borrow_mut()
+                    .get_outdated_appointments(&new_tip_header.deref().height);
+
+                for uuid in outdated_appointments {
+                    // DISCUSS: we may not need to check if the key is in the map given it won't panic if so.
+                    if self.appointments.contains_key(&uuid) {
+                        self.appointments.remove(&uuid);
+                    }
+                }
+
+                // Filter out those breaches that do not yield a valid transaction
+                let (valid_breaches, invalid_breaches) =
+                    self.filter_breaches(self.get_breaches(&locator_tx_map));
+
+                let mut appointments_to_delete: Vec<UUID> = Vec::new();
+                let mut appointments_to_delete_gatekeeper: HashMap<UUID, UserId> = HashMap::new();
+
+                // Send data to the Responder and remove it from the Watcher
+                for (uuid, breach) in valid_breaches {
+                    println!(
+                        "Notifying Responder and deleting appointment (uuid: {})",
+                        uuid
+                    );
+
+                    self.responder.handle_breach(
+                        uuid.clone(),
+                        breach,
+                        self.appointments[uuid].user_id,
+                        new_tip_header,
+                    );
+
+                    // DISCUSS: Not using triggered flags from now (i.e. this is one way atm)
+                    appointments_to_delete.push(uuid.clone());
+                }
+
+                // Delete invalid data
+                appointments_to_delete.extend(invalid_breaches.keys().cloned());
+                self.delete_appointments(&appointments_to_delete);
+
+                // Delete data from the Gatekeeper
+                for uuid in appointments_to_delete {
+                    appointments_to_delete_gatekeeper
+                        .insert(uuid, self.appointments[&uuid].user_id);
+                }
+                self.gatekeeper
+                    .borrow_mut()
+                    .delete_appointments(&appointments_to_delete_gatekeeper);
+
+                if self.appointments.is_empty() {
+                    println!("No more pending appointments");
+                }
+            }
+
             self.last_known_block_header = new_tip_header;
+        }
+    }
+
+    fn delete_appointments(&mut self, appointments_to_delete: &Vec<UUID>) {
+        for uuid in appointments_to_delete {
+            let locator = &self.appointments[&uuid].inner.locator;
+
+            if self.locator_uuid_map[locator].len() == 1 {
+                self.locator_uuid_map.remove(locator);
+            } else {
+                self.locator_uuid_map
+                    .get_mut(locator)
+                    .unwrap()
+                    .remove(&uuid);
+            }
+
+            self.appointments.remove(&uuid);
         }
     }
 
@@ -501,13 +587,22 @@ mod tests {
     async fn test_register() {
         let (tx, rx) = broadcast::channel(100);
         let rx2 = tx.subscribe();
+        let rx3 = tx.subscribe();
 
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let tip = chain.tip();
 
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
-        let gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
+        let gatekeeper = Rc::new(RefCell::new(Gatekeeper::new(
+            tip,
+            rx,
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+        )));
+        let responder = Responder::new(rx2, poller.clone(), gatekeeper.clone(), tip);
+        let mut watcher =
+            Watcher::new(rx3, poller.clone(), gatekeeper, responder, tip, TOWER_SK).await;
 
         // register calls Gatekeeper::add_update_user and signs the UserInfo returned by it.
         // Not testing the update / rejection logic, since that's already covered in the Gatekeeper, just that the data makes
@@ -535,13 +630,23 @@ mod tests {
     async fn test_add_appointment() {
         let (tx, rx) = broadcast::channel(100);
         let rx2 = tx.subscribe();
+        let rx3 = tx.subscribe();
+
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let tip = chain.tip();
         let tip_txs = chain.blocks.last().unwrap().txdata.clone();
 
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
-        let gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
+        let gatekeeper = Rc::new(RefCell::new(Gatekeeper::new(
+            tip,
+            rx,
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+        )));
+        let responder = Responder::new(rx2, poller.clone(), gatekeeper.clone(), tip);
+        let mut watcher =
+            Watcher::new(rx3, poller.clone(), gatekeeper, responder, tip, TOWER_SK).await;
 
         // add_appointment should add a given appointment to the Watcher given the following logic:
         //      - if the appointment does not exist for a given user, add the appointment
@@ -639,6 +744,7 @@ mod tests {
         // already tested int he Gatekeeper. Testing that it is  rejected if the condition is met should suffice.
         watcher
             .gatekeeper
+            .borrow_mut()
             .registered_users
             .get_mut(&user_id)
             .unwrap()
@@ -656,6 +762,7 @@ mod tests {
         // If the user subscription has expired, the appointment should be rejected.
         watcher
             .gatekeeper
+            .borrow_mut()
             .registered_users
             .get_mut(&user2_id)
             .unwrap()
@@ -671,13 +778,22 @@ mod tests {
     async fn test_get_appointment() {
         let (tx, rx) = broadcast::channel(100);
         let rx2 = tx.subscribe();
+        let rx3 = tx.subscribe();
 
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let tip = chain.tip();
 
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
-        let gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
+        let gatekeeper = Rc::new(RefCell::new(Gatekeeper::new(
+            tip,
+            rx,
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+        )));
+        let responder = Responder::new(rx2, poller.clone(), gatekeeper.clone(), tip);
+        let mut watcher =
+            Watcher::new(rx3, poller.clone(), gatekeeper, responder, tip, TOWER_SK).await;
 
         let appointment = generate_dummy_appointment(None).inner;
 
@@ -721,6 +837,7 @@ mod tests {
         // If the user subscription has expired, the request will fail
         watcher
             .gatekeeper
+            .borrow_mut()
             .registered_users
             .get_mut(&user_id)
             .unwrap()
@@ -736,15 +853,23 @@ mod tests {
     async fn test_get_breaches() {
         let (tx, rx) = broadcast::channel(100);
         let rx2 = tx.subscribe();
+        let rx3 = tx.subscribe();
 
         let mut chain = Blockchain::default().with_height_and_txs(12, None);
         let tip = chain.tip();
         let txs = chain.blocks.last().unwrap().txdata.clone();
 
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
-        let gatekeeper = Gatekeeper::new(tip, rx, 1000, 1000, 42);
-
-        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
+        let gatekeeper = Rc::new(RefCell::new(Gatekeeper::new(
+            tip,
+            rx,
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+        )));
+        let responder = Responder::new(rx2, poller.clone(), gatekeeper.clone(), tip);
+        let mut watcher =
+            Watcher::new(rx3, poller.clone(), gatekeeper, responder, tip, TOWER_SK).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -757,7 +882,7 @@ mod tests {
             if i % 2 == 0 {
                 watcher
                     .locator_uuid_map
-                    .insert(locator.clone(), vec![generate_uuid()]);
+                    .insert(locator.clone(), HashSet::from_iter(vec![generate_uuid()]));
             }
         }
 
@@ -775,15 +900,23 @@ mod tests {
     async fn test_filter_breaches() {
         let (tx, rx) = broadcast::channel(100);
         let rx2 = tx.subscribe();
+        let rx3 = tx.subscribe();
 
         let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
         let tip = chain.tip();
         let txs = chain.blocks.last().unwrap().txdata.clone();
 
         let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
-        let gatekeeper = Gatekeeper::new(tip, rx, 1000, 1000, 42);
-
-        let mut watcher = Watcher::new(rx2, poller.clone(), gatekeeper, tip, TOWER_SK).await;
+        let gatekeeper = Rc::new(RefCell::new(Gatekeeper::new(
+            tip,
+            rx,
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+        )));
+        let responder = Responder::new(rx2, poller.clone(), gatekeeper.clone(), tip);
+        let mut watcher =
+            Watcher::new(rx3, poller.clone(), gatekeeper, responder, tip, TOWER_SK).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -813,7 +946,9 @@ mod tests {
                 watcher
                     .appointments
                     .insert(uuid, generate_dummy_appointment(dispute_txid));
-                watcher.locator_uuid_map.insert(locator.clone(), vec![uuid]);
+                watcher
+                    .locator_uuid_map
+                    .insert(locator.clone(), HashSet::from_iter(vec![uuid]));
             }
         }
 

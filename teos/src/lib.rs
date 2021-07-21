@@ -3,6 +3,7 @@ pub mod chain_monitor;
 mod convert;
 mod extended_appointment;
 mod gatekeeper;
+pub mod responder;
 pub mod watcher;
 
 #[cfg(test)]
