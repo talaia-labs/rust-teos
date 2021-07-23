@@ -126,8 +126,11 @@ where
         self.tx_in_block
             .insert(tip_header.header.block_hash(), locators);
 
-        println!("Block added to cache {}", tip_header.header.block_hash());
-        println!("Cache :{:#?}", self.blocks);
+        println!(
+            "New block added to cache: {}",
+            tip_header.header.block_hash()
+        );
+        // println!("Cache :{:#?}", self.blocks);
 
         if self.is_full() {
             self.remove_oldest_block();
@@ -145,7 +148,7 @@ where
             self.cache.remove(&locator);
         }
 
-        println!("Block removed from cache {}", oldest_hash);
+        println!("Oldest block removed from cache: {}", oldest_hash);
     }
 
     pub async fn fix(&mut self, mut tip_header: ValidatedBlockHeader) {
@@ -392,6 +395,8 @@ where
                 let mut derefed = self.poller.borrow_mut();
                 derefed.fetch_block(&new_tip_header).await.unwrap()
             };
+
+            println!("New block received: {}", new_tip.header.block_hash());
 
             let mut locator_tx_map = HashMap::new();
             for tx in new_tip.txdata.iter() {
@@ -895,6 +900,30 @@ mod tests {
                     .all(|k| watcher.locator_uuid_map.contains_key(k))
         );
     }
+
+    // FIXME: Not sure how to test this given chain has to be used in two different threads, one to produce blocks and another one with the
+    // Watcher to consume them.
+    // #[tokio::test]
+    // async fn test_do_watch() {
+    //     let (tx, rx) = broadcast::channel(100);
+    //     let rx2 = tx.subscribe();
+    //     let rx3 = tx.subscribe();
+
+    //     let mut chain = Blockchain::default().with_height_and_txs(12, None);
+    //     let tip = chain.tip();
+
+    //     let poller = Rc::new(RefCell::new(ChainPoller::new(&mut chain, Network::Bitcoin)));
+    //     let gatekeeper = Rc::new(RefCell::new(Gatekeeper::new(
+    //         tip,
+    //         rx,
+    //         SLOTS,
+    //         DURATION,
+    //         EXPIRY_DELTA,
+    //     )));
+    //     let responder = Responder::new(rx2, poller.clone(), gatekeeper.clone(), tip);
+    //     let mut watcher =
+    //         Watcher::new(rx3, poller.clone(), gatekeeper, responder, tip, TOWER_SK).await;
+    // }
 
     #[tokio::test]
     async fn test_filter_breaches() {
