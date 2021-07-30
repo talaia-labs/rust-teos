@@ -43,10 +43,10 @@ where
             match self.spv_client.poll_best_tip().await {
                 Ok((chain_tip, _)) => match chain_tip {
                     ChainTip::Common => {
-                        println!("No new tip found");
+                        log::info!("No new tip found");
                     }
                     ChainTip::Better(new_best) => {
-                        println!("New tip found: {}", new_best.header.block_hash());
+                        log::info!("New tip found: {}", new_best.header.block_hash());
                         self.last_known_block_header = new_best;
                     }
 
@@ -56,15 +56,15 @@ where
                         // once we reach the same work*. The latter is a valid case and should be passed along.
                         // The only caveat here would be that the caches of the subscribers are smaller than the reorg, which should
                         // never happen under reasonable assumptions (e.g. cache of 6 blocks).
-                        println!("Worse tip found: {:?}", worse);
+                        log::warn!("Worse tip found: {:?}", worse);
 
                         if worse.chainwork == self.last_known_block_header.chainwork {
                         } else {
-                            println!("New tip has less work than the previous one")
+                            log::warn!("New tip has less work than the previous one")
                         }
                     }
                 },
-                Err(_) => println!("Connection lost with bitcoind"),
+                Err(_) => log::error!("Connection lost with bitcoind"),
             };
 
             thread::sleep(self.polling_delta);

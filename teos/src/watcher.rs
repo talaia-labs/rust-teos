@@ -1,3 +1,4 @@
+use log;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -106,7 +107,7 @@ impl LocatorCache {
 
         self.tx_in_block.insert(block_header.block_hash(), locators);
 
-        println!("New block added to cache: {}", block_header.block_hash());
+        log::info!("New block added to cache: {}", block_header.block_hash());
 
         if self.is_full() {
             self.remove_oldest_block();
@@ -125,10 +126,10 @@ impl LocatorCache {
         match self.blocks.pop() {
             Some(h) => {
                 if h.block_hash() != header.block_hash() {
-                    println!("Disconnected block does not match the oldest block stored in the LocatorCache ({} != {})", header.block_hash(), h.block_hash())
+                    log::error!("Disconnected block does not match the oldest block stored in the LocatorCache ({} != {})", header.block_hash(), h.block_hash())
                 };
             }
-            None => println!("The cache is already empty"),
+            None => log::warn!("The cache is already empty"),
         }
     }
 
@@ -139,7 +140,7 @@ impl LocatorCache {
             self.cache.remove(&locator);
         }
 
-        println!("Oldest block removed from cache: {}", oldest_hash);
+        log::info!("Oldest block removed from cache: {}", oldest_hash);
     }
 }
 
@@ -243,7 +244,7 @@ impl Watcher {
         match self.locator_cache.borrow().get_tx(locator) {
             // Appointments that were triggered in blocks held in the cache
             Some(dispute_tx) => {
-                println!("{:?} already in cache", locator);
+                log::info!("Trigger for locator {:?} found in cache", locator);
                 match cryptography::decrypt(
                     &extended_appointment.inner.encrypted_blob,
                     &dispute_tx.txid(),
@@ -323,7 +324,7 @@ impl Watcher {
         match self.appointments.borrow().get(&uuid) {
             Some(extended_appointment) => Ok(extended_appointment.clone()),
             None => {
-                println! {"Cannot find {}", locator};
+                log::info! {"Cannot find {}", locator};
                 Err(GetAppointmentFailure::NotFound)
             }
         }
@@ -344,9 +345,9 @@ impl Watcher {
         }
 
         if breaches.len() > 0 {
-            println!("List of breaches: {:?}", breaches.keys());
+            log::debug!("List of breaches: {:?}", breaches.keys());
         } else {
-            println!("No breaches found")
+            log::info!("No breaches found")
         }
 
         breaches
@@ -409,7 +410,7 @@ impl Watcher {
 
 impl chain::Listen for Watcher {
     fn block_connected(&self, block: &Block, height: u32) {
-        println!("New block received: {}", block.header.block_hash());
+        log::info!("New block received: {}", block.header.block_hash());
 
         let mut locator_tx_map = HashMap::new();
         for tx in block.txdata.iter() {
@@ -441,7 +442,7 @@ impl chain::Listen for Watcher {
 
             // Send data to the Responder and remove it from the Watcher
             for (uuid, breach) in valid_breaches {
-                println!(
+                log::info!(
                     "Notifying Responder and deleting appointment (uuid: {})",
                     uuid
                 );
@@ -486,7 +487,7 @@ impl chain::Listen for Watcher {
                 .delete_appointments(&appointments_to_delete_gatekeeper);
 
             if self.appointments.borrow().is_empty() {
-                println!("No more pending appointments");
+                log::info!("No more pending appointments");
             }
         }
 

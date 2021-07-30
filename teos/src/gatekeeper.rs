@@ -57,9 +57,9 @@ pub struct Gatekeeper {
 }
 
 impl chain::Listen for Gatekeeper {
-    fn block_connected(&self, _: &bitcoin::Block, height: u32) {
+    fn block_connected(&self, block: &bitcoin::Block, height: u32) {
         // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
-        println!("Gatekeeper: New block received");
+        log::info!("New block received: {}", block.block_hash());
         let mut outdated_users = HashMap::new();
 
         if !self.outdated_users_cache.borrow().contains_key(&height) {

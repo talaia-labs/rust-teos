@@ -1,3 +1,4 @@
+use simple_logger::SimpleLogger;
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -28,13 +29,15 @@ pub async fn main() {
     const DURATION: u32 = 500;
     const EXPIRY_DELTA: u32 = 42;
 
+    SimpleLogger::new().init().unwrap();
+
     // // Initialize our bitcoind client.
     let bitcoin_cli =
         match BitcoindClient::new(host.clone(), port.clone(), user.clone(), password.clone()).await
         {
             Ok(client) => Arc::new(client),
             Err(e) => {
-                println!("Failed to connect to bitcoind client: {}", e);
+                log::error!("Failed to connect to bitcoind client: {}", e);
                 return;
             }
         };
