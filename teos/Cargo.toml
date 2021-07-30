@@ -19,5 +19,6 @@ tokio = { version = "1.5", features = [ "io-util", "macros", "rt", "rt-multi-thr
 bitcoin = "0.26"
 lightning-block-sync = {version = "0.0.98", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
 lightning-net-tokio = { version = "0.0.98", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+lightning = { version = "0.0.98", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
 
 teos-common = {path = "../teos-common"}

@@ -2,13 +2,13 @@ use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
-use tokio::sync::broadcast;
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::key::ONE_KEY;
 use bitcoin::secp256k1::SecretKey;
 use lightning_block_sync::init::validate_best_block_header;
 use lightning_block_sync::poll::ChainPoller;
+use lightning_block_sync::{SpvClient, UnboundedCache};
 
 use rusty_teos::bitcoin_cli::BitcoindClient;
 use rusty_teos::chain_monitor::ChainMonitor;
@@ -28,11 +28,6 @@ pub async fn main() {
     const DURATION: u32 = 500;
     const EXPIRY_DELTA: u32 = 42;
 
-    // Create a communication  channel for message passing
-    let (tx, rx) = broadcast::channel(100);
-    let rx2 = tx.subscribe();
-    let rx3 = tx.subscribe();
-
     // // Initialize our bitcoind client.
     let bitcoin_cli =
         match BitcoindClient::new(host.clone(), port.clone(), user.clone(), password.clone()).await
@@ -44,32 +39,25 @@ pub async fn main() {
             }
         };
 
-    let cloned_cli = Arc::clone(&bitcoin_cli);
-
     let mut derefed = bitcoin_cli.deref();
     let tip = validate_best_block_header(&mut derefed).await.unwrap();
-    let poller = Rc::new(RefCell::new(ChainPoller::new(
-        &mut derefed,
-        Network::Bitcoin,
-    )));
 
     let gatekeeper = Rc::new(RefCell::new(Gatekeeper::new(
         tip,
-        rx,
         SLOTS,
         DURATION,
         EXPIRY_DELTA,
     )));
+    let responder = Responder::new(gatekeeper.clone(), tip);
+    let watcher = Watcher::new(gatekeeper.clone(), responder, Vec::new(), tip, TOWER_SK).await;
 
-    let responder = Responder::new(rx2, poller.clone(), gatekeeper.clone(), tip);
-    let mut watcher = Watcher::new(rx3, poller.clone(), gatekeeper, responder, tip, TOWER_SK).await;
+    let poller = ChainPoller::new(&mut derefed, Network::Bitcoin);
+    let cache = &mut UnboundedCache::new();
 
-    tokio::spawn(async move {
-        let mut derefed = cloned_cli.deref();
-        let poller = ChainPoller::new(&mut derefed, Network::Bitcoin);
-        let mut chain_monitor = ChainMonitor::new(poller, tip, 1, tx).await;
-        chain_monitor.monitor_chain().await.unwrap();
-    });
+    //  FIXME: Not completely sure if borrowing the gatekeeper here may make this potentially panic
+    let listener = &(&watcher, gatekeeper.borrow_mut());
+    let spv_client = SpvClient::new(tip, poller, cache, listener);
 
-    watcher.do_watch().await;
+    let mut chain_monitor = ChainMonitor::new(spv_client, tip, 1).await;
+    chain_monitor.monitor_chain().await.unwrap();
 }

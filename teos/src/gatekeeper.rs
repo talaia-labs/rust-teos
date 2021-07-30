@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
+use std::cell::RefCell;
 use std::collections::HashMap;
-use tokio::sync::broadcast::Receiver;
 
+use lightning::chain;
 use lightning_block_sync::poll::ValidatedBlockHeader;
 
 use teos_common::constants::{ENCRYPTED_BLOB_MAX_SIZE, OUTDATED_USERS_CACHE_SIZE_BLOCKS};
@@ -48,48 +49,58 @@ pub struct MaxSlotsReached;
 //TODO: Check if calls to the Gatekeeper need explicit Mutex of if Rust already prevents race conditions in this case.
 pub struct Gatekeeper {
     last_known_block_header: ValidatedBlockHeader,
-    block_queue: Receiver<ValidatedBlockHeader>,
     subscription_slots: u32,
     subscription_duration: u32,
     expiry_delta: u32,
-    pub(crate) registered_users: HashMap<UserId, UserInfo>,
-    outdated_users_cache: HashMap<u32, HashMap<UserId, Vec<UUID>>>,
+    pub(crate) registered_users: RefCell<HashMap<UserId, UserInfo>>,
+    outdated_users_cache: RefCell<HashMap<u32, HashMap<UserId, Vec<UUID>>>>,
+}
+
+impl chain::Listen for Gatekeeper {
+    fn block_connected(&self, _: &bitcoin::Block, height: u32) {
+        // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
+        println!("Gatekeeper: New block received");
+        let mut outdated_users = HashMap::new();
+
+        if !self.outdated_users_cache.borrow().contains_key(&height) {
+            outdated_users = self.get_outdated_users(&height);
+            let mut borrowed = self.outdated_users_cache.borrow_mut();
+            borrowed.insert(height, outdated_users.clone());
+
+            // Remove the first entry from the cache if it grows beyond the limit size
+            if borrowed.len() > OUTDATED_USERS_CACHE_SIZE_BLOCKS {
+                let mut keys: Vec<&u32> = borrowed.keys().to_owned().collect();
+                keys.sort();
+                let first = keys[0].clone();
+                borrowed.remove(&first);
+            }
+        }
+
+        for user_id in outdated_users.keys() {
+            self.registered_users.borrow_mut().remove(user_id);
+        }
+    }
+
+    fn block_disconnected(&self, header: &bitcoin::BlockHeader, height: u32) {
+        todo!()
+    }
 }
 
 impl Gatekeeper {
     pub fn new(
         last_known_block_header: ValidatedBlockHeader,
-        block_queue: Receiver<ValidatedBlockHeader>,
         subscription_slots: u32,
         subscription_duration: u32,
         expiry_delta: u32,
     ) -> Self {
         Gatekeeper {
             last_known_block_header,
-            block_queue,
+
             subscription_slots,
             subscription_duration,
             expiry_delta,
-            registered_users: HashMap::new(),
-            outdated_users_cache: HashMap::new(),
-        }
-    }
-
-    pub async fn manage_subscription_expiry(&mut self) {
-        loop {
-            match self.block_queue.recv().await {
-                Ok(block_header) => {
-                    // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
-                    let outdated_users = self.updated_outdated_users_cache(&block_header.height);
-
-                    for user_id in outdated_users.keys() {
-                        self.registered_users.remove(user_id);
-                    }
-                }
-                Err(e) => {
-                    println!("{}", e);
-                }
-            }
+            registered_users: RefCell::new(HashMap::new()),
+            outdated_users_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -101,7 +112,7 @@ impl Gatekeeper {
         match cryptography::recover_pk(message, signature) {
             Ok(rpk) => {
                 let user_id = UserId(rpk);
-                if self.registered_users.contains_key(&user_id) {
+                if self.registered_users.borrow().contains_key(&user_id) {
                     Ok(user_id)
                 } else {
                     Err(AuthenticationFailure("User not found."))
@@ -116,26 +127,22 @@ impl Gatekeeper {
     ) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let block_count = self.last_known_block_header.height;
 
-        if self.registered_users.contains_key(user_id) {
+        if self.registered_users.borrow().contains_key(user_id) {
             // TODO: For now, new calls to register add subscription_slots to the current count and reset the expiry time
-            match self.registered_users[user_id]
+            let mut borrowed = self.registered_users.borrow_mut();
+            match borrowed[user_id]
                 .available_slots
                 .checked_add(self.subscription_slots)
             {
                 Some(x) => {
-                    self.registered_users
-                        .get_mut(user_id)
-                        .unwrap()
-                        .available_slots = x;
-                    self.registered_users
-                        .get_mut(user_id)
-                        .unwrap()
-                        .subscription_expiry = block_count + self.subscription_duration;
+                    borrowed.get_mut(user_id).unwrap().available_slots = x;
+                    borrowed.get_mut(user_id).unwrap().subscription_expiry =
+                        block_count + self.subscription_duration;
                 }
                 None => return Err(MaxSlotsReached),
             }
         } else {
-            self.registered_users.insert(
+            self.registered_users.borrow_mut().insert(
                 user_id.clone(),
                 UserInfo::new(
                     self.subscription_slots,
@@ -144,7 +151,7 @@ impl Gatekeeper {
             );
         }
 
-        let user = self.registered_users[user_id].clone();
+        let user = self.registered_users.borrow()[user_id].clone();
         let receipt = RegistrationReceipt::new(
             user_id.clone(),
             user.available_slots,
@@ -160,7 +167,10 @@ impl Gatekeeper {
         appointment: ExtendedAppointment,
     ) -> Result<u32, NotEnoughSlots> {
         // For updates, the difference between the existing appointment size and the update is computed.
-        let used_slots = match self.registered_users[user_id].appointments.get(&uuid) {
+        let used_slots = match self.registered_users.borrow()[user_id]
+            .appointments
+            .get(&uuid)
+        {
             Some(x) => x.clone(),
             None => 0,
         };
@@ -169,10 +179,11 @@ impl Gatekeeper {
             .ceil() as u32;
 
         let diff = required_slots as i64 - used_slots as i64;
-        if diff <= self.registered_users[user_id].available_slots as i64 {
+        if diff <= self.registered_users.borrow()[user_id].available_slots as i64 {
             // Filling / freeing slots depending on whether this is an update or not, and if it is bigger or smaller
             // than the old appointment
-            let mut user = self.registered_users.get_mut(user_id).unwrap();
+            let mut borrowed = self.registered_users.borrow_mut();
+            let mut user = borrowed.get_mut(user_id).unwrap();
             user.appointments.insert(uuid, required_slots);
             user.available_slots = (user.available_slots as i64 - diff) as u32;
 
@@ -186,8 +197,8 @@ impl Gatekeeper {
         &self,
         user_id: &UserId,
     ) -> Result<(bool, u32), AuthenticationFailure<'_>> {
-        if self.registered_users.contains_key(&user_id) {
-            let expiry = self.registered_users[&user_id].subscription_expiry;
+        if self.registered_users.borrow().contains_key(&user_id) {
+            let expiry = self.registered_users.borrow()[&user_id].subscription_expiry;
             Ok((self.last_known_block_header.height >= expiry, expiry))
         } else {
             Err(AuthenticationFailure("User not found."))
@@ -195,11 +206,11 @@ impl Gatekeeper {
     }
 
     pub fn get_outdated_users(&self, block_height: &u32) -> HashMap<UserId, Vec<UUID>> {
-        match self.outdated_users_cache.get(&block_height) {
+        match self.outdated_users_cache.borrow().get(&block_height) {
             Some(users) => users.clone(),
             None => {
                 let mut users = HashMap::new();
-                for (user_id, user_info) in self.registered_users.iter() {
+                for (user_id, user_info) in self.registered_users.borrow().iter() {
                     if *block_height == user_info.subscription_expiry + self.expiry_delta {
                         users.insert(
                             user_id.clone(),
@@ -229,23 +240,27 @@ impl Gatekeeper {
         appointments
     }
 
-    pub fn updated_outdated_users_cache(
+    pub fn update_outdated_users_cache(
         &mut self,
         block_height: &u32,
     ) -> HashMap<UserId, Vec<UUID>> {
         let mut outdated_users = HashMap::new();
 
-        if !self.outdated_users_cache.contains_key(&block_height) {
+        if !self
+            .outdated_users_cache
+            .borrow()
+            .contains_key(&block_height)
+        {
             outdated_users = self.get_outdated_users(block_height);
-            self.outdated_users_cache
-                .insert(*block_height, outdated_users.clone());
+            let mut borrowed = self.outdated_users_cache.borrow_mut();
+            borrowed.insert(*block_height, outdated_users.clone());
 
             // Remove the first entry from the cache if it grows beyond the limit size
-            if self.outdated_users_cache.len() > OUTDATED_USERS_CACHE_SIZE_BLOCKS {
-                let mut keys: Vec<&u32> = self.outdated_users_cache.keys().to_owned().collect();
+            if borrowed.len() > OUTDATED_USERS_CACHE_SIZE_BLOCKS {
+                let mut keys: Vec<&u32> = borrowed.keys().to_owned().collect();
                 keys.sort();
                 let first = keys[0].clone();
-                self.outdated_users_cache.remove(&first);
+                borrowed.remove(&first);
                 // TODO: This may be a simpler approach, but we need to make sure data is sanitized so non-existing keys are not computed.
 
                 // Since keys are simply block heights we can get the first key by subtracting
@@ -260,23 +275,20 @@ impl Gatekeeper {
 
     pub fn delete_appointments(&mut self, appointments: &HashMap<UUID, UserId>) {
         for (uuid, user_id) in appointments {
-            if self.registered_users.contains_key(&user_id)
-                && self.registered_users[&user_id]
+            if self.registered_users.borrow().contains_key(&user_id)
+                && self.registered_users.borrow()[&user_id]
                     .appointments
                     .contains_key(uuid)
             {
                 // Remove the appointment from the appointment list and update the available slots
-                let freed_slots = self
-                    .registered_users
+                let mut borrowed = self.registered_users.borrow_mut();
+                let freed_slots = borrowed
                     .get_mut(&user_id)
                     .unwrap()
                     .appointments
                     .remove(uuid)
                     .unwrap();
-                self.registered_users
-                    .get_mut(&user_id)
-                    .unwrap()
-                    .available_slots += freed_slots;
+                borrowed.get_mut(&user_id).unwrap().available_slots += freed_slots;
             }
         }
     }
@@ -288,7 +300,6 @@ mod tests {
     use crate::test_utils::{generate_dummy_appointment, generate_uuid, Blockchain};
     use bitcoin::secp256k1::key::{SecretKey, ONE_KEY};
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
-    use tokio::sync::broadcast;
 
     const SLOTS: u32 = 21;
     const DURATION: u32 = 500;
@@ -299,8 +310,7 @@ mod tests {
     fn test_authenticate_user() {
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
-        let (_, rx) = broadcast::channel(100);
-        let mut gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // Authenticate user returns the UserId if the user is found in the system, or an AuthenticationError otherwise.
 
@@ -333,8 +343,7 @@ mod tests {
     fn test_add_update_user() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
-        let (_, rx) = broadcast::channel(100);
-        let mut gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // add_update_user adds a user to the system if it is not still registered, otherwise it add slots to the user subscription
         // and refreshes the subscription expiry. Slots are added up to u32:MAX, further call will return an MaxSlotsReached error.
@@ -360,6 +369,7 @@ mod tests {
         // If the slot count reaches u32::MAX we should receive an error
         gatekeeper
             .registered_users
+            .borrow_mut()
             .get_mut(&user_id)
             .unwrap()
             .available_slots = u32::MAX;
@@ -374,8 +384,7 @@ mod tests {
     fn test_add_update_appointment() {
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
-        let (_, rx) = broadcast::channel(100);
-        let mut gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // if a given appointment is not associated with a given user, add_update_appointment adds the appointment user appointments alongside the number os slots it consumes. If the appointment
         // is already associated with the user, it will update it (both data and slot count).
@@ -387,6 +396,7 @@ mod tests {
         // Now let's add a new appointment
         let slots_before = gatekeeper
             .registered_users
+            .borrow()
             .get(&user_id)
             .unwrap()
             .available_slots;
@@ -396,7 +406,7 @@ mod tests {
             .add_update_appointment(&user_id, uuid, appointment.clone())
             .unwrap();
 
-        assert!(gatekeeper.registered_users[&user_id]
+        assert!(gatekeeper.registered_users.borrow()[&user_id]
             .appointments
             .contains_key(&uuid));
 
@@ -406,7 +416,7 @@ mod tests {
         let update_slot_count = gatekeeper
             .add_update_appointment(&user_id, uuid, appointment.clone())
             .unwrap();
-        assert!(gatekeeper.registered_users[&user_id]
+        assert!(gatekeeper.registered_users.borrow()[&user_id]
             .appointments
             .contains_key(&uuid));
         assert_eq!(update_slot_count, available_slots);
@@ -417,7 +427,7 @@ mod tests {
         let update_slot_count = gatekeeper
             .add_update_appointment(&user_id, uuid, bigger_appointment)
             .unwrap();
-        assert!(gatekeeper.registered_users[&user_id]
+        assert!(gatekeeper.registered_users.borrow()[&user_id]
             .appointments
             .contains_key(&uuid));
         assert_eq!(update_slot_count, available_slots - 1);
@@ -426,7 +436,7 @@ mod tests {
         let update_slot_count = gatekeeper
             .add_update_appointment(&user_id, uuid, appointment.clone())
             .unwrap();
-        assert!(gatekeeper.registered_users[&user_id]
+        assert!(gatekeeper.registered_users.borrow()[&user_id]
             .appointments
             .contains_key(&uuid));
         assert_eq!(update_slot_count, available_slots);
@@ -436,7 +446,7 @@ mod tests {
         let update_slot_count = gatekeeper
             .add_update_appointment(&user_id, new_uuid, appointment.clone())
             .unwrap();
-        assert!(gatekeeper.registered_users[&user_id]
+        assert!(gatekeeper.registered_users.borrow()[&user_id]
             .appointments
             .contains_key(&new_uuid));
         assert_eq!(update_slot_count, available_slots - 1);
@@ -444,6 +454,7 @@ mod tests {
         // Finally, trying to add an appointment when the user has no enough slots should fail
         gatekeeper
             .registered_users
+            .borrow_mut()
             .get_mut(&user_id)
             .unwrap()
             .available_slots = 0;
@@ -457,8 +468,7 @@ mod tests {
     fn test_has_subscription_expired() {
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
-        let (_, rx) = broadcast::channel(100);
-        let mut gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
 
@@ -479,6 +489,7 @@ mod tests {
         let expiry = START_HEIGHT as u32;
         gatekeeper
             .registered_users
+            .borrow_mut()
             .get_mut(&user_id)
             .unwrap()
             .subscription_expiry = expiry;
@@ -493,8 +504,7 @@ mod tests {
         let start_height: u32 = START_HEIGHT as u32 + EXPIRY_DELTA;
         let chain = Blockchain::default().with_height(start_height as usize);
         let tip = chain.tip();
-        let (_, rx) = broadcast::channel(100);
-        let mut gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // Initially, the outdated_users_cache is empty, so querying any block height should return an empty map
         for i in 0..start_height {
@@ -513,10 +523,11 @@ mod tests {
             .unwrap();
 
         // Check that data is not in the cache before querying
-        assert_eq!(gatekeeper.outdated_users_cache.len(), 0);
+        assert_eq!(gatekeeper.outdated_users_cache.borrow().len(), 0);
 
         gatekeeper
             .registered_users
+            .borrow_mut()
             .get_mut(&user_id)
             .unwrap()
             .subscription_expiry = START_HEIGHT as u32;
@@ -528,7 +539,10 @@ mod tests {
         // If the outdated_users_cache has an entry, the data will be returned straightaway instead of computed
         // on the fly
         let target_height = 2;
-        assert_eq!(gatekeeper.outdated_users_cache.get(&target_height), None);
+        assert_eq!(
+            gatekeeper.outdated_users_cache.borrow().get(&target_height),
+            None
+        );
         assert_eq!(
             gatekeeper.get_outdated_users(&target_height),
             HashMap::new()
@@ -538,6 +552,7 @@ mod tests {
         hm.insert(user_id, Vec::from([uuid]));
         gatekeeper
             .outdated_users_cache
+            .borrow_mut()
             .insert(target_height, hm.clone());
         assert_eq!(gatekeeper.get_outdated_users(&start_height), hm);
     }
@@ -547,8 +562,7 @@ mod tests {
         let start_height: u32 = START_HEIGHT as u32 + EXPIRY_DELTA;
         let chain = Blockchain::default().with_height(start_height as usize);
         let tip = chain.tip();
-        let (_, rx) = broadcast::channel(100);
-        let mut gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // get_outdated_appointments returns a list of appointments that were outdated at a given block height, indistinguishably of their user.
 
@@ -568,12 +582,14 @@ mod tests {
         // Manually set the user expiry for the test
         gatekeeper
             .registered_users
+            .borrow_mut()
             .get_mut(&user1_id)
             .unwrap()
             .subscription_expiry = START_HEIGHT as u32;
 
         gatekeeper
             .registered_users
+            .borrow_mut()
             .get_mut(&user2_id)
             .unwrap()
             .subscription_expiry = START_HEIGHT as u32;
@@ -596,22 +612,21 @@ mod tests {
     }
 
     #[test]
-    fn test_get_updated_outdated_users_cache() {
+    fn test_update_outdated_users_cache() {
         let start_height: u32 = START_HEIGHT as u32 + EXPIRY_DELTA;
         let chain = Blockchain::default().with_height(start_height as usize);
         let tip = chain.tip();
-        let (_, rx) = broadcast::channel(100);
-        let mut gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // update_outdated_users_cache adds the users that get outdated at a given block height to the cache and removes the oldest
         // entry once the cache has reached it's maximum size.
 
         // If the cache is has room and there's no data to add, an empty entry will be added
-        assert_eq!(gatekeeper.outdated_users_cache.len(), 0);
-        gatekeeper.updated_outdated_users_cache(&(start_height - 1));
-        assert_eq!(gatekeeper.outdated_users_cache.len(), 1);
+        assert_eq!(gatekeeper.outdated_users_cache.borrow().len(), 0);
+        gatekeeper.update_outdated_users_cache(&(start_height - 1));
+        assert_eq!(gatekeeper.outdated_users_cache.borrow().len(), 1);
         assert_eq!(
-            gatekeeper.outdated_users_cache[&(start_height - 1)],
+            gatekeeper.outdated_users_cache.borrow()[&(start_height - 1)],
             HashMap::new()
         );
 
@@ -620,37 +635,40 @@ mod tests {
         gatekeeper.add_update_user(&user_id).unwrap();
         gatekeeper
             .registered_users
+            .borrow_mut()
             .get_mut(&user_id)
             .unwrap()
             .subscription_expiry = START_HEIGHT as u32;
 
-        gatekeeper.updated_outdated_users_cache(&start_height);
-        assert_eq!(gatekeeper.outdated_users_cache.len(), 2);
+        gatekeeper.update_outdated_users_cache(&start_height);
+        assert_eq!(gatekeeper.outdated_users_cache.borrow().len(), 2);
 
         // Adding data (even empty) to the cache up to it's limit should remove the first element
         for i in start_height + 1..start_height + OUTDATED_USERS_CACHE_SIZE_BLOCKS as u32 - 1 {
-            gatekeeper.updated_outdated_users_cache(&i);
+            gatekeeper.update_outdated_users_cache(&i);
         }
 
         // Check the first key is still there
         assert_eq!(
-            gatekeeper.outdated_users_cache.len(),
+            gatekeeper.outdated_users_cache.borrow().len(),
             OUTDATED_USERS_CACHE_SIZE_BLOCKS
         );
         assert!(gatekeeper
             .outdated_users_cache
+            .borrow()
             .contains_key(&(start_height - 1)));
 
         // Add one last block and check again
-        gatekeeper.updated_outdated_users_cache(
+        gatekeeper.update_outdated_users_cache(
             &(start_height + OUTDATED_USERS_CACHE_SIZE_BLOCKS as u32 - 1),
         );
         assert_eq!(
-            gatekeeper.outdated_users_cache.len(),
+            gatekeeper.outdated_users_cache.borrow().len(),
             OUTDATED_USERS_CACHE_SIZE_BLOCKS
         );
         assert!(!gatekeeper
             .outdated_users_cache
+            .borrow()
             .contains_key(&(start_height - 1)));
     }
 
@@ -658,8 +676,7 @@ mod tests {
     fn test_delete_appointments() {
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
-        let (_, rx) = broadcast::channel(100);
-        let mut gatekeeper = Gatekeeper::new(tip, rx, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // delete_appointments will remove a list of appointments from the Gatekeeper (as long as they exist)
         let mut all_appointments = HashMap::new();
@@ -681,9 +698,9 @@ mod tests {
         }
 
         // Calling the method with unknown data should work but do nothing
-        assert_eq!(gatekeeper.registered_users.len(), 0);
+        assert_eq!(gatekeeper.registered_users.borrow().len(), 0);
         gatekeeper.delete_appointments(&all_appointments);
-        assert_eq!(gatekeeper.registered_users.len(), 0);
+        assert_eq!(gatekeeper.registered_users.borrow().len(), 0);
 
         // If there's matching data in the gatekeeper it should be deleted
         for (uuid, user_id) in to_be_deleted.iter() {
@@ -694,37 +711,37 @@ mod tests {
         }
 
         // Check before deleting
-        assert_eq!(gatekeeper.registered_users.len(), 5);
+        assert_eq!(gatekeeper.registered_users.borrow().len(), 5);
         for (uuid, user_id) in to_be_deleted.iter() {
-            assert!(gatekeeper.registered_users[user_id]
+            assert!(gatekeeper.registered_users.borrow()[user_id]
                 .appointments
                 .contains_key(uuid));
 
             // The slot count should be decreased now too
             assert_ne!(
-                gatekeeper.registered_users[user_id].available_slots,
+                gatekeeper.registered_users.borrow()[user_id].available_slots,
                 gatekeeper.subscription_slots
             );
         }
         for (_, user_id) in rest.iter() {
-            assert!(!gatekeeper.registered_users.contains_key(user_id));
+            assert!(!gatekeeper.registered_users.borrow().contains_key(user_id));
         }
 
         // And after
         gatekeeper.delete_appointments(&all_appointments);
         for (uuid, user_id) in to_be_deleted.iter() {
-            assert!(!gatekeeper.registered_users[user_id]
+            assert!(!gatekeeper.registered_users.borrow()[user_id]
                 .appointments
                 .contains_key(uuid));
 
             // The slot count is back to default
             assert_eq!(
-                gatekeeper.registered_users[user_id].available_slots,
+                gatekeeper.registered_users.borrow()[user_id].available_slots,
                 gatekeeper.subscription_slots
             );
         }
         for (_, user_id) in rest.iter() {
-            assert!(!gatekeeper.registered_users.contains_key(user_id));
+            assert!(!gatekeeper.registered_users.borrow().contains_key(user_id));
         }
     }
 }

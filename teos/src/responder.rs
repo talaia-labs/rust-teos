@@ -1,13 +1,11 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ops::DerefMut;
+use std::ops::Deref;
 use std::rc::Rc;
-use tokio::sync::broadcast::Receiver;
 
-use bitcoin::{Transaction, Txid};
-use lightning_block_sync::poll::ChainPoller;
+use bitcoin::{BlockHeader, Transaction, Txid};
 use lightning_block_sync::poll::ValidatedBlockHeader;
-use lightning_block_sync::BlockSource;
+use lightning_block_sync::BlockHeaderData;
 
 use teos_common::appointment::Locator;
 use teos_common::UserId;
@@ -23,42 +21,32 @@ pub struct TransactionTracker {
     user_id: UserId,
 }
 
-pub struct Responder<B: DerefMut<Target = T> + Sized, T: BlockSource> {
-    trackers: HashMap<UUID, TransactionTracker>,
-    tx_tracker_map: HashMap<Txid, UUID>,
-    unconfirmed_txs: Vec<Transaction>,
-    missed_confirmations: HashMap<Txid, u8>,
-    block_queue: Receiver<ValidatedBlockHeader>,
-    poller: Rc<RefCell<ChainPoller<B, T>>>,
+pub struct Responder {
+    trackers: RefCell<HashMap<UUID, TransactionTracker>>,
+    tx_tracker_map: RefCell<HashMap<Txid, UUID>>,
+    unconfirmed_txs: RefCell<Vec<Transaction>>,
+    missed_confirmations: RefCell<HashMap<Txid, u8>>,
     gatekeeper: Rc<RefCell<Gatekeeper>>,
-    last_known_block_header: ValidatedBlockHeader,
+    last_known_block_header: RefCell<BlockHeaderData>,
 }
 
-impl<B, T> Responder<B, T>
-where
-    B: DerefMut<Target = T> + Sized + Send + Sync,
-    T: BlockSource,
-{
+impl Responder {
     pub fn new(
-        block_queue: Receiver<ValidatedBlockHeader>,
-        poller: Rc<RefCell<ChainPoller<B, T>>>,
         gatekeeper: Rc<RefCell<Gatekeeper>>,
         last_known_block_header: ValidatedBlockHeader,
     ) -> Self {
-        let trackers = HashMap::new();
-        let tx_tracker_map = HashMap::new();
-        let unconfirmed_txs = Vec::new();
-        let missed_confirmations = HashMap::new();
+        let trackers = RefCell::new(HashMap::new());
+        let tx_tracker_map = RefCell::new(HashMap::new());
+        let unconfirmed_txs = RefCell::new(Vec::new());
+        let missed_confirmations = RefCell::new(HashMap::new());
 
         Responder {
             trackers,
             tx_tracker_map,
             unconfirmed_txs,
             missed_confirmations,
-            block_queue,
-            poller,
             gatekeeper,
-            last_known_block_header,
+            last_known_block_header: RefCell::new(last_known_block_header.deref().clone()),
         }
     }
 
@@ -67,7 +55,7 @@ where
         uuid: UUID,
         breach: Breach,
         user_id: UserId,
-        block_header: ValidatedBlockHeader,
+        block_header: BlockHeader,
     ) {
     }
 }

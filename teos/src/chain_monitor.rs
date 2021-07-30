@@ -1,52 +1,53 @@
-use std::ops::DerefMut;
+use std::ops::Deref;
 use std::{thread, time};
-use tokio::sync::broadcast::Sender;
 
-use lightning_block_sync::poll::{ChainPoller, ChainTip, Poll, ValidatedBlockHeader};
-use lightning_block_sync::BlockSource;
+use lightning::chain;
+use lightning_block_sync::poll::{ChainTip, Poll, ValidatedBlockHeader};
 use lightning_block_sync::BlockSourceError;
+use lightning_block_sync::{Cache, SpvClient};
 
-pub struct ChainMonitor<B: DerefMut<Target = T> + Sized, T: BlockSource> {
-    poller: ChainPoller<B, T>,
+pub struct ChainMonitor<'a, P, C, L>
+where
+    P: Poll,
+    C: Cache,
+    L: Deref,
+    L::Target: chain::Listen,
+{
+    spv_client: SpvClient<'a, P, C, L>,
     last_known_block_header: ValidatedBlockHeader,
     polling_delta: time::Duration,
-    tx: Sender<ValidatedBlockHeader>,
 }
 
-impl<B, T> ChainMonitor<B, T>
+impl<'a, P, C, L> ChainMonitor<'a, P, C, L>
 where
-    B: DerefMut<Target = T> + Sized + Send + Sync,
-    T: BlockSource,
+    P: Poll,
+    C: Cache,
+    L: Deref,
+    L::Target: chain::Listen,
 {
     pub async fn new(
-        poller: ChainPoller<B, T>,
+        spv_client: SpvClient<'a, P, C, L>,
         last_known_block_header: ValidatedBlockHeader,
         polling_delta_sec: u64,
-        tx: Sender<ValidatedBlockHeader>,
-    ) -> Self {
+    ) -> ChainMonitor<'a, P, C, L> {
         ChainMonitor {
-            poller,
+            spv_client,
             last_known_block_header,
             polling_delta: time::Duration::from_secs(polling_delta_sec),
-            tx,
         }
     }
 
+    // TODO: Most of the logic here may be redundant. Leave it for now in case we'd like to log stuff
     pub async fn monitor_chain(&mut self) -> Result<(), BlockSourceError> {
         loop {
-            match self
-                .poller
-                .poll_chain_tip(self.last_known_block_header)
-                .await
-            {
-                Ok(chain_tip) => match chain_tip {
+            match self.spv_client.poll_best_tip().await {
+                Ok((chain_tip, _)) => match chain_tip {
                     ChainTip::Common => {
                         println!("No new tip found");
                     }
                     ChainTip::Better(new_best) => {
                         println!("New tip found: {}", new_best.header.block_hash());
                         self.last_known_block_header = new_best;
-                        self.tx.send(new_best).unwrap();
                     }
 
                     ChainTip::Worse(worse) => {
@@ -58,8 +59,6 @@ where
                         println!("Worse tip found: {:?}", worse);
 
                         if worse.chainwork == self.last_known_block_header.chainwork {
-                            self.last_known_block_header = worse;
-                            self.tx.send(worse).unwrap();
                         } else {
                             println!("New tip has less work than the previous one")
                         }
