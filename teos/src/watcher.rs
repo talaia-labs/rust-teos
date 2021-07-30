@@ -64,7 +64,13 @@ impl LocatorCache {
         let mut blocks = Vec::new();
         let mut tx_in_block = HashMap::new();
 
-        for block in last_n_blocks.iter() {
+        for block in last_n_blocks.iter().rev() {
+            blocks.last().map(|prev_block_header: &BlockHeader| {
+                if block.header.prev_blockhash != prev_block_header.block_hash() {
+                    panic!("last_n_blocks contains unchained blocks");
+                }
+            });
+
             let mut locators = Vec::new();
             for tx in block.txdata.clone() {
                 let locator = Locator::new(tx.txid());
