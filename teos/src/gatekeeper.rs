@@ -60,21 +60,7 @@ impl chain::Listen for Gatekeeper {
     fn block_connected(&self, block: &bitcoin::Block, height: u32) {
         // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
         log::info!("New block received: {}", block.block_hash());
-        let mut outdated_users = HashMap::new();
-
-        if !self.outdated_users_cache.borrow().contains_key(&height) {
-            outdated_users = self.get_outdated_users(&height);
-            let mut borrowed = self.outdated_users_cache.borrow_mut();
-            borrowed.insert(height, outdated_users.clone());
-
-            // Remove the first entry from the cache if it grows beyond the limit size
-            if borrowed.len() > OUTDATED_USERS_CACHE_SIZE_BLOCKS {
-                let mut keys: Vec<&u32> = borrowed.keys().to_owned().collect();
-                keys.sort();
-                let first = keys[0].clone();
-                borrowed.remove(&first);
-            }
-        }
+        let outdated_users = self.update_outdated_users_cache(&height);
 
         for user_id in outdated_users.keys() {
             self.registered_users.borrow_mut().remove(user_id);
@@ -122,7 +108,7 @@ impl Gatekeeper {
         }
     }
     pub fn add_update_user(
-        &mut self,
+        &self,
         user_id: &UserId,
     ) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let block_count = self.last_known_block_header.height;
@@ -161,7 +147,7 @@ impl Gatekeeper {
     }
 
     pub fn add_update_appointment(
-        &mut self,
+        &self,
         user_id: &UserId,
         uuid: UUID,
         appointment: ExtendedAppointment,
@@ -240,10 +226,7 @@ impl Gatekeeper {
         appointments
     }
 
-    pub fn update_outdated_users_cache(
-        &mut self,
-        block_height: &u32,
-    ) -> HashMap<UserId, Vec<UUID>> {
+    pub fn update_outdated_users_cache(&self, block_height: &u32) -> HashMap<UserId, Vec<UUID>> {
         let mut outdated_users = HashMap::new();
 
         if !self
@@ -273,7 +256,7 @@ impl Gatekeeper {
         outdated_users
     }
 
-    pub fn delete_appointments(&mut self, appointments: &HashMap<UUID, UserId>) {
+    pub fn delete_appointments(&self, appointments: &HashMap<UUID, UserId>) {
         for (uuid, user_id) in appointments {
             if self.registered_users.borrow().contains_key(&user_id)
                 && self.registered_users.borrow()[&user_id]
@@ -310,7 +293,7 @@ mod tests {
     fn test_authenticate_user() {
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
-        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+        let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // Authenticate user returns the UserId if the user is found in the system, or an AuthenticationError otherwise.
 
@@ -384,7 +367,7 @@ mod tests {
     fn test_add_update_appointment() {
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
-        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+        let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // if a given appointment is not associated with a given user, add_update_appointment adds the appointment user appointments alongside the number os slots it consumes. If the appointment
         // is already associated with the user, it will update it (both data and slot count).
@@ -468,7 +451,7 @@ mod tests {
     fn test_has_subscription_expired() {
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
-        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+        let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
 
@@ -504,7 +487,7 @@ mod tests {
         let start_height: u32 = START_HEIGHT as u32 + EXPIRY_DELTA;
         let chain = Blockchain::default().with_height(start_height as usize);
         let tip = chain.tip();
-        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+        let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // Initially, the outdated_users_cache is empty, so querying any block height should return an empty map
         for i in 0..start_height {
@@ -562,7 +545,7 @@ mod tests {
         let start_height: u32 = START_HEIGHT as u32 + EXPIRY_DELTA;
         let chain = Blockchain::default().with_height(start_height as usize);
         let tip = chain.tip();
-        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+        let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // get_outdated_appointments returns a list of appointments that were outdated at a given block height, indistinguishably of their user.
 
@@ -616,7 +599,7 @@ mod tests {
         let start_height: u32 = START_HEIGHT as u32 + EXPIRY_DELTA;
         let chain = Blockchain::default().with_height(start_height as usize);
         let tip = chain.tip();
-        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+        let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // update_outdated_users_cache adds the users that get outdated at a given block height to the cache and removes the oldest
         // entry once the cache has reached it's maximum size.
@@ -676,7 +659,7 @@ mod tests {
     fn test_delete_appointments() {
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
-        let mut gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+        let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
 
         // delete_appointments will remove a list of appointments from the Gatekeeper (as long as they exist)
         let mut all_appointments = HashMap::new();

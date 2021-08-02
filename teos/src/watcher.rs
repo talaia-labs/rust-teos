@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::iter::FromIterator;
 use std::ops::Deref;
-use std::rc::Rc;
 
 use bitcoin::hash_types::BlockHash;
 use bitcoin::hashes::{ripemd160, Hash};
@@ -166,24 +165,24 @@ pub enum GetAppointmentFailure {
     NotFound,
 }
 
-pub struct Watcher {
+pub struct Watcher<'a> {
     appointments: RefCell<HashMap<UUID, ExtendedAppointment>>,
     locator_uuid_map: RefCell<HashMap<Locator, HashSet<UUID>>>,
     locator_cache: RefCell<LocatorCache>,
-    responder: Responder,
-    gatekeeper: Rc<RefCell<Gatekeeper>>,
+    responder: Responder<'a>,
+    gatekeeper: &'a Gatekeeper,
     last_known_block_header: RefCell<BlockHeaderData>,
     signing_key: SecretKey,
 }
 
-impl Watcher {
+impl<'a> Watcher<'a> {
     pub async fn new(
-        gatekeeper: Rc<RefCell<Gatekeeper>>,
-        responder: Responder,
+        gatekeeper: &'a Gatekeeper,
+        responder: Responder<'a>,
         last_n_blocks: Vec<ValidatedBlock>,
         last_known_block_header: ValidatedBlockHeader,
         signing_key: SecretKey,
-    ) -> Self {
+    ) -> Watcher<'a> {
         let appointments = RefCell::new(HashMap::new());
         let locator_uuid_map = RefCell::new(HashMap::new());
         let locator_cache = RefCell::new(LocatorCache::new(last_n_blocks));
@@ -200,7 +199,7 @@ impl Watcher {
     }
 
     pub fn register(&mut self, user_id: &UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
-        let mut receipt = self.gatekeeper.borrow_mut().add_update_user(user_id)?;
+        let mut receipt = self.gatekeeper.add_update_user(user_id)?;
         receipt.sign(self.signing_key);
 
         Ok(receipt)
@@ -213,15 +212,11 @@ impl Watcher {
     ) -> Result<(AppointmentReceipt, u32, u32), AddAppointmentFailure> {
         let user_id = self
             .gatekeeper
-            .borrow()
             .authenticate_user(&appointment.serialize(), &user_signature)
             .map_err(|_| AddAppointmentFailure::AuthenticationFailure)?;
 
-        let (has_subscription_expired, expiry) = self
-            .gatekeeper
-            .borrow()
-            .has_subscription_expired(&user_id)
-            .unwrap();
+        let (has_subscription_expired, expiry) =
+            self.gatekeeper.has_subscription_expired(&user_id).unwrap();
 
         if has_subscription_expired {
             return Err(AddAppointmentFailure::SubscriptionExpired(expiry));
@@ -242,7 +237,6 @@ impl Watcher {
 
         let available_slots = self
             .gatekeeper
-            .borrow_mut()
             .add_update_appointment(&user_id, uuid, extended_appointment.clone())
             .map_err(|_| AddAppointmentFailure::NotEnoughSlots)?;
 
@@ -308,15 +302,11 @@ impl Watcher {
 
         let user_id = self
             .gatekeeper
-            .borrow()
             .authenticate_user(message.as_bytes(), &user_signature)
             .map_err(|_| GetAppointmentFailure::AuthenticationFailure)?;
 
-        let (has_subscription_expired, expiry) = self
-            .gatekeeper
-            .borrow()
-            .has_subscription_expired(&user_id)
-            .unwrap();
+        let (has_subscription_expired, expiry) =
+            self.gatekeeper.has_subscription_expired(&user_id).unwrap();
 
         if has_subscription_expired {
             return Err(GetAppointmentFailure::SubscriptionExpired(expiry));
@@ -414,7 +404,7 @@ impl Watcher {
     }
 }
 
-impl chain::Listen for Watcher {
+impl<'a> chain::Listen for Watcher<'a> {
     fn block_connected(&self, block: &Block, height: u32) {
         log::info!("New block received: {}", block.header.block_hash());
 
@@ -430,7 +420,7 @@ impl chain::Listen for Watcher {
         if self.appointments.borrow().len() > 0 {
             // Get a list of outdated appointments from the Gatekeeper. This appointments may be either in the Watcher
             // or in the Responder.
-            let outdated_appointments = self.gatekeeper.borrow().get_outdated_appointments(&height);
+            let outdated_appointments = self.gatekeeper.get_outdated_appointments(&height);
 
             for uuid in outdated_appointments {
                 // DISCUSS: we may not need to check if the key is in the map given it won't panic if so.
@@ -489,7 +479,6 @@ impl chain::Listen for Watcher {
             }
 
             self.gatekeeper
-                .borrow_mut()
                 .delete_appointments(&appointments_to_delete_gatekeeper);
 
             if self.appointments.borrow().is_empty() {
@@ -546,19 +535,12 @@ mod tests {
         last_n_blocks
     }
 
-    async fn create_watcher(chain: Blockchain) -> Watcher {
+    async fn create_watcher<'a>(chain: Blockchain, gatekeeper: &'a Gatekeeper) -> Watcher<'a> {
         let tip = chain.tip();
         let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
-        let gatekeeper = Rc::new(RefCell::new(Gatekeeper::new(
-            tip,
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-        )));
-        let responder = Responder::new(gatekeeper.clone(), tip);
-
-        Watcher::new(gatekeeper, responder, last_n_blocks, tip, TOWER_SK).await
+        let responder = Responder::new(&gatekeeper, tip);
+        Watcher::new(&gatekeeper, responder, last_n_blocks, tip, TOWER_SK).await
     }
 
     #[tokio::test]
@@ -577,7 +559,8 @@ mod tests {
         // sense and the signature verifies.
 
         let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let mut watcher = create_watcher(chain).await;
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
+        let mut watcher = create_watcher(chain, &gk).await;
 
         let user_pk = PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY);
         let user_id = UserId(user_pk);
@@ -602,7 +585,8 @@ mod tests {
         let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let tip_txs = chain.blocks.last().unwrap().txdata.clone();
 
-        let mut watcher = create_watcher(chain).await;
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
+        let mut watcher = create_watcher(chain, &gk).await;
 
         // add_appointment should add a given appointment to the Watcher given the following logic:
         //      - if the appointment does not exist for a given user, add the appointment
@@ -704,7 +688,6 @@ mod tests {
         // already tested int he Gatekeeper. Testing that it is  rejected if the condition is met should suffice.
         watcher
             .gatekeeper
-            .borrow()
             .registered_users
             .borrow_mut()
             .get_mut(&user_id)
@@ -723,7 +706,6 @@ mod tests {
         // If the user subscription has expired, the appointment should be rejected.
         watcher
             .gatekeeper
-            .borrow()
             .registered_users
             .borrow_mut()
             .get_mut(&user2_id)
@@ -739,7 +721,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_appointment() {
         let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let mut watcher = create_watcher(chain).await;
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
+        let mut watcher = create_watcher(chain, &gk).await;
 
         let appointment = generate_dummy_appointment(None).inner;
 
@@ -783,7 +766,6 @@ mod tests {
         // If the user subscription has expired, the request will fail
         watcher
             .gatekeeper
-            .borrow()
             .registered_users
             .borrow_mut()
             .get_mut(&user_id)
@@ -800,7 +782,8 @@ mod tests {
     async fn test_get_breaches() {
         let chain = Blockchain::default().with_height_and_txs(12, None);
         let txs = chain.blocks.last().unwrap().txdata.clone();
-        let watcher = create_watcher(chain).await;
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
+        let watcher = create_watcher(chain, &gk).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -832,7 +815,8 @@ mod tests {
     async fn test_filter_breaches() {
         let chain = Blockchain::default().with_height_and_txs(10, Some(12));
         let txs = chain.blocks.last().unwrap().txdata.clone();
-        let watcher = create_watcher(chain).await;
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
+        let watcher = create_watcher(chain, &gk).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();

@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::rc::Rc;
 
 use bitcoin::{BlockHeader, Transaction, Txid};
 use lightning_block_sync::poll::ValidatedBlockHeader;
@@ -21,20 +20,17 @@ pub struct TransactionTracker {
     user_id: UserId,
 }
 
-pub struct Responder {
+pub struct Responder<'a> {
     trackers: RefCell<HashMap<UUID, TransactionTracker>>,
     tx_tracker_map: RefCell<HashMap<Txid, UUID>>,
     unconfirmed_txs: RefCell<Vec<Transaction>>,
     missed_confirmations: RefCell<HashMap<Txid, u8>>,
-    gatekeeper: Rc<RefCell<Gatekeeper>>,
+    gatekeeper: &'a Gatekeeper,
     last_known_block_header: RefCell<BlockHeaderData>,
 }
 
-impl Responder {
-    pub fn new(
-        gatekeeper: Rc<RefCell<Gatekeeper>>,
-        last_known_block_header: ValidatedBlockHeader,
-    ) -> Self {
+impl<'a> Responder<'a> {
+    pub fn new(gatekeeper: &'a Gatekeeper, last_known_block_header: ValidatedBlockHeader) -> Self {
         let trackers = RefCell::new(HashMap::new());
         let tx_tracker_map = RefCell::new(HashMap::new());
         let unconfirmed_txs = RefCell::new(Vec::new());

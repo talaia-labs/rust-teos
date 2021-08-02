@@ -1,7 +1,5 @@
 use simple_logger::SimpleLogger;
-use std::cell::RefCell;
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use bitcoin::network::constants::Network;
@@ -71,17 +69,11 @@ pub async fn main() {
     let cache = &mut UnboundedCache::new();
     let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
 
-    let gatekeeper = Rc::new(RefCell::new(Gatekeeper::new(
-        tip,
-        SLOTS,
-        DURATION,
-        EXPIRY_DELTA,
-    )));
-    let responder = Responder::new(gatekeeper.clone(), tip);
-    let watcher = Watcher::new(gatekeeper.clone(), responder, last_n_blocks, tip, TOWER_SK).await;
+    let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+    let responder = Responder::new(&gatekeeper, tip);
+    let watcher = Watcher::new(&gatekeeper, responder, last_n_blocks, tip, TOWER_SK).await;
 
-    //  FIXME: Not completely sure if borrowing the gatekeeper here may make this potentially panic
-    let listener = &(&watcher, gatekeeper.borrow_mut());
+    let listener = &(&watcher, &gatekeeper);
     let spv_client = SpvClient::new(tip, poller, cache, listener);
 
     let mut chain_monitor = ChainMonitor::new(spv_client, tip, 1).await;
