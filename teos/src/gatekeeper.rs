@@ -17,7 +17,7 @@ use crate::extended_appointment::{ExtendedAppointment, UUID};
 pub struct UserInfo {
     pub(crate) available_slots: u32,
     pub(crate) subscription_expiry: u32,
-    appointments: HashMap<UUID, u32>,
+    pub(crate) appointments: HashMap<UUID, u32>,
 }
 
 impl UserInfo {
@@ -54,22 +54,6 @@ pub struct Gatekeeper {
     expiry_delta: u32,
     pub(crate) registered_users: RefCell<HashMap<UserId, UserInfo>>,
     outdated_users_cache: RefCell<HashMap<u32, HashMap<UserId, Vec<UUID>>>>,
-}
-
-impl chain::Listen for Gatekeeper {
-    fn block_connected(&self, block: &bitcoin::Block, height: u32) {
-        // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
-        log::info!("New block received: {}", block.block_hash());
-        let outdated_users = self.update_outdated_users_cache(&height);
-
-        for user_id in outdated_users.keys() {
-            self.registered_users.borrow_mut().remove(user_id);
-        }
-    }
-
-    fn block_disconnected(&self, header: &bitcoin::BlockHeader, height: u32) {
-        todo!()
-    }
 }
 
 impl Gatekeeper {
@@ -277,12 +261,29 @@ impl Gatekeeper {
     }
 }
 
+impl chain::Listen for Gatekeeper {
+    fn block_connected(&self, block: &bitcoin::Block, height: u32) {
+        // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
+        log::info!("New block received: {}", block.block_hash());
+        let outdated_users = self.update_outdated_users_cache(&height);
+
+        for user_id in outdated_users.keys() {
+            self.registered_users.borrow_mut().remove(user_id);
+        }
+    }
+
+    fn block_disconnected(&self, header: &bitcoin::BlockHeader, height: u32) {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::{generate_dummy_appointment, generate_uuid, Blockchain};
     use bitcoin::secp256k1::key::{SecretKey, ONE_KEY};
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
+    use lightning::chain::Listen;
 
     const SLOTS: u32 = 21;
     const DURATION: u32 = 500;
@@ -725,6 +726,63 @@ mod tests {
         }
         for (_, user_id) in rest.iter() {
             assert!(!gatekeeper.registered_users.borrow().contains_key(user_id));
+        }
+    }
+
+    #[test]
+    fn test_block_connected() {
+        // block_connected in the Gatekeeper is used to keep track of time in order to manage the users' subscription expiry.
+        // When a new block is received, the outdated_users_cache is updated and the users outdated in the given height are
+        // deleted from registered_users.
+
+        let chain = Blockchain::default().with_height(START_HEIGHT);
+        let tip = chain.tip();
+        let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+        let mut last_height = 0;
+
+        // Check that the cache is being updated when blocks are being received (even with empty data) and it's max size is not exceeded
+        for i in 0..OUTDATED_USERS_CACHE_SIZE_BLOCKS * 2 {
+            last_height = tip.height + i as u32;
+            gatekeeper.block_connected(chain.blocks.last().unwrap(), last_height);
+            if i < OUTDATED_USERS_CACHE_SIZE_BLOCKS {
+                assert_eq!(gatekeeper.outdated_users_cache.borrow().len(), i + 1)
+            } else {
+                assert_eq!(
+                    gatekeeper.outdated_users_cache.borrow().len(),
+                    OUTDATED_USERS_CACHE_SIZE_BLOCKS
+                )
+            }
+        }
+
+        // Check that users are outdated when the expected height if hit
+        let all_two_key = SecretKey::from_slice(&[2; 32]).unwrap();
+        let all_three_key = SecretKey::from_slice(&[2; 32]).unwrap();
+
+        let user1_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
+        let user2_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &all_two_key));
+        let user3_id = UserId(PublicKey::from_secret_key(
+            &Secp256k1::new(),
+            &all_three_key,
+        ));
+
+        last_height += 1;
+        for user in vec![user1_id, user2_id, user3_id] {
+            gatekeeper.add_update_user(&user).unwrap();
+            gatekeeper
+                .registered_users
+                .borrow_mut()
+                .get_mut(&user)
+                .unwrap()
+                .subscription_expiry = last_height as u32 - EXPIRY_DELTA;
+        }
+
+        // Connect a new block so users are included in the cache
+        gatekeeper.block_connected(chain.blocks.last().unwrap(), last_height as u32);
+
+        // Check that users have been added to the cache and removed from registered_users
+        for user in vec![user1_id, user2_id, user3_id] {
+            assert!(gatekeeper.outdated_users_cache.borrow()[&last_height].contains_key(&user));
+            assert!(!gatekeeper.registered_users.borrow().contains_key(&user));
         }
     }
 }

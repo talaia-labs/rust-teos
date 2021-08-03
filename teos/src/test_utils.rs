@@ -188,6 +188,33 @@ impl Blockchain {
     pub async fn get_block_count(&self) -> usize {
         self.blocks.len()
     }
+
+    pub fn generate(&mut self, txs: Option<Vec<Transaction>>) -> Block {
+        let bits = BlockHeader::compact_target_from_u256(&Uint256::from_be_bytes([0xff; 32]));
+
+        let prev_block = self.blocks.last().unwrap();
+        let prev_blockhash = prev_block.block_hash();
+        let time = prev_block.header.time + (self.blocks.len() + 1) as u32;
+        let txdata = match txs {
+            Some(t) => t,
+            None => vec![],
+        };
+        let block = Block {
+            header: BlockHeader {
+                version: 0,
+                prev_blockhash,
+                merkle_root: Default::default(),
+                time,
+                bits,
+                nonce: 0,
+            },
+            txdata,
+        };
+
+        self.blocks.push(block.clone());
+
+        block
+    }
 }
 
 impl BlockSource for Blockchain {

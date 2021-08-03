@@ -21,7 +21,7 @@ pub struct TransactionTracker {
 }
 
 pub struct Responder<'a> {
-    trackers: RefCell<HashMap<UUID, TransactionTracker>>,
+    pub(crate) trackers: RefCell<HashMap<UUID, TransactionTracker>>,
     tx_tracker_map: RefCell<HashMap<Txid, UUID>>,
     unconfirmed_txs: RefCell<Vec<Transaction>>,
     missed_confirmations: RefCell<HashMap<Txid, u8>>,
@@ -46,6 +46,7 @@ impl<'a> Responder<'a> {
         }
     }
 
+    // TODO: Just adding dummy functionality so we can check that data came trough. Needs refactor.
     pub fn handle_breach(
         &self,
         uuid: UUID,
@@ -53,5 +54,13 @@ impl<'a> Responder<'a> {
         user_id: UserId,
         block_header: BlockHeader,
     ) {
+        let tracker = TransactionTracker {
+            locator: breach.locator,
+            dispute_tx: breach.dispute_tx,
+            penalty_tx: breach.penalty_tx,
+            user_id,
+        };
+
+        self.trackers.borrow_mut().insert(uuid, tracker);
     }
 }

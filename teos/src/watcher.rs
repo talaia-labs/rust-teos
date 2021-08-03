@@ -6,7 +6,6 @@ use std::iter::FromIterator;
 use std::ops::Deref;
 
 use bitcoin::hash_types::BlockHash;
-
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::{Block, BlockHeader, Transaction};
 use lightning::chain;
@@ -41,9 +40,9 @@ impl fmt::Display for LocatorCache {
 
 #[derive(Debug)]
 pub struct Breach {
-    locator: Locator,
-    dispute_tx: Transaction,
-    penalty_tx: Transaction,
+    pub locator: Locator,
+    pub dispute_tx: Transaction,
+    pub penalty_tx: Transaction,
 }
 
 impl Breach {
@@ -429,8 +428,15 @@ impl<'a> chain::Listen for Watcher<'a> {
             let (valid_breaches, invalid_breaches) =
                 self.filter_breaches(self.get_breaches(locator_tx_map));
 
+            println!("V: {:?}, I: {:?}", valid_breaches, invalid_breaches);
+
             let mut appointments_to_delete: Vec<UUID> = Vec::new();
             let mut appointments_to_delete_gatekeeper: HashMap<UUID, UserId> = HashMap::new();
+            for uuid in invalid_breaches.keys() {
+                appointments_to_delete_gatekeeper
+                    .insert(uuid.clone(), self.appointments.borrow()[&uuid].user_id);
+                appointments_to_delete.push(uuid.clone());
+            }
 
             // Send data to the Responder and remove it from the Watcher
             for (uuid, breach) in valid_breaches {
@@ -450,30 +456,26 @@ impl<'a> chain::Listen for Watcher<'a> {
                 appointments_to_delete.push(uuid.clone());
             }
 
-            // Delete invalid data
-            appointments_to_delete.extend(invalid_breaches.keys().cloned());
+            // Delete data from the Watcher (invalid + triggered)
             for uuid in appointments_to_delete.iter() {
-                let locator = &self.appointments.borrow()[&uuid].inner.locator;
+                {
+                    let locator = &self.appointments.borrow()[&uuid].inner.locator;
 
-                if self.locator_uuid_map.borrow()[locator].len() == 1 {
-                    self.locator_uuid_map.borrow_mut().remove(locator);
-                } else {
-                    self.locator_uuid_map
-                        .borrow_mut()
-                        .get_mut(locator)
-                        .unwrap()
-                        .remove(&uuid);
+                    if self.locator_uuid_map.borrow()[locator].len() == 1 {
+                        self.locator_uuid_map.borrow_mut().remove(locator);
+                    } else {
+                        self.locator_uuid_map
+                            .borrow_mut()
+                            .get_mut(locator)
+                            .unwrap()
+                            .remove(&uuid);
+                    }
                 }
 
                 self.appointments.borrow_mut().remove(&uuid);
             }
 
             // Delete data from the Gatekeeper
-            for uuid in appointments_to_delete {
-                appointments_to_delete_gatekeeper
-                    .insert(uuid, self.appointments.borrow()[&uuid].user_id);
-            }
-
             self.gatekeeper
                 .delete_appointments(&appointments_to_delete_gatekeeper);
 
@@ -498,14 +500,15 @@ impl<'a> chain::Listen for Watcher<'a> {
 mod tests {
     use super::*;
     use crate::extended_appointment::AppointmentStatus;
-    use crate::test_utils::Blockchain;
     use crate::test_utils::{generate_dummy_appointment, generate_uuid};
+    use crate::test_utils::{get_random_tx, Blockchain};
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
     use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::key::ONE_KEY;
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use lightning::chain::Listen;
     use lightning_block_sync::poll::{ChainPoller, Poll};
 
     const TOWER_SK: SecretKey = ONE_KEY;
@@ -514,9 +517,9 @@ mod tests {
     const EXPIRY_DELTA: u32 = 42;
     const START_HEIGHT: usize = 100;
 
-    async fn get_last_n_blocks(mut chain: Blockchain, n: usize) -> Vec<ValidatedBlock> {
+    async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<ValidatedBlock> {
         let tip = chain.tip();
-        let mut poller = ChainPoller::new(&mut chain, Network::Bitcoin);
+        let mut poller = ChainPoller::new(chain, Network::Bitcoin);
 
         let mut last_n_blocks = Vec::new();
         let mut last_known_block = tip;
@@ -532,7 +535,7 @@ mod tests {
         last_n_blocks
     }
 
-    async fn create_watcher<'a>(chain: Blockchain, gatekeeper: &'a Gatekeeper) -> Watcher<'a> {
+    async fn create_watcher<'a>(chain: &mut Blockchain, gatekeeper: &'a Gatekeeper) -> Watcher<'a> {
         let tip = chain.tip();
         let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
@@ -542,10 +545,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache() {
-        let chain = Blockchain::default().with_height(10);
+        let mut chain = Blockchain::default().with_height(10);
         let size = 6;
 
-        let cache = LocatorCache::new(get_last_n_blocks(chain, size).await);
+        let cache = LocatorCache::new(get_last_n_blocks(&mut chain, size).await);
         assert_eq!(size, cache.size);
     }
 
@@ -555,9 +558,9 @@ mod tests {
         // Not testing the update / rejection logic, since that's already covered in the Gatekeeper, just that the data makes
         // sense and the signature verifies.
 
-        let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = create_watcher(chain, &gk).await;
+        let mut watcher = create_watcher(&mut chain, &gk).await;
 
         let user_pk = PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY);
         let user_id = UserId(user_pk);
@@ -579,11 +582,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_appointment() {
-        let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let tip_txs = chain.blocks.last().unwrap().txdata.clone();
 
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = create_watcher(chain, &gk).await;
+        let mut watcher = create_watcher(&mut chain, &gk).await;
 
         // add_appointment should add a given appointment to the Watcher given the following logic:
         //      - if the appointment does not exist for a given user, add the appointment
@@ -717,9 +720,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_appointment() {
-        let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = create_watcher(chain, &gk).await;
+        let mut watcher = create_watcher(&mut chain, &gk).await;
 
         let appointment = generate_dummy_appointment(None).inner;
 
@@ -777,10 +780,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_breaches() {
-        let chain = Blockchain::default().with_height_and_txs(12, None);
+        let mut chain = Blockchain::default().with_height_and_txs(12, None);
         let txs = chain.blocks.last().unwrap().txdata.clone();
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let watcher = create_watcher(chain, &gk).await;
+        let watcher = create_watcher(&mut chain, &gk).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -810,10 +813,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_breaches() {
-        let chain = Blockchain::default().with_height_and_txs(10, Some(12));
+        let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
         let txs = chain.blocks.last().unwrap().txdata.clone();
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let watcher = create_watcher(chain, &gk).await;
+        let watcher = create_watcher(&mut chain, &gk).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -870,5 +873,131 @@ mod tests {
         invalid
             .values()
             .all(|v| matches!(v, cryptography::DecryptingError::AED { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_block_connected() {
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, Some(12));
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
+        let mut watcher = create_watcher(&mut chain, &gk).await;
+
+        // block_connected for the Watcher is used to keep track of what new transactions has been mined whose may be potential
+        // channel breaches.
+
+        // If the Watcher is not watching any appointment, block_connected will only be used to keep track of the last known block
+        // by the Watcher.
+        assert_eq!(
+            watcher.last_known_block_header.borrow().header,
+            chain.tip().header
+        );
+        watcher.block_connected(&chain.generate(None), chain.blocks.len() as u32);
+        assert_eq!(
+            watcher.last_known_block_header.borrow().header,
+            chain.tip().header
+        );
+
+        // If there are appointments to watch, the Watcher will:
+        //  - Check if any new transaction is a trigger
+        //      - Check if a trigger is valid, if so pass the data to the Responder
+        //  - Delete invalid appointments.
+        //  - Delete appointments that have been outdated (i.e. have expired without a trigger)
+        //  - Delete invalid appointments also from the Gatekeeper (not outdated tough, the GK will take care of those via it's own Listen)
+
+        // Let's first check how data gets outdated (create two users, add an appointment to both and outdate only one)
+        let all_two_sk = SecretKey::from_slice(&[2; 32]).unwrap();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
+        let user2_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &all_two_sk));
+        watcher.register(&user_id).unwrap();
+        watcher.register(&user2_id).unwrap();
+
+        let appointment = generate_dummy_appointment(None);
+        let uuid1 = UUID::new(&appointment.inner.locator, &user_id);
+        let uuid2 = UUID::new(&appointment.inner.locator, &user2_id);
+
+        let user_sig = cryptography::sign(&appointment.inner.serialize(), ONE_KEY).unwrap();
+        watcher
+            .add_appointment(appointment.inner.clone(), user_sig)
+            .unwrap();
+        let user2_sig = cryptography::sign(&appointment.inner.serialize(), all_two_sk).unwrap();
+        watcher
+            .add_appointment(appointment.inner.clone(), user2_sig)
+            .unwrap();
+
+        watcher
+            .gatekeeper
+            .registered_users
+            .borrow_mut()
+            .get_mut(&user_id)
+            .unwrap()
+            .subscription_expiry = (chain.blocks.len() as u32) - EXPIRY_DELTA + 1;
+
+        // Both appointments can be found before mining a block, only the user's 2 can be found afterwards
+        for uuid in vec![uuid1, uuid2] {
+            assert!(watcher.appointments.borrow().contains_key(&uuid));
+        }
+        assert!(watcher.gatekeeper.registered_users.borrow()[&user_id]
+            .appointments
+            .contains_key(&uuid1));
+        assert!(watcher.gatekeeper.registered_users.borrow()[&user2_id]
+            .appointments
+            .contains_key(&uuid2));
+
+        watcher.block_connected(&chain.generate(None), chain.blocks.len() as u32);
+
+        assert!(!watcher.appointments.borrow().contains_key(&uuid1));
+        assert!(watcher.gatekeeper.registered_users.borrow()[&user_id]
+            .appointments
+            .contains_key(&uuid1));
+
+        assert!(watcher.appointments.borrow().contains_key(&uuid2));
+        assert!(watcher.gatekeeper.registered_users.borrow()[&user2_id]
+            .appointments
+            .contains_key(&uuid2));
+
+        // Check triggers. Add a new appointment and trigger it with valid data.
+        let dispute_tx = get_random_tx();
+        let appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
+        let sig = cryptography::sign(&appointment.inner.serialize(), all_two_sk).unwrap();
+        let uuid = UUID::new(&appointment.inner.locator, &user2_id);
+        watcher
+            .add_appointment(appointment.inner.clone(), sig)
+            .unwrap();
+
+        assert!(watcher.appointments.borrow().contains_key(&uuid));
+
+        watcher.block_connected(
+            &chain.generate(Some(vec![dispute_tx])),
+            chain.blocks.len() as u32,
+        );
+
+        // Data should have been moved to the Responder and kept in the Gatekeeper, since it is still part of the system.
+        assert!(!watcher.appointments.borrow().contains_key(&uuid));
+        assert!(watcher.responder.trackers.borrow().contains_key(&uuid));
+        assert!(watcher.gatekeeper.registered_users.borrow()[&user2_id]
+            .appointments
+            .contains_key(&uuid));
+
+        // Checks invalid triggers. Add a new appointment and trigger it with invalid data.
+        let dispute_tx = get_random_tx();
+        let mut appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
+        // Modify the encrypted blob so the data is invalid both non-decryptable blobs and blobs with invalid transactions will yield an invalid trigger
+        appointment.inner.encrypted_blob = vec![1; 64];
+        let sig = cryptography::sign(&appointment.inner.serialize(), all_two_sk).unwrap();
+        let uuid = UUID::new(&appointment.inner.locator, &user2_id);
+        watcher
+            .add_appointment(appointment.inner.clone(), sig)
+            .unwrap();
+
+        watcher.block_connected(
+            &chain.generate(Some(vec![dispute_tx])),
+            chain.blocks.len() as u32,
+        );
+
+        // Data has been wiped since it was invalid
+        assert!(!watcher.appointments.borrow().contains_key(&uuid));
+        assert!(!watcher.responder.trackers.borrow().contains_key(&uuid));
+        assert!(!watcher.gatekeeper.registered_users.borrow()[&user2_id]
+            .appointments
+            .contains_key(&uuid));
     }
 }
