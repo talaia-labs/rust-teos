@@ -2,11 +2,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
 use std::fmt;
 
+use bitcoin::hashes::{ripemd160, Hash};
+
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::UserId;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct UUID(pub [u8; 20]);
+
+impl UUID {
+    pub fn new(locator: &Locator, user_id: &UserId) -> Self {
+        let mut uuid_data = locator.to_vec();
+        uuid_data.extend(&user_id.0.serialize());
+        UUID(ripemd160::Hash::hash(&uuid_data).into_inner())
+    }
+}
 
 impl std::fmt::Display for UUID {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

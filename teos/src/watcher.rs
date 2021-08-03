@@ -6,7 +6,7 @@ use std::iter::FromIterator;
 use std::ops::Deref;
 
 use bitcoin::hash_types::BlockHash;
-use bitcoin::hashes::{ripemd160, Hash};
+
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::{Block, BlockHeader, Transaction};
 use lightning::chain;
@@ -229,9 +229,7 @@ impl<'a> Watcher<'a> {
             self.last_known_block_header.borrow().height,
         );
 
-        let mut uui_data = extended_appointment.inner.locator.to_vec();
-        uui_data.extend(&user_id.0.serialize());
-        let uuid = UUID(ripemd160::Hash::hash(&uui_data).into_inner());
+        let uuid = UUID::new(&extended_appointment.inner.locator, &user_id);
 
         // TODO: Skip if appointment already in Responder
 
@@ -312,9 +310,7 @@ impl<'a> Watcher<'a> {
             return Err(GetAppointmentFailure::SubscriptionExpired(expiry));
         }
 
-        let mut uui_data = locator.to_vec();
-        uui_data.extend(&user_id.0.serialize());
-        let uuid = UUID(ripemd160::Hash::hash(&uui_data).into_inner());
+        let uuid = UUID::new(&locator, &user_id);
 
         // TODO: This should also check if the appointment is in the Responder
         match self.appointments.borrow().get(&uuid) {
@@ -506,6 +502,7 @@ mod tests {
     use crate::test_utils::{generate_dummy_appointment, generate_uuid};
 
     use bitcoin::hash_types::Txid;
+    use bitcoin::hashes::Hash;
     use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::key::ONE_KEY;
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
