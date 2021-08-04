@@ -15,14 +15,14 @@ pub enum DecryptingError {
 }
 
 /// Shadows message_signing::sign.
-pub fn sign(msg: &[u8], sk: SecretKey) -> Result<String, Error> {
+pub fn sign(msg: &[u8], sk: &SecretKey) -> Result<String, Error> {
     message_signing::sign(msg, sk)
 }
 
 /// Shadows message_signing::verify.
-pub fn verify(msg: &[u8], sig: &str, pk: PublicKey) -> bool {
+pub fn verify(msg: &[u8], sig: &str, pk: &PublicKey) -> bool {
     match message_signing::recover_pk(msg, sig) {
-        Ok(x) => x == pk,
+        Ok(x) => x == *pk,
         Err(_) => false,
     }
 }

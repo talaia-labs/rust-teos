@@ -45,7 +45,7 @@ impl RegistrationReceipt {
         ser
     }
 
-    pub fn sign(&mut self, sk: SecretKey) {
+    pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
         self.signature = Some(cryptography::sign(&self.serialize(), sk).unwrap());
     }
@@ -86,7 +86,7 @@ impl AppointmentReceipt {
         ser
     }
 
-    pub fn sign(&mut self, sk: SecretKey) {
+    pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
         self.signature = Some(cryptography::sign(&self.serialize(), sk).unwrap());
     }

@@ -199,7 +199,7 @@ impl<'a> Watcher<'a> {
 
     pub fn register(&mut self, user_id: &UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let mut receipt = self.gatekeeper.add_update_user(user_id)?;
-        receipt.sign(self.signing_key);
+        receipt.sign(&self.signing_key);
 
         Ok(receipt)
     }
@@ -285,7 +285,7 @@ impl<'a> Watcher<'a> {
             extended_appointment.user_signature.clone(),
             extended_appointment.start_block.clone(),
         );
-        receipt.sign(self.signing_key);
+        receipt.sign(&self.signing_key);
 
         Ok((receipt, available_slots, expiry))
     }
@@ -576,7 +576,7 @@ mod tests {
         assert!(cryptography::verify(
             &receipt.serialize(),
             &receipt.signature().unwrap(),
-            user_pk
+            &user_pk
         ));
     }
 
@@ -608,7 +608,7 @@ mod tests {
 
         // Add the appointment for a new user (twice so we can check that updates work)
         for _ in 0..1 {
-            let user_sig = cryptography::sign(&appointment.serialize(), user_sk).unwrap();
+            let user_sig = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
             let (receipt, slots, expiry) = watcher
                 .add_appointment(appointment.clone(), user_sig.clone())
                 .unwrap();
@@ -628,7 +628,7 @@ mod tests {
         let user2_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user2_sk));
         watcher.register(&user2_id).unwrap();
 
-        let user2_sig = cryptography::sign(&appointment.serialize(), user2_sk).unwrap();
+        let user2_sig = cryptography::sign(&appointment.serialize(), &user2_sk).unwrap();
         let (receipt, slots, expiry) = watcher
             .add_appointment(appointment.clone(), user2_sig.clone())
             .unwrap();
@@ -654,7 +654,7 @@ mod tests {
         // TODO: Since we have no Responder yet, test that the data is not kept in the Watcher
         let dispute_tx = tip_txs.last().unwrap();
         let appointment_in_cache = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
-        let user_sig = cryptography::sign(&appointment_in_cache.serialize(), user_sk).unwrap();
+        let user_sig = cryptography::sign(&appointment_in_cache.serialize(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
             .add_appointment(appointment_in_cache.clone(), user_sig.clone())
             .unwrap();
@@ -696,7 +696,7 @@ mod tests {
 
         let dispute_txid = Txid::from_slice(&[2; 32]).unwrap();
         let new_appointment = generate_dummy_appointment(Some(&dispute_txid)).inner;
-        let new_app_sig = cryptography::sign(&new_appointment.serialize(), user_sk).unwrap();
+        let new_app_sig = cryptography::sign(&new_appointment.serialize(), &user_sk).unwrap();
 
         assert!(matches!(
             watcher.add_appointment(new_appointment, new_app_sig),
@@ -740,12 +740,12 @@ mod tests {
         watcher
             .add_appointment(
                 appointment.clone(),
-                cryptography::sign(&appointment.serialize(), user_sk).unwrap(),
+                cryptography::sign(&appointment.serialize(), &user_sk).unwrap(),
             )
             .unwrap();
 
         let message = format!("get appointment {}", appointment.locator.clone());
-        let signature = cryptography::sign(message.as_bytes(), user_sk).unwrap();
+        let signature = cryptography::sign(message.as_bytes(), &user_sk).unwrap();
         let r_app = watcher
             .get_appointment(appointment.locator.clone(), signature.clone())
             .unwrap();
@@ -757,7 +757,7 @@ mod tests {
         let user2_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user2_sk));
         watcher.register(&user2_id).unwrap();
 
-        let signature2 = cryptography::sign(message.as_bytes(), user2_sk).unwrap();
+        let signature2 = cryptography::sign(message.as_bytes(), &user2_sk).unwrap();
         assert!(matches!(
             watcher.get_appointment(appointment.locator.clone(), signature2),
             Err(GetAppointmentFailure::NotFound { .. })
@@ -914,11 +914,11 @@ mod tests {
         let uuid1 = UUID::new(&appointment.inner.locator, &user_id);
         let uuid2 = UUID::new(&appointment.inner.locator, &user2_id);
 
-        let user_sig = cryptography::sign(&appointment.inner.serialize(), ONE_KEY).unwrap();
+        let user_sig = cryptography::sign(&appointment.inner.serialize(), &ONE_KEY).unwrap();
         watcher
             .add_appointment(appointment.inner.clone(), user_sig)
             .unwrap();
-        let user2_sig = cryptography::sign(&appointment.inner.serialize(), all_two_sk).unwrap();
+        let user2_sig = cryptography::sign(&appointment.inner.serialize(), &all_two_sk).unwrap();
         watcher
             .add_appointment(appointment.inner.clone(), user2_sig)
             .unwrap();
@@ -957,7 +957,7 @@ mod tests {
         // Check triggers. Add a new appointment and trigger it with valid data.
         let dispute_tx = get_random_tx();
         let appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
-        let sig = cryptography::sign(&appointment.inner.serialize(), all_two_sk).unwrap();
+        let sig = cryptography::sign(&appointment.inner.serialize(), &all_two_sk).unwrap();
         let uuid = UUID::new(&appointment.inner.locator, &user2_id);
         watcher
             .add_appointment(appointment.inner.clone(), sig)
@@ -982,7 +982,7 @@ mod tests {
         let mut appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
         // Modify the encrypted blob so the data is invalid both non-decryptable blobs and blobs with invalid transactions will yield an invalid trigger
         appointment.inner.encrypted_blob = vec![1; 64];
-        let sig = cryptography::sign(&appointment.inner.serialize(), all_two_sk).unwrap();
+        let sig = cryptography::sign(&appointment.inner.serialize(), &all_two_sk).unwrap();
         let uuid = UUID::new(&appointment.inner.locator, &user2_id);
         watcher
             .add_appointment(appointment.inner.clone(), sig)
