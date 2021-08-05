@@ -13,13 +13,14 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use bitcoin::hash_types::BlockHash;
-use bitcoin::Block;
+use bitcoin::hashes::hex::ToHex;
+use bitcoin::{Block, Transaction};
+use lightning::util::ser::Writeable;
 use lightning_block_sync::http::HttpEndpoint;
 use lightning_block_sync::rpc::RpcClient;
 use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
 
-use crate::convert::BlockCount;
-use crate::convert::BlockchainInfo;
+use crate::convert::{BlockchainInfo, TxidHex};
 
 pub struct BitcoindClient {
     bitcoind_rpc_client: Arc<Mutex<RpcClient>>,
@@ -102,11 +103,39 @@ impl BitcoindClient {
             .await
     }
 
-    pub async fn get_block_count(&self) -> Result<u64, std::io::Error> {
+    pub async fn send_raw_transaction(
+        &self,
+        raw_tx: Transaction,
+    ) -> Result<TxidHex, std::io::Error> {
         let mut rpc = self.bitcoind_rpc_client.lock().await;
-        match rpc.call_method::<BlockCount>("getblockcount", &[]).await {
-            Ok(x) => Ok(x.0),
-            Err(e) => Err(e),
+
+        let raw_tx_json = serde_json::json!(raw_tx.encode().to_hex());
+        rpc.call_method::<TxidHex>("sendrawtransaction", &[raw_tx_json])
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::HttpServer;
+
+    /// Credentials encoded in base64.
+    const CREDENTIALS: &'static str = "dXNlcjpwYXNzd29yZA==";
+
+    impl BitcoindClient {
+        pub(crate) fn new_dummy(server: HttpServer) -> Self {
+            let client = Arc::new(Mutex::new(
+                RpcClient::new(CREDENTIALS, server.endpoint()).unwrap(),
+            ));
+
+            BitcoindClient {
+                bitcoind_rpc_client: client,
+                host: "host".to_string(),
+                port: 18443,
+                rpc_user: "user".to_string(),
+                rpc_password: "password".to_string(),
+            }
         }
     }
 }
