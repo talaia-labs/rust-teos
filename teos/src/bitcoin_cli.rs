@@ -105,7 +105,7 @@ impl BitcoindClient {
 
     pub async fn send_raw_transaction(
         &self,
-        raw_tx: Transaction,
+        raw_tx: &Transaction,
     ) -> Result<TxidHex, std::io::Error> {
         let mut rpc = self.bitcoind_rpc_client.lock().await;
 

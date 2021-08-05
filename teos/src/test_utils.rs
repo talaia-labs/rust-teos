@@ -7,6 +7,12 @@
  * at your option.
 */
 
+use chunked_transfer;
+use rand::Rng;
+use std::io::BufRead;
+use std::io::Write;
+use std::time::Duration;
+
 use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::blockdata::script::{Builder, Script};
@@ -21,11 +27,12 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::util::hash::bitcoin_merkle_root;
 use bitcoin::util::psbt::serialize::Deserialize;
 use bitcoin::util::uint::Uint256;
+use lightning_block_sync::http::HttpEndpoint;
 use lightning_block_sync::poll::{Validate, ValidatedBlockHeader};
 use lightning_block_sync::{
     AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError, UnboundedCache,
 };
-use rand::Rng;
+
 use teos_common::appointment::Appointment;
 use teos_common::cryptography::encrypt;
 use teos_common::UserId;
@@ -323,4 +330,122 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
     let start_block = 42;
 
     ExtendedAppointment::new(appointment, user_id, user_signature, start_block)
+}
+
+/// Timeout for operations on TCP streams.
+const TCP_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Server for handling HTTP client requests with a stock response.
+pub struct HttpServer {
+    address: std::net::SocketAddr,
+    handler: std::thread::JoinHandle<()>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Body of HTTP response messages.
+pub enum MessageBody<T: ToString> {
+    Empty,
+    Content(T),
+    ChunkedContent(T),
+}
+
+impl HttpServer {
+    fn responding_with_body<T: ToString>(status: &str, body: MessageBody<T>) -> Self {
+        let response = match body {
+            MessageBody::Empty => format!("{}\r\n\r\n", status),
+            MessageBody::Content(body) => {
+                let body = body.to_string();
+                format!(
+                    "{}\r\n\
+						 Content-Length: {}\r\n\
+						 \r\n\
+						 {}",
+                    status,
+                    body.len(),
+                    body
+                )
+            }
+            MessageBody::ChunkedContent(body) => {
+                let mut chuncked_body = Vec::new();
+                {
+                    use chunked_transfer::Encoder;
+                    let mut encoder = Encoder::with_chunks_size(&mut chuncked_body, 8);
+                    encoder.write_all(body.to_string().as_bytes()).unwrap();
+                }
+                format!(
+                    "{}\r\n\
+						 Transfer-Encoding: chunked\r\n\
+						 \r\n\
+						 {}",
+                    status,
+                    String::from_utf8(chuncked_body).unwrap()
+                )
+            }
+        };
+        HttpServer::responding_with(response)
+    }
+
+    pub fn responding_with_ok<T: ToString>(body: MessageBody<T>) -> Self {
+        HttpServer::responding_with_body("HTTP/1.1 200 OK", body)
+    }
+
+    pub fn responding_with_not_found() -> Self {
+        HttpServer::responding_with_body::<String>("HTTP/1.1 404 Not Found", MessageBody::Empty)
+    }
+
+    pub fn responding_with_server_error<T: ToString>(content: T) -> Self {
+        let body = MessageBody::Content(content);
+        HttpServer::responding_with_body("HTTP/1.1 500 Internal Server Error", body)
+    }
+
+    fn responding_with(response: String) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_signaled = std::sync::Arc::clone(&shutdown);
+        let handler = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                stream.set_write_timeout(Some(TCP_STREAM_TIMEOUT)).unwrap();
+
+                let lines_read = std::io::BufReader::new(&stream)
+                    .lines()
+                    .take_while(|line| !line.as_ref().unwrap().is_empty())
+                    .count();
+                if lines_read == 0 {
+                    continue;
+                }
+
+                for chunk in response.as_bytes().chunks(16) {
+                    if shutdown_signaled.load(std::sync::atomic::Ordering::SeqCst) {
+                        return;
+                    } else {
+                        if let Err(_) = stream.write(chunk) {
+                            break;
+                        }
+                        if let Err(_) = stream.flush() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        Self {
+            address,
+            handler,
+            shutdown,
+        }
+    }
+
+    fn shutdown(self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.handler.join().unwrap();
+    }
+
+    pub fn endpoint(&self) -> HttpEndpoint {
+        HttpEndpoint::for_host(self.address.ip().to_string()).with_port(self.address.port())
+    }
 }

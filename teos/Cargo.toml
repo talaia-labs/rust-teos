@@ -9,7 +9,6 @@ edition = "2018"
 
 [dependencies]
 hex = "0.4.3"
-rand = "0.8.4"
 base64 = "0.13.0"
 futures = "0.3"
 log = "0.4"
@@ -24,3 +23,8 @@ lightning-net-tokio = { version = "0.0.99", git = "https://github.com/rust-bitco
 lightning = { version = "0.0.99", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
 
 teos-common = {path = "../teos-common"}
+
+
+[dev-dependencies]
+rand = "0.8.4"
+chunked_transfer = "1.4"
