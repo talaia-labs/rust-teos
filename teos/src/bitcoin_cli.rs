@@ -12,7 +12,7 @@ use futures::executor::block_on;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use bitcoin::hash_types::BlockHash;
+use bitcoin::hash_types::{BlockHash, Txid};
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::{Block, Transaction};
 use lightning::util::ser::Writeable;
@@ -20,7 +20,7 @@ use lightning_block_sync::http::HttpEndpoint;
 use lightning_block_sync::rpc::RpcClient;
 use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
 
-use crate::convert::{BlockchainInfo, TxidHex};
+use crate::convert::BlockchainInfo;
 
 pub struct BitcoindClient {
     bitcoind_rpc_client: Arc<Mutex<RpcClient>>,
@@ -103,14 +103,19 @@ impl BitcoindClient {
             .await
     }
 
-    pub async fn send_raw_transaction(
-        &self,
-        raw_tx: &Transaction,
-    ) -> Result<TxidHex, std::io::Error> {
+    pub async fn send_raw_transaction(&self, raw_tx: &Transaction) -> Result<Txid, std::io::Error> {
         let mut rpc = self.bitcoind_rpc_client.lock().await;
 
         let raw_tx_json = serde_json::json!(raw_tx.encode().to_hex());
-        rpc.call_method::<TxidHex>("sendrawtransaction", &[raw_tx_json])
+        rpc.call_method::<Txid>("sendrawtransaction", &[raw_tx_json])
+            .await
+    }
+
+    pub async fn get_raw_transaction(&self, txid: &Txid) -> Result<Transaction, std::io::Error> {
+        let mut rpc = self.bitcoind_rpc_client.lock().await;
+
+        let txid_hex = serde_json::json!(txid.encode().to_hex());
+        rpc.call_method::<Transaction>("getrawtransaction", &[txid_hex])
             .await
     }
 }
