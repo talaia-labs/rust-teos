@@ -18,9 +18,12 @@ serde_json = "1.0"
 tokio = { version = "1.5", features = [ "io-util", "macros", "rt", "rt-multi-thread", "sync", "net", "time" ] }
 
 bitcoin = "0.27"
-lightning-block-sync = {version = "0.0.99", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
-lightning-net-tokio = { version = "0.0.99", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
-lightning = { version = "0.0.99", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+lightning-block-sync = {version = "0.0.100", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
+lightning-net-tokio = { version = "0.0.100", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+lightning = { version = "0.0.100", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+bitcoincore-rpc = "0.13.0"
+
+
 
 teos-common = {path = "../teos-common"}
 
@@ -28,3 +31,4 @@ teos-common = {path = "../teos-common"}
 [dev-dependencies]
 rand = "0.8.4"
 chunked_transfer = "1.4"
+httpmock = "0.6"

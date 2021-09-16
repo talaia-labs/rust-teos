@@ -1,3 +1,4 @@
+use futures::executor::block_on;
 use log;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -428,8 +429,6 @@ impl<'a> chain::Listen for Watcher<'a> {
             let (valid_breaches, invalid_breaches) =
                 self.filter_breaches(self.get_breaches(locator_tx_map));
 
-            println!("V: {:?}, I: {:?}", valid_breaches, invalid_breaches);
-
             let mut appointments_to_delete: Vec<UUID> = Vec::new();
             let mut appointments_to_delete_gatekeeper: HashMap<UUID, UserId> = HashMap::new();
             for uuid in invalid_breaches.keys() {
@@ -445,12 +444,14 @@ impl<'a> chain::Listen for Watcher<'a> {
                     uuid
                 );
 
-                self.responder.handle_breach(
+                //DISCUSS: This cannot be async given block_connected is not.
+                // Is there any alternative? Remove async from here altogether?
+                block_on(self.responder.handle_breach(
                     uuid.clone(),
                     breach,
                     self.appointments.borrow()[&uuid].user_id,
                     block.header,
-                );
+                ));
 
                 // DISCUSS: Not using triggered flags from now (i.e. this is one way atm)
                 appointments_to_delete.push(uuid.clone());
@@ -499,15 +500,19 @@ impl<'a> chain::Listen for Watcher<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Arc;
+
+    use crate::carrier::Carrier;
     use crate::extended_appointment::AppointmentStatus;
-    use crate::test_utils::{generate_dummy_appointment, generate_uuid};
-    use crate::test_utils::{get_random_tx, Blockchain};
+    use crate::test_utils::{generate_dummy_appointment, generate_uuid, get_random_tx, Blockchain};
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
     use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::key::ONE_KEY;
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use bitcoincore_rpc::{Auth, Client};
     use lightning::chain::Listen;
     use lightning_block_sync::poll::{ChainPoller, Poll};
 
@@ -539,7 +544,16 @@ mod tests {
         let tip = chain.tip();
         let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
-        let responder = Responder::new(&gatekeeper, tip);
+        let bitcoin_cli = Arc::new(
+            Client::new(
+                "http://localhost:18443".to_string(),
+                Auth::UserPass("user".to_string(), "passwd".to_string()),
+            )
+            .unwrap(),
+        );
+        let carrier = Carrier::new(bitcoin_cli);
+
+        let responder = Responder::new(carrier, &gatekeeper, tip);
         Watcher::new(&gatekeeper, responder, last_n_blocks, tip, TOWER_SK).await
     }
 

@@ -1,15 +1,17 @@
-use simple_logger::SimpleLogger;
+use simple_logger::init_with_level;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::key::ONE_KEY;
 use bitcoin::secp256k1::SecretKey;
+use bitcoincore_rpc::{Auth, Client};
 use lightning_block_sync::init::validate_best_block_header;
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlock, ValidatedBlockHeader};
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
 use rusty_teos::bitcoin_cli::BitcoindClient;
+use rusty_teos::carrier::Carrier;
 use rusty_teos::chain_monitor::ChainMonitor;
 use rusty_teos::gatekeeper::Gatekeeper;
 use rusty_teos::responder::Responder;
@@ -50,7 +52,8 @@ pub async fn main() {
     const DURATION: u32 = 500;
     const EXPIRY_DELTA: u32 = 42;
 
-    SimpleLogger::new().init().unwrap();
+    // Init with loglevel=Error for now, make it configurable later on.
+    init_with_level(log::Level::Error).unwrap();
 
     // // Initialize our bitcoind client.
     let bitcoin_cli =
@@ -63,6 +66,16 @@ pub async fn main() {
             }
         };
 
+    // FIXME: Temporary. We're using bitcoin_core_rpc and rust-lightning's rpc until they both get merged
+    // https://github.com/rust-bitcoin/rust-bitcoincore-rpc/issues/166
+    let rpc = Arc::new(
+        Client::new(
+            "http://localhost:18443".to_string(),
+            Auth::UserPass("user".to_string(), "passwd".to_string()),
+        )
+        .unwrap(),
+    );
+
     let mut derefed = bitcoin_cli.deref();
     let tip = validate_best_block_header(&mut derefed).await.unwrap();
     let mut poller = ChainPoller::new(&mut derefed, Network::Bitcoin);
@@ -70,7 +83,8 @@ pub async fn main() {
     let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
 
     let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
-    let responder = Responder::new(&gatekeeper, tip);
+    let carrier = Carrier::new(rpc.clone());
+    let responder = Responder::new(carrier, &gatekeeper, tip);
     let watcher = Watcher::new(&gatekeeper, responder, last_n_blocks, tip, TOWER_SK).await;
 
     let listener = &(&watcher, &gatekeeper);
