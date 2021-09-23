@@ -505,16 +505,18 @@ mod tests {
 
     use crate::carrier::Carrier;
     use crate::extended_appointment::AppointmentStatus;
-    use crate::test_utils::{generate_dummy_appointment, generate_uuid, get_random_tx, Blockchain};
+    use crate::test_utils::{generate_dummy_appointment, generate_uuid, get_random_tx, Blockchain, TXID_HEX, get_nonce};
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
     use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::key::ONE_KEY;
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-    use bitcoincore_rpc::{Auth, Client};
+    use bitcoincore_rpc::{Auth, Client as BitcoindClient};
     use lightning::chain::Listen;
     use lightning_block_sync::poll::{ChainPoller, Poll};
+
+    use httpmock::prelude::*;
 
     const TOWER_SK: SecretKey = ONE_KEY;
     const SLOTS: u32 = 21;
@@ -544,13 +546,15 @@ mod tests {
         let tip = chain.tip();
         let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
-        let bitcoin_cli = Arc::new(
-            Client::new(
-                "http://localhost:18443".to_string(),
-                Auth::UserPass("user".to_string(), "passwd".to_string()),
-            )
-            .unwrap(),
-        );
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(POST);
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(serde_json::json!({ "id": get_nonce(), "result": TXID_HEX }).to_string());
+        });
+
+        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
         let carrier = Carrier::new(bitcoin_cli);
 
         let responder = Responder::new(carrier, &gatekeeper, tip);

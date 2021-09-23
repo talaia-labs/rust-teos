@@ -4,7 +4,12 @@ use std::sync::Arc;
 use crate::errors;
 use crate::rpc_errors;
 
-use bitcoincore_rpc::bitcoin::{Transaction, Txid};
+use bitcoin::hashes::Hash;
+use bitcoin::util::psbt::serialize::Serialize;
+use bitcoin::{Transaction, Txid};
+use bitcoincore_rpc::bitcoin::hashes::Hash as RpcHash;
+use bitcoincore_rpc::bitcoin::util::psbt::serialize::Serialize as RpcSerialize;
+use bitcoincore_rpc::bitcoin::{Transaction as RpcTransaction, Txid as RpcTxid};
 use bitcoincore_rpc::{
     jsonrpc::error::Error::Rpc as RpcError, Client as BitcoindClient,
     Error::JsonRpc as JsonRpcError, RpcApi,
@@ -25,6 +30,18 @@ impl Receipt {
             reason,
         }
     }
+
+    pub fn delivered(&self) -> bool {
+        self.delivered
+    }
+
+    pub fn confirmations(&self) -> &Option<u32> {
+        &self.confirmations
+    }
+
+    pub fn reason(&self) -> &Option<i32> {
+        &self.reason
+    }
 }
 
 pub struct Carrier {
@@ -44,7 +61,11 @@ impl Carrier {
         log::info!("Pushing transaction to the network: {}", tx.txid());
         let receipt: Receipt;
 
-        match self.bitcoin_cli.send_raw_transaction(tx) {
+        // FIXME: Temporary hack until bitcoincore_rpc bumps it's version to match ldk's
+        let rpc_tx: RpcTransaction =
+            bitcoincore_rpc::bitcoin::consensus::deserialize(&tx.serialize()).unwrap();
+
+        match self.bitcoin_cli.send_raw_transaction(&rpc_tx) {
             Ok(_) => {
                 log::info!("Transaction successfully delivered: {}", tx.txid());
                 receipt = Receipt::new(true, Some(0), None);
@@ -53,11 +74,11 @@ impl Carrier {
                 // Since we're pushing a raw transaction to the network we can face several rejections
                 rpc_errors::RPC_VERIFY_REJECTED => {
                     log::error!("Transaction couldn't be broadcast.  {:?}", rpcerr);
-                    receipt = Receipt::new(false, Some(0), Some(rpc_errors::RPC_VERIFY_REJECTED))
+                    receipt = Receipt::new(false, None, Some(rpc_errors::RPC_VERIFY_REJECTED))
                 }
                 rpc_errors::RPC_VERIFY_ERROR => {
                     log::error!("Transaction couldn't be broadcast.  {:?}", rpcerr);
-                    receipt = Receipt::new(false, Some(0), Some(rpc_errors::RPC_VERIFY_ERROR))
+                    receipt = Receipt::new(false, None, Some(rpc_errors::RPC_VERIFY_ERROR))
                 }
                 rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {
                     log::info!(
@@ -99,8 +120,41 @@ impl Carrier {
     }
 
     pub async fn get_transaction(&self, txid: &Txid) -> Option<Transaction> {
-        match self.bitcoin_cli.get_raw_transaction(txid, None) {
-            Ok(tx) => Some(tx),
+        // FIXME: Temporary conversion between bitcoincore-rpc data and bitcoin data structures until both crates use the same
+        // bitcoin version.
+        let rpc_txid = RpcTxid::from_slice(&txid.into_inner()).unwrap();
+        match self.bitcoin_cli.get_raw_transaction(&rpc_txid, None) {
+            Ok(tx) => Some(bitcoin::consensus::deserialize(&tx.serialize()).unwrap()),
+            Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
+                rpc_errors::RPC_INVALID_ADDRESS_OR_KEY => {
+                    log::info!("Transaction not found in mempool nor blockchain: {}", txid);
+                    None
+                }
+                e => {
+                    log::error!(
+                        "Unexpected error code when calling getrawtransaction: {}",
+                        e
+                    );
+                    None
+                }
+            },
+            // TODO: This needs finer catching. e.g. Connection errors need to be handled here
+            Err(e) => {
+                log::error!(
+                    "Unexpected JSONRPCError when calling getrawtransaction: {}",
+                    e
+                );
+                None
+            }
+        }
+    }
+
+    pub async fn get_confirmations(&self, txid: &Txid) -> Option<u32> {
+        // FIXME: Temporary conversion between bitcoincore-rpc data and bitcoin data structures until both crates use the same
+        // bitcoin version.
+        let rpc_txid = RpcTxid::from_slice(&txid.into_inner()).unwrap();
+        match self.bitcoin_cli.get_raw_transaction_info(&rpc_txid, None) {
+            Ok(tx_data) => tx_data.confirmations,
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                 rpc_errors::RPC_INVALID_ADDRESS_OR_KEY => {
                     log::info!("Transaction not found in mempool nor blockchain: {}", txid);
@@ -126,14 +180,13 @@ impl Carrier {
     }
 }
 
-// FIXME: This needs fixing. Tests make sense but the response has to contain the seed sent by the request, otherwise the rpc client rejects the response.
-// Already contacted the httpmock devs regarding this to see if there is any solution.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{TXID_HEX, TX_HEX};
-    use bitcoincore_rpc::bitcoin::consensus::{deserialize, serialize};
-    use bitcoincore_rpc::bitcoin::hashes::hex::FromHex;
+    use crate::test_utils::{get_nonce, TXID_HEX, TX_HEX};
+    use bitcoin::consensus::{deserialize, serialize};
+    use bitcoin::hashes::hex::FromHex;
+    use bitcoincore_rpc::jsonrpc::error::RpcError;
     use bitcoincore_rpc::Auth;
     use httpmock::prelude::*;
     use serde_json;
@@ -146,7 +199,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": TXID_HEX }).to_string());
+                .body(serde_json::json!({ "id": get_nonce(), "result": TXID_HEX }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -163,11 +216,16 @@ mod tests {
     #[tokio::test]
     async fn test_send_transaction_verify_rejected() {
         let server = MockServer::start();
+        let error = RpcError {
+            code: rpc_errors::RPC_VERIFY_REJECTED,
+            message: String::from(""),
+            data: None,
+        };
         let txid_mock = server.mock(|when, then| {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "error": rpc_errors::RPC_VERIFY_REJECTED }).to_string());
+                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -184,11 +242,16 @@ mod tests {
     #[tokio::test]
     async fn test_send_transaction_verify_error() {
         let server = MockServer::start();
+        let error = RpcError {
+            code: rpc_errors::RPC_VERIFY_ERROR,
+            message: String::from(""),
+            data: None,
+        };
         let txid_mock = server.mock(|when, then| {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "error": rpc_errors::RPC_VERIFY_ERROR }).to_string());
+                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -205,14 +268,16 @@ mod tests {
     #[tokio::test]
     async fn test_send_transaction_verify_already_in_chain() {
         let server = MockServer::start();
+        let error = RpcError {
+            code: rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN,
+            message: String::from(""),
+            data: None,
+        };
         let txid_mock = server.mock(|when, then| {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(
-                    serde_json::json!({ "error": rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN })
-                        .to_string(),
-                );
+                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -230,13 +295,18 @@ mod tests {
     #[tokio::test]
     async fn test_send_transaction_unexpected_error() {
         let server = MockServer::start();
+        let error = RpcError {
+            code: rpc_errors::RPC_MISC_ERROR,
+            message: String::from(""),
+            data: None,
+        };
 
         // Reply with an unexpected rpc error (any of the non accounted for should do)
         let txid_mock = server.mock(|when, then| {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "error": rpc_errors::RPC_MISC_ERROR }).to_string());
+                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -273,7 +343,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "result": TX_HEX }).to_string());
+                .body(serde_json::json!({ "id": get_nonce(), "result": TX_HEX }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -288,14 +358,17 @@ mod tests {
     #[tokio::test]
     async fn get_transaction_not_found() {
         let server = MockServer::start();
+        let error = RpcError {
+            code: rpc_errors::RPC_INVALID_ADDRESS_OR_KEY,
+            message: String::from(""),
+            data: None,
+        };
+
         let txid_mock = server.mock(|when, then| {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(
-                    serde_json::json!({ "error": rpc_errors::RPC_INVALID_ADDRESS_OR_KEY })
-                        .to_string(),
-                );
+                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());

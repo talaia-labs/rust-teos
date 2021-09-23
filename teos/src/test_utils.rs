@@ -452,3 +452,12 @@ impl HttpServer {
         HttpEndpoint::for_host(self.address.ip().to_string()).with_port(self.address.port())
     }
 }
+
+// Nonce sent between JSONRPC client/server, required by rust-jsonrpc (NonceMismatch will be raised otherwise).
+static mut NONCE: i32 = 1;
+
+pub fn get_nonce() -> i32 {
+    unsafe {
+        NONCE
+    }
+}
