@@ -39,7 +39,7 @@ impl fmt::Display for LocatorCache {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Breach {
     pub locator: Locator,
     pub dispute_tx: Transaction,
@@ -47,7 +47,7 @@ pub struct Breach {
 }
 
 impl Breach {
-    fn new(locator: Locator, dispute_tx: Transaction, penalty_tx: Transaction) -> Self {
+    pub fn new(locator: Locator, dispute_tx: Transaction, penalty_tx: Transaction) -> Self {
         Breach {
             locator,
             dispute_tx,
@@ -450,7 +450,6 @@ impl<'a> chain::Listen for Watcher<'a> {
                     uuid.clone(),
                     breach,
                     self.appointments.borrow()[&uuid].user_id,
-                    block.header,
                 ));
 
                 // DISCUSS: Not using triggered flags from now (i.e. this is one way atm)
@@ -505,7 +504,10 @@ mod tests {
 
     use crate::carrier::Carrier;
     use crate::extended_appointment::AppointmentStatus;
-    use crate::test_utils::{generate_dummy_appointment, generate_uuid, get_random_tx, Blockchain, TXID_HEX, get_nonce};
+    use crate::test_utils::{
+        generate_dummy_appointment, generate_uuid, get_random_tx, Blockchain, DURATION,
+        EXPIRY_DELTA, RPC_NONCE, SLOTS, START_HEIGHT, TXID_HEX,
+    };
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
@@ -519,10 +521,6 @@ mod tests {
     use httpmock::prelude::*;
 
     const TOWER_SK: SecretKey = ONE_KEY;
-    const SLOTS: u32 = 21;
-    const DURATION: u32 = 500;
-    const EXPIRY_DELTA: u32 = 42;
-    const START_HEIGHT: usize = 100;
 
     async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<ValidatedBlock> {
         let tip = chain.tip();
@@ -551,7 +549,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": get_nonce(), "result": TXID_HEX }).to_string());
+                .body(serde_json::json!({ "id": RPC_NONCE, "result": TXID_HEX }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());

@@ -183,7 +183,7 @@ impl Carrier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{get_nonce, TXID_HEX, TX_HEX};
+    use crate::test_utils::{RPC_NONCE, TXID_HEX, TX_HEX};
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::hashes::hex::FromHex;
     use bitcoincore_rpc::jsonrpc::error::RpcError;
@@ -199,7 +199,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": get_nonce(), "result": TXID_HEX }).to_string());
+                .body(serde_json::json!({ "id": RPC_NONCE, "result": TXID_HEX }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -225,7 +225,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
+                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -251,7 +251,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
+                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -277,7 +277,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
+                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -306,7 +306,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
+                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -343,7 +343,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": get_nonce(), "result": TX_HEX }).to_string());
+                .body(serde_json::json!({ "id": RPC_NONCE, "result": TX_HEX }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
@@ -368,7 +368,7 @@ mod tests {
             when.method(POST);
             then.status(200)
                 .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": get_nonce(), "error": error }).to_string());
+                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
         });
 
         let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
