@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JSONError, Value};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lightning::chain;
 use lightning_block_sync::poll::ValidatedBlockHeader;
@@ -53,7 +53,7 @@ pub struct Gatekeeper {
     subscription_duration: u32,
     expiry_delta: u32,
     pub(crate) registered_users: RefCell<HashMap<UserId, UserInfo>>,
-    outdated_users_cache: RefCell<HashMap<u32, HashMap<UserId, Vec<UUID>>>>,
+    pub(crate) outdated_users_cache: RefCell<HashMap<u32, HashMap<UserId, Vec<UUID>>>>,
 }
 
 impl Gatekeeper {
@@ -200,8 +200,8 @@ impl Gatekeeper {
             .collect()
     }
 
-    pub fn get_outdated_appointments(&self, block_height: &u32) -> Vec<UUID> {
-        let mut appointments = Vec::new();
+    pub fn get_outdated_appointments(&self, block_height: &u32) -> HashSet<UUID> {
+        let mut appointments = HashSet::new();
 
         for (_, uuids) in self.get_outdated_users(block_height).into_iter() {
             appointments.extend(uuids);
