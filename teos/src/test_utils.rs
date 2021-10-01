@@ -9,9 +9,15 @@
 
 use chunked_transfer;
 use rand::Rng;
+
 use std::io::BufRead;
 use std::io::Write;
+use std::thread;
 use std::time::Duration;
+
+use jsonrpc_http_server::jsonrpc_core::error::ErrorCode as JsonRpcErrorCode;
+use jsonrpc_http_server::jsonrpc_core::{Error as JsonRpcError, IoHandler, Params, Value};
+use jsonrpc_http_server::{Server, ServerBuilder};
 
 use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::constants::genesis_block;
@@ -458,5 +464,79 @@ impl HttpServer {
     }
 }
 
-// Nonce sent between JSONRPC client/server, required by rust-jsonrpc (NonceMismatch will be raised otherwise).
-pub static RPC_NONCE: i32 = 1;
+pub struct BitcoindMock {
+    pub url: String,
+    pub server: Server,
+}
+impl BitcoindMock {
+    pub fn new(error_code: Option<i64>, confirmations: Option<u32>) -> Self {
+        let mut io = IoHandler::default();
+
+        match error_code {
+            Some(x) => {
+                io.add_sync_method("error", move |_params: Params| {
+                    Err(JsonRpcError::new(JsonRpcErrorCode::ServerError(x)))
+                });
+                io.add_alias("sendrawtransaction", "error");
+
+                // So we can test a sendrawtransaction error b/c the tx is already on the mempool
+                // and query the confirmation count
+                match confirmations {
+                    Some(c) => {
+                        BitcoindMock::add_getrawtransaction(&mut io, c);
+                    }
+                    None => io.add_alias("getrawtransaction", "error"),
+                }
+            }
+            None => {
+                BitcoindMock::add_sendrawtransaction(&mut io);
+                BitcoindMock::add_getrawtransaction(&mut io, confirmations.unwrap_or(0));
+            }
+        }
+
+        let server = ServerBuilder::new(io)
+            .threads(3)
+            .start_http(&"127.0.0.1:0".parse().unwrap())
+            .unwrap();
+
+        Self {
+            url: format!("http://{}", server.address()),
+            server,
+        }
+    }
+
+    fn add_sendrawtransaction(io: &mut IoHandler) {
+        io.add_method("sendrawtransaction", |_params: Params| async {
+            Ok(Value::String(TXID_HEX.to_owned()))
+        });
+    }
+
+    fn add_getrawtransaction(io: &mut IoHandler, confirmations: u32) {
+        io.add_sync_method("getrawtransaction", move |_params: Params|  {
+            match _params {
+                Params::Array(x) => match x[1] {
+                    Value::Bool(x) => {
+                        if x {
+                            Ok(serde_json::json!({"confirmations": confirmations, "hex": TX_HEX, "txid": TXID_HEX,
+                            "hash": TXID_HEX, "size": 0, "vsize": 0, "version": 1, "locktime": 0, "vin": [], "vout": [] }))
+                        } else {
+                            Ok(Value::String(TX_HEX.to_owned()))
+                        }
+                    }
+                    _ => panic!("Boolean param not found"),
+                },
+                _ => panic!("No params found"),
+            }
+        })
+    }
+
+    pub fn url(&self) -> String {
+        self.url.clone()
+    }
+}
+
+pub fn start_server(bitcoind: BitcoindMock) {
+    thread::spawn(move || {
+        bitcoind.server.wait();
+    });
+}

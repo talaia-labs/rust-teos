@@ -305,62 +305,33 @@ impl<'a> Listen for Responder<'a> {
 mod tests {
     use super::*;
 
-    use std::sync::Arc;
-
-    use crate::rpc_errors;
-    use crate::test_utils::{
-        generate_uuid, get_random_tx, Blockchain, DURATION, EXPIRY_DELTA, RPC_NONCE, SLOTS,
-        START_HEIGHT, TXID_HEX,
+    use crate::{
+        rpc_errors,
+        test_utils::{
+            generate_uuid, get_random_tx, start_server, BitcoindMock, Blockchain, DURATION,
+            EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        },
     };
 
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-    use bitcoincore_rpc::jsonrpc::error::RpcError;
     use bitcoincore_rpc::{Auth, Client as BitcoindClient};
-    use httpmock::prelude::*;
+    use std::sync::Arc;
 
     enum MockedServerQuery {
-        Tx,
+        Regular,
         Confirmations(u32),
-        Error,
-        None,
-    }
-
-    fn create_mocked_server(query: MockedServerQuery) -> MockServer {
-        let server = MockServer::start();
-
-        let response_body = match query {
-            MockedServerQuery::Tx =>
-                serde_json::json!({ "id": RPC_NONCE, "result": TXID_HEX }).to_string(),
-            MockedServerQuery::Confirmations(x) => {
-                serde_json::json!({ "id": RPC_NONCE, "result": {"confirmations": x, "hex": "", "txid": TXID_HEX,
-                "hash": TXID_HEX, "size": 0, "vsize": 0, "version": 1, "locktime": 0, "vin": [], "vout": [] }})
-                    .to_string()
-            }
-            MockedServerQuery::Error => {
-                let error = RpcError {
-                    code: rpc_errors::RPC_VERIFY_ERROR,
-                    message: String::from(""),
-                    data: None,
-                };
-
-                serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string()
-            }
-            MockedServerQuery::None => serde_json::json!({ "id": RPC_NONCE}).to_string(),
-        };
-
-        server.mock(|when, then| {
-            when.method(POST);
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(response_body);
-        });
-
-        server
+        Error(i64),
     }
 
     fn create_carrier(query: MockedServerQuery) -> Carrier {
-        let server = create_mocked_server(query);
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
+        let bitcoind_mock = match query {
+            MockedServerQuery::Regular => BitcoindMock::new(None, None),
+            MockedServerQuery::Confirmations(x) => BitcoindMock::new(None, Some(x)),
+            MockedServerQuery::Error(x) => BitcoindMock::new(Some(x), None),
+        };
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
+
         Carrier::new(bitcoin_cli)
     }
 
@@ -396,7 +367,7 @@ mod tests {
     async fn test_handle_breach_delivered() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Tx);
+        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
         let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
@@ -422,7 +393,11 @@ mod tests {
     async fn test_handle_breach_not_delivered() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Error);
+        let responder = create_responder(
+            &mut chain,
+            &gk,
+            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+        );
 
         let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
@@ -448,7 +423,7 @@ mod tests {
     fn test_add_tracker() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(&mut chain, &gk, MockedServerQuery::None);
+        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
         let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
@@ -509,7 +484,7 @@ mod tests {
     fn test_check_confirmations() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(&mut chain, &gk, MockedServerQuery::None);
+        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
         // If a transaction is in the unconfirmed_transactions map it will be removed
         let mut txs = Vec::new();
@@ -557,7 +532,7 @@ mod tests {
     fn test_get_txs_to_rebroadcast() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Tx);
+        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
         // Transactions are flagged to be rebroadcast when they've missed CONFIRMATIONS_BEFORE_RETRY confirmations
         let mut txs = Vec::new();
@@ -594,9 +569,7 @@ mod tests {
 
         // A tracker is completed when it has passed constants::IRREVOCABLY_RESOLVED confirmations
         // Not completed yet
-        // FIXME: Creating this many servers makes test fail
-        //for i in 1..constants::IRREVOCABLY_RESOLVED + 2 {
-        for i in constants::IRREVOCABLY_RESOLVED - 7..constants::IRREVOCABLY_RESOLVED + 2 {
+        for i in 1..constants::IRREVOCABLY_RESOLVED + 2 {
             assert_eq!(responder.get_completed_trackers().await, HashSet::new());
             *responder.carrier.get_mut() = create_carrier(MockedServerQuery::Confirmations(i));
         }
@@ -615,7 +588,7 @@ mod tests {
     fn test_get_outdated_trackers() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(&mut chain, &gk, MockedServerQuery::None);
+        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
         // Outdated trackers are those whose associated subscription is outdated and have not been confirmed yet (they don't have
         // a single confirmation).
@@ -666,7 +639,7 @@ mod tests {
     async fn test_rebroadcast() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Tx);
+        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
         let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
@@ -683,11 +656,7 @@ mod tests {
 
             responder.add_tracker(uuid, breach, user_id, 0);
 
-            // FIXME: We can only test this with a single transaction at the moment since the mockserver
-            // cannot return the proper nonce for requests (https://github.com/alexliesenfeld/httpmock/issues/49)
-            // It works with a single request since we can hardcode it the nonce to the init value.
-            //if i % 2 == 0 {
-            if i == 0 {
+            if i % 2 == 0 {
                 responder
                     .missed_confirmations
                     .borrow_mut()
@@ -732,7 +701,7 @@ mod tests {
     fn test_delete_trackers() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(&mut chain, &gk, MockedServerQuery::None);
+        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
         let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
@@ -809,7 +778,7 @@ mod tests {
     fn test_block_connected() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let mut responder = create_responder(
+        let responder = create_responder(
             &mut chain,
             &gk,
             MockedServerQuery::Confirmations(constants::IRREVOCABLY_RESOLVED + 1),
@@ -871,11 +840,6 @@ mod tests {
         assert!(!gk.registered_users.borrow()[&user_id]
             .appointments
             .contains_key(&uuid));
-
-        // FIXME: Workaround to reset the http server so the nonces match
-        *responder.carrier.get_mut() = create_carrier(MockedServerQuery::Confirmations(
-            constants::IRREVOCABLY_RESOLVED + 1,
-        ));
 
         // OUTDATED TRACKER
         let outdated_users: HashMap<UserId, Vec<UUID>> =
@@ -940,11 +904,6 @@ mod tests {
                 );
             }
         }
-
-        // FIXME: Workaround to reset the http server so the nonces match
-        *responder.carrier.get_mut() = create_carrier(MockedServerQuery::Confirmations(
-            constants::IRREVOCABLY_RESOLVED + 1,
-        ));
 
         // REBROADCAST
         breach = get_random_breach();

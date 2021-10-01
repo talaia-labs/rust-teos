@@ -23,12 +23,9 @@ lightning-net-tokio = { version = "0.0.100", git = "https://github.com/rust-bitc
 lightning = { version = "0.0.100", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
 bitcoincore-rpc = "0.13.0"
 
-
-
 teos-common = {path = "../teos-common"}
-
 
 [dev-dependencies]
 rand = "0.8.4"
 chunked_transfer = "1.4"
-httpmock = "0.6"
+jsonrpc-http-server = "17.1.0"

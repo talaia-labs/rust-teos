@@ -500,13 +500,11 @@ impl<'a> chain::Listen for Watcher<'a> {
 mod tests {
     use super::*;
 
-    use std::sync::Arc;
-
     use crate::carrier::Carrier;
     use crate::extended_appointment::AppointmentStatus;
     use crate::test_utils::{
-        generate_dummy_appointment, generate_uuid, get_random_tx, Blockchain, DURATION,
-        EXPIRY_DELTA, RPC_NONCE, SLOTS, START_HEIGHT, TXID_HEX,
+        generate_dummy_appointment, generate_uuid, get_random_tx, start_server, BitcoindMock,
+        Blockchain, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
 
     use bitcoin::hash_types::Txid;
@@ -517,8 +515,7 @@ mod tests {
     use bitcoincore_rpc::{Auth, Client as BitcoindClient};
     use lightning::chain::Listen;
     use lightning_block_sync::poll::{ChainPoller, Poll};
-
-    use httpmock::prelude::*;
+    use std::sync::Arc;
 
     const TOWER_SK: SecretKey = ONE_KEY;
 
@@ -544,17 +541,11 @@ mod tests {
         let tip = chain.tip();
         let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.method(POST);
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": RPC_NONCE, "result": TXID_HEX }).to_string());
-        });
+        let bitcoind_mock = BitcoindMock::new(None, None);
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
 
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
         let carrier = Carrier::new(bitcoin_cli);
-
         let responder = Responder::new(carrier, &gatekeeper, tip);
         Watcher::new(&gatekeeper, responder, last_n_blocks, tip, TOWER_SK).await
     }

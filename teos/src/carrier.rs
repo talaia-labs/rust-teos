@@ -86,10 +86,7 @@ impl Carrier {
                         tx.txid()
                     );
 
-                    // TODO: Get confirmation count from bitcoind. Currently `get_transaction` builds a transaction but it has no confirmation
-                    // field. Another method may be needed for this.
-                    // FIXME: Update the confirmation count here
-                    receipt = Receipt::new(true, Some(0), None)
+                    receipt = Receipt::new(true, self.get_confirmations(&tx.txid()).await, None)
                 }
                 rpc_errors::RPC_DESERIALIZATION_ERROR => {
                     // Adding this here just for completeness. We should never end up here. The Carrier only sends txs handed by the Responder,
@@ -183,31 +180,25 @@ impl Carrier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{RPC_NONCE, TXID_HEX, TX_HEX};
+
+    use crate::rpc_errors::RPC_INVALID_ADDRESS_OR_KEY;
+    use crate::test_utils::{start_server, BitcoindMock, TXID_HEX, TX_HEX};
+
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::hashes::hex::FromHex;
-    use bitcoincore_rpc::jsonrpc::error::RpcError;
     use bitcoincore_rpc::Auth;
-    use httpmock::prelude::*;
-    use serde_json;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn test_send_transaction_ok() {
-        let server = MockServer::start();
-        let txid_mock = server.mock(|when, then| {
-            when.method(POST);
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": RPC_NONCE, "result": TXID_HEX }).to_string());
-        });
+        let bitcoind_mock = BitcoindMock::new(None, None);
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
 
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
         let mut carrier = Carrier::new(bitcoin_cli);
         let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
-        txid_mock.assert();
         assert!(r.delivered);
         assert_eq!(r.confirmations, Some(0));
         assert_eq!(r.reason, None);
@@ -215,25 +206,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_verify_rejected() {
-        let server = MockServer::start();
-        let error = RpcError {
-            code: rpc_errors::RPC_VERIFY_REJECTED,
-            message: String::from(""),
-            data: None,
-        };
-        let txid_mock = server.mock(|when, then| {
-            when.method(POST);
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
-        });
+        let bitcoind_mock = BitcoindMock::new(Some(rpc_errors::RPC_VERIFY_REJECTED as i64), None);
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
 
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
         let mut carrier = Carrier::new(bitcoin_cli);
         let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
-        txid_mock.assert();
         assert!(!r.delivered);
         assert_eq!(r.confirmations, None);
         assert_eq!(r.reason, Some(rpc_errors::RPC_VERIFY_REJECTED));
@@ -241,25 +221,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_verify_error() {
-        let server = MockServer::start();
-        let error = RpcError {
-            code: rpc_errors::RPC_VERIFY_ERROR,
-            message: String::from(""),
-            data: None,
-        };
-        let txid_mock = server.mock(|when, then| {
-            when.method(POST);
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
-        });
+        let bitcoind_mock = BitcoindMock::new(Some(rpc_errors::RPC_VERIFY_ERROR as i64), None);
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
 
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
         let mut carrier = Carrier::new(bitcoin_cli);
         let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
-        txid_mock.assert();
         assert!(!r.delivered);
         assert_eq!(r.confirmations, None);
         assert_eq!(r.reason, Some(rpc_errors::RPC_VERIFY_ERROR));
@@ -267,54 +236,33 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_verify_already_in_chain() {
-        let server = MockServer::start();
-        let error = RpcError {
-            code: rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN,
-            message: String::from(""),
-            data: None,
-        };
-        let txid_mock = server.mock(|when, then| {
-            when.method(POST);
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
-        });
+        let expected_confirmations = 10;
+        let bitcoind_mock = BitcoindMock::new(
+            Some(rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN as i64),
+            Some(expected_confirmations),
+        );
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
 
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
         let mut carrier = Carrier::new(bitcoin_cli);
         let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
-        txid_mock.assert();
         assert!(r.delivered);
-        // FIXME: This is temporary. Confirmations need to be properly set.
-        assert_eq!(r.confirmations, Some(0));
+        assert_eq!(r.confirmations, Some(expected_confirmations));
         assert_eq!(r.reason, None);
     }
 
     #[tokio::test]
     async fn test_send_transaction_unexpected_error() {
-        let server = MockServer::start();
-        let error = RpcError {
-            code: rpc_errors::RPC_MISC_ERROR,
-            message: String::from(""),
-            data: None,
-        };
+        let bitcoind_mock = BitcoindMock::new(Some(rpc_errors::RPC_MISC_ERROR as i64), None);
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
 
-        // Reply with an unexpected rpc error (any of the non accounted for should do)
-        let txid_mock = server.mock(|when, then| {
-            when.method(POST);
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
-        });
-
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
         let mut carrier = Carrier::new(bitcoin_cli);
         let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
-        txid_mock.assert();
         assert!(!r.delivered);
         assert_eq!(r.confirmations, None);
         assert_eq!(r.reason, Some(errors::UNKNOWN_JSON_RPC_EXCEPTION));
@@ -322,8 +270,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_connection_error() {
-        MockServer::start();
-
         // Try to connect to an nonexisting server.
         let bitcoin_cli =
             Arc::new(BitcoindClient::new("http://localhost:1234".to_string(), Auth::None).unwrap());
@@ -338,52 +284,32 @@ mod tests {
 
     #[tokio::test]
     async fn get_transaction_ok() {
-        let server = MockServer::start();
-        let txid_mock = server.mock(|when, then| {
-            when.method(POST);
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": RPC_NONCE, "result": TX_HEX }).to_string());
-        });
+        let bitcoind_mock = BitcoindMock::new(None, None);
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
 
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
         let carrier = Carrier::new(bitcoin_cli);
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         let r = carrier.get_transaction(&txid).await;
 
-        txid_mock.assert();
         assert_eq!(serialize(&r.unwrap()), Vec::from_hex(TX_HEX).unwrap());
     }
 
     #[tokio::test]
     async fn get_transaction_not_found() {
-        let server = MockServer::start();
-        let error = RpcError {
-            code: rpc_errors::RPC_INVALID_ADDRESS_OR_KEY,
-            message: String::from(""),
-            data: None,
-        };
+        let bitcoind_mock = BitcoindMock::new(Some(RPC_INVALID_ADDRESS_OR_KEY as i64), None);
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
 
-        let txid_mock = server.mock(|when, then| {
-            when.method(POST);
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(serde_json::json!({ "id": RPC_NONCE, "error": error }).to_string());
-        });
-
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server.base_url(), Auth::None).unwrap());
         let carrier = Carrier::new(bitcoin_cli);
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         let r = carrier.get_transaction(&txid).await;
 
-        txid_mock.assert();
         assert_eq!(r, None);
     }
 
     #[tokio::test]
     async fn get_transaction_connection_error() {
-        MockServer::start();
-
         // Try to connect to an nonexisting server.
         let bitcoin_cli =
             Arc::new(BitcoindClient::new("http://localhost:1234".to_string(), Auth::None).unwrap());
