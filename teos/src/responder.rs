@@ -805,71 +805,77 @@ mod tests {
         // - Rebroadcast all penalty transactions that need so
         // - Delete completed and outdated data (including data in the GK)
 
-        // Let's start by adding data to the Responder and the Gatekeeper
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        // Let's start by doing the data setup for each test (i.e. adding all the necessary data to the Responder and GK)
+        let standalone_user_sk = SecretKey::from_slice(&[1; 32]).unwrap();
+        let standalone_user_id = UserId(PublicKey::from_secret_key(
+            &Secp256k1::new(),
+            &standalone_user_sk,
+        ));
 
-        // FIXME: We can only test this with a single transaction at the time due to
-        // https://github.com/alexliesenfeld/httpmock/issues/49
-        // We'll tests things one at a time for now
-        let mut uuid = generate_uuid();
-        let mut breach = get_random_breach();
-        gk.add_update_user(&user_id).unwrap();
+        let mut users = Vec::new();
+        for i in 2..23 {
+            let user_sk = SecretKey::from_slice(&[i; 32]).unwrap();
+            let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
 
-        // COMPLETED TRACKER
-        responder.add_tracker(
-            uuid,
-            breach.clone(),
-            user_id,
-            constants::IRREVOCABLY_RESOLVED + 1,
-        );
-        gk.registered_users
-            .borrow_mut()
-            .get_mut(&user_id)
-            .unwrap()
-            .appointments
-            .insert(uuid, 1);
+            gk.add_update_user(&user_id).unwrap();
+            users.push(user_id);
+        }
 
-        // Connecting a block should remove the tracker from the Responder and the GK
-        responder.block_connected(&chain.generate(None), chain.blocks.len() as u32);
-        assert!(!responder.trackers.borrow().contains_key(&uuid));
-        assert!(!responder
-            .tx_tracker_map
-            .borrow()
-            .contains_key(&breach.penalty_tx.txid()));
-        assert!(!gk.registered_users.borrow()[&user_id]
-            .appointments
-            .contains_key(&uuid));
+        let mut completed_trackers = HashMap::new();
 
-        // OUTDATED TRACKER
-        let outdated_users: HashMap<UserId, Vec<UUID>> =
-            [(user_id, [uuid].to_vec())].iter().cloned().collect();
+        // COMPLETED TRACKERS SETUP
+        for i in 0..10 {
+            // Adding two trackers to each user
+            let user_id = users[i % 2];
+            let uuid = generate_uuid();
+            let breach = get_random_breach();
+
+            responder.add_tracker(
+                uuid,
+                breach.clone(),
+                user_id,
+                constants::IRREVOCABLY_RESOLVED + 1,
+            );
+            gk.registered_users
+                .borrow_mut()
+                .get_mut(&user_id)
+                .unwrap()
+                .appointments
+                .insert(uuid, 1);
+
+            completed_trackers.insert(uuid, (user_id, breach));
+        }
+
+        // OUTDATED TRACKER SETUP
+        let mut penalties = Vec::new();
+        let mut uuids = Vec::new();
+        let mut outdated_users = HashMap::new();
         let target_block_height = (chain.blocks.len() + 1) as u32;
+        for i in 11..21 {
+            let pair = [generate_uuid(), generate_uuid()].to_vec();
+            let user_id = users[i];
+
+            for uuid in pair.iter() {
+                let breach = get_random_breach();
+                penalties.push(breach.penalty_tx.clone());
+                responder.add_tracker(uuid.clone(), breach, user_id, 0);
+            }
+
+            outdated_users.insert(user_id, pair.clone());
+            uuids.extend(pair);
+        }
 
         gk.outdated_users_cache
             .borrow_mut()
             .insert(target_block_height, outdated_users);
-        responder.add_tracker(uuid, breach.clone(), user_id, 0);
 
-        // Connecting a block should remove the data from the Responder
-        responder.block_connected(&chain.generate(None), chain.blocks.len() as u32);
-        assert!(!responder.trackers.borrow().contains_key(&uuid));
-        assert!(!responder
-            .tx_tracker_map
-            .borrow()
-            .contains_key(&breach.penalty_tx.txid()));
-        assert!(!responder
-            .unconfirmed_txs
-            .borrow()
-            .contains(&breach.penalty_tx));
-
-        // CONFIRMATIONS
+        // CONFIRMATIONS SETUP
         let mut transactions = Vec::new();
         let mut confirmed_txs = Vec::new();
         let mut confirmations: u32;
         for i in 0..10 {
-            breach = get_random_breach();
-            uuid = generate_uuid();
+            let breach = get_random_breach();
+            let uuid = generate_uuid();
             transactions.push(breach.clone().penalty_tx);
 
             if i % 2 == 0 {
@@ -879,11 +885,49 @@ mod tests {
                 confirmations = 1;
             };
 
-            responder.add_tracker(uuid, breach, user_id, confirmations);
+            responder.add_tracker(uuid, breach, standalone_user_id, confirmations);
         }
 
+        // REBROADCAST SETUP
+        let breach_rebroadcast = get_random_breach();
+        let uuid = generate_uuid();
+        responder.add_tracker(uuid, breach_rebroadcast.clone(), standalone_user_id, 0);
+        responder.missed_confirmations.borrow_mut().insert(
+            breach_rebroadcast.penalty_tx.txid(),
+            CONFIRMATIONS_BEFORE_RETRY,
+        );
+
+        // Connecting a block should trigger all the state transitions
         responder.block_connected(&chain.generate(None), chain.blocks.len() as u32);
 
+        // COMPLETED TRACKERS CHECKS
+        // Data should have been removed
+        for (uuid, (user_id, breach)) in completed_trackers {
+            assert!(!responder.trackers.borrow().contains_key(&uuid));
+            assert!(!responder
+                .tx_tracker_map
+                .borrow()
+                .contains_key(&breach.penalty_tx.txid()));
+            assert!(!gk.registered_users.borrow()[&user_id]
+                .appointments
+                .contains_key(&uuid));
+        }
+
+        // OUTDATED TRACKERS CHECKS
+        // Data should have been removed
+        for uuid in uuids {
+            assert!(!responder.trackers.borrow().contains_key(&uuid));
+        }
+        for penalty in penalties {
+            assert!(!responder
+                .tx_tracker_map
+                .borrow()
+                .contains_key(&penalty.txid()));
+            assert!(!responder.unconfirmed_txs.borrow().contains(&penalty));
+        }
+
+        // CONFIRMATIONS CHECKS
+        // The transaction confirmation count / confirmation missed should have been updated
         for tx in transactions {
             if confirmed_txs.contains(&tx) {
                 assert!(!responder.unconfirmed_txs.borrow().contains(&tx));
@@ -905,18 +949,10 @@ mod tests {
             }
         }
 
-        // REBROADCAST
-        breach = get_random_breach();
-        uuid = generate_uuid();
-        responder.add_tracker(uuid, breach.clone(), user_id, 0);
-        responder
-            .missed_confirmations
-            .borrow_mut()
-            .insert(breach.penalty_tx.txid(), CONFIRMATIONS_BEFORE_RETRY);
-
-        responder.block_connected(&chain.generate(None), chain.blocks.len() as u32);
+        // REBROADCAST CHECKS
+        // The penalty transaction in breach_rebroadcast should have been rebroadcast
         assert_eq!(
-            responder.missed_confirmations.borrow()[&breach.penalty_tx.txid()],
+            responder.missed_confirmations.borrow()[&breach_rebroadcast.penalty_tx.txid()],
             0
         );
     }
