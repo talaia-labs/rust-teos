@@ -504,7 +504,7 @@ mod tests {
     use crate::extended_appointment::AppointmentStatus;
     use crate::test_utils::{
         generate_dummy_appointment, generate_uuid, get_random_tx, start_server, BitcoindMock,
-        Blockchain, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        Blockchain, MockOptions, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
 
     use bitcoin::hash_types::Txid;
@@ -541,7 +541,7 @@ mod tests {
         let tip = chain.tip();
         let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
-        let bitcoind_mock = BitcoindMock::new(None, None);
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 

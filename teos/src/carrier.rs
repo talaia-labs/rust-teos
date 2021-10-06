@@ -182,7 +182,7 @@ mod tests {
     use super::*;
 
     use crate::rpc_errors::RPC_INVALID_ADDRESS_OR_KEY;
-    use crate::test_utils::{start_server, BitcoindMock, TXID_HEX, TX_HEX};
+    use crate::test_utils::{start_server, BitcoindMock, MockOptions, TXID_HEX, TX_HEX};
 
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::hashes::hex::FromHex;
@@ -191,7 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_ok() {
-        let bitcoind_mock = BitcoindMock::new(None, None);
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
@@ -206,7 +206,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_verify_rejected() {
-        let bitcoind_mock = BitcoindMock::new(Some(rpc_errors::RPC_VERIFY_REJECTED as i64), None);
+        let bitcoind_mock = BitcoindMock::new(MockOptions::with_error(
+            rpc_errors::RPC_VERIFY_REJECTED as i64,
+        ));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
@@ -221,7 +223,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_verify_error() {
-        let bitcoind_mock = BitcoindMock::new(Some(rpc_errors::RPC_VERIFY_ERROR as i64), None);
+        let bitcoind_mock =
+            BitcoindMock::new(MockOptions::with_error(rpc_errors::RPC_VERIFY_ERROR as i64));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
@@ -237,10 +240,10 @@ mod tests {
     #[tokio::test]
     async fn test_send_transaction_verify_already_in_chain() {
         let expected_confirmations = 10;
-        let bitcoind_mock = BitcoindMock::new(
+        let bitcoind_mock = BitcoindMock::new(MockOptions::new(
             Some(rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN as i64),
             Some(expected_confirmations),
-        );
+        ));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
@@ -255,7 +258,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_unexpected_error() {
-        let bitcoind_mock = BitcoindMock::new(Some(rpc_errors::RPC_MISC_ERROR as i64), None);
+        let bitcoind_mock =
+            BitcoindMock::new(MockOptions::with_error(rpc_errors::RPC_MISC_ERROR as i64));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
@@ -284,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_transaction_ok() {
-        let bitcoind_mock = BitcoindMock::new(None, None);
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
@@ -297,7 +301,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_transaction_not_found() {
-        let bitcoind_mock = BitcoindMock::new(Some(RPC_INVALID_ADDRESS_OR_KEY as i64), None);
+        let bitcoind_mock =
+            BitcoindMock::new(MockOptions::with_error(RPC_INVALID_ADDRESS_OR_KEY as i64));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 

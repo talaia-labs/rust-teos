@@ -468,11 +468,47 @@ pub struct BitcoindMock {
     pub url: String,
     pub server: Server,
 }
-impl BitcoindMock {
+
+pub struct MockOptions {
+    error_code: Option<i64>,
+    confirmations: Option<u32>,
+}
+
+impl MockOptions {
     pub fn new(error_code: Option<i64>, confirmations: Option<u32>) -> Self {
+        Self {
+            error_code,
+            confirmations,
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            error_code: None,
+            confirmations: None,
+        }
+    }
+
+    pub fn with_error(error_code: i64) -> Self {
+        Self {
+            error_code: Some(error_code),
+            confirmations: None,
+        }
+    }
+
+    pub fn with_confirmations(confirmations: u32) -> Self {
+        Self {
+            error_code: None,
+            confirmations: Some(confirmations),
+        }
+    }
+}
+
+impl BitcoindMock {
+    pub fn new(options: MockOptions) -> Self {
         let mut io = IoHandler::default();
 
-        match error_code {
+        match options.error_code {
             Some(x) => {
                 io.add_sync_method("error", move |_params: Params| {
                     Err(JsonRpcError::new(JsonRpcErrorCode::ServerError(x)))
@@ -481,7 +517,7 @@ impl BitcoindMock {
 
                 // So we can test a sendrawtransaction error b/c the tx is already on the mempool
                 // and query the confirmation count
-                match confirmations {
+                match options.confirmations {
                     Some(c) => {
                         BitcoindMock::add_getrawtransaction(&mut io, c);
                     }
@@ -490,7 +526,7 @@ impl BitcoindMock {
             }
             None => {
                 BitcoindMock::add_sendrawtransaction(&mut io);
-                BitcoindMock::add_getrawtransaction(&mut io, confirmations.unwrap_or(0));
+                BitcoindMock::add_getrawtransaction(&mut io, options.confirmations.unwrap_or(0));
             }
         }
 

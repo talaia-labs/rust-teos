@@ -308,8 +308,8 @@ mod tests {
     use crate::{
         rpc_errors,
         test_utils::{
-            generate_uuid, get_random_tx, start_server, BitcoindMock, Blockchain, DURATION,
-            EXPIRY_DELTA, SLOTS, START_HEIGHT,
+            generate_uuid, get_random_tx, start_server, BitcoindMock, Blockchain, MockOptions,
+            DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
         },
     };
 
@@ -325,9 +325,11 @@ mod tests {
 
     fn create_carrier(query: MockedServerQuery) -> Carrier {
         let bitcoind_mock = match query {
-            MockedServerQuery::Regular => BitcoindMock::new(None, None),
-            MockedServerQuery::Confirmations(x) => BitcoindMock::new(None, Some(x)),
-            MockedServerQuery::Error(x) => BitcoindMock::new(Some(x), None),
+            MockedServerQuery::Regular => BitcoindMock::new(MockOptions::empty()),
+            MockedServerQuery::Confirmations(x) => {
+                BitcoindMock::new(MockOptions::with_confirmations(x))
+            }
+            MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
         };
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
