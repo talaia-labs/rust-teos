@@ -20,12 +20,23 @@ use crate::watcher::Breach;
 
 const CONFIRMATIONS_BEFORE_RETRY: u8 = 6;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionTracker {
-    locator: Locator,
+    pub locator: Locator,
     dispute_tx: Transaction,
     penalty_tx: Transaction,
     user_id: UserId,
+}
+
+impl TransactionTracker {
+    pub fn new(breach: Breach, user_id: UserId) -> Self {
+        Self {
+            locator: breach.locator,
+            dispute_tx: breach.dispute_tx,
+            penalty_tx: breach.penalty_tx.clone(),
+            user_id,
+        }
+    }
 }
 
 pub struct Responder<'a> {
@@ -33,7 +44,7 @@ pub struct Responder<'a> {
     tx_tracker_map: RefCell<HashMap<Txid, HashSet<UUID>>>,
     unconfirmed_txs: RefCell<HashSet<Transaction>>,
     missed_confirmations: RefCell<HashMap<Txid, u8>>,
-    carrier: RefCell<Carrier>,
+    pub(crate) carrier: RefCell<Carrier>,
     gatekeeper: &'a Gatekeeper,
     last_known_block_header: RefCell<BlockHeaderData>,
 }
@@ -74,14 +85,15 @@ impl<'a> Responder<'a> {
         receipt
     }
 
-    fn add_tracker(&self, uuid: UUID, breach: Breach, user_id: UserId, confirmations: u32) {
+    pub(crate) fn add_tracker(
+        &self,
+        uuid: UUID,
+        breach: Breach,
+        user_id: UserId,
+        confirmations: u32,
+    ) {
         let penalty_txid = breach.penalty_tx.txid();
-        let tracker = TransactionTracker {
-            locator: breach.locator,
-            dispute_tx: breach.dispute_tx,
-            penalty_tx: breach.penalty_tx.clone(),
-            user_id,
-        };
+        let tracker = TransactionTracker::new(breach.clone(), user_id);
 
         self.trackers.borrow_mut().insert(uuid, tracker);
 
@@ -102,6 +114,28 @@ impl<'a> Responder<'a> {
         }
 
         log::info!("New tracker added (uuid={}).", uuid);
+    }
+
+    pub fn has_tracker(&self, uuid: &UUID) -> bool {
+        // Has tracker should return true as long as the given tracker is hold by the Responder.
+        // If the tracker is partially kept, the function will log and the return will be false.
+        // This may point out that some partial data deletion is happening, which must be fixed.
+        match self.trackers.borrow().get(uuid) {
+            Some(tracker) => match self.tx_tracker_map.borrow().get(&tracker.penalty_tx.txid()) {
+                Some(_) => true,
+                None => {
+                    log::debug!(
+                        "Partially found Tracker. Some data may have not been properly deleted"
+                    );
+                    false
+                }
+            },
+            None => false,
+        }
+    }
+
+    pub fn get_tracker(&self, uuid: &UUID) -> Option<TransactionTracker> {
+        self.trackers.borrow().get(uuid).map(|t| t.clone())
     }
 
     fn check_confirmations(&self, txs: &Vec<Transaction>) {
@@ -308,34 +342,12 @@ mod tests {
     use crate::{
         rpc_errors,
         test_utils::{
-            generate_uuid, get_random_tx, start_server, BitcoindMock, Blockchain, MockOptions,
-            DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+            create_carrier, generate_uuid, get_random_breach, get_random_tx, Blockchain,
+            MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
         },
     };
 
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-    use bitcoincore_rpc::{Auth, Client as BitcoindClient};
-    use std::sync::Arc;
-
-    enum MockedServerQuery {
-        Regular,
-        Confirmations(u32),
-        Error(i64),
-    }
-
-    fn create_carrier(query: MockedServerQuery) -> Carrier {
-        let bitcoind_mock = match query {
-            MockedServerQuery::Regular => BitcoindMock::new(MockOptions::empty()),
-            MockedServerQuery::Confirmations(x) => {
-                BitcoindMock::new(MockOptions::with_confirmations(x))
-            }
-            MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
-        };
-        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
-        start_server(bitcoind_mock);
-
-        Carrier::new(bitcoin_cli)
-    }
 
     fn create_responder<'a>(
         chain: &mut Blockchain,
@@ -347,22 +359,9 @@ mod tests {
         Responder::new(carrier, &gatekeeper, tip)
     }
 
-    fn get_random_breach() -> Breach {
-        let dispute_tx = get_random_tx();
-        let penalty_tx = get_random_tx();
-        let locator = Locator::new(dispute_tx.txid());
-
-        Breach::new(locator, dispute_tx, penalty_tx)
-    }
-
     fn get_random_tracker(user_id: UserId) -> TransactionTracker {
         let breach = get_random_breach();
-        TransactionTracker {
-            locator: breach.locator,
-            penalty_tx: breach.penalty_tx,
-            dispute_tx: breach.dispute_tx,
-            user_id,
-        }
+        TransactionTracker::new(breach, user_id)
     }
 
     #[tokio::test]
@@ -480,6 +479,69 @@ mod tests {
             responder.tx_tracker_map.borrow()[&breach.penalty_tx.txid()].len(),
             2
         );
+    }
+
+    #[test]
+    fn test_has_tracker() {
+        // Has tracker should return true as long as the given tracker is hold by the Responder.
+        // As long as the tracker is in Responder.trackers and Responder.tx_tracker_map, the return
+        // must be true.
+
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
+        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
+
+        // Add a new tracker
+        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let uuid = generate_uuid();
+        let breach = get_random_breach();
+        responder.add_tracker(uuid, breach.clone(), user_id, 0);
+
+        assert!(responder.has_tracker(&uuid));
+
+        // Delete the tracker and check again
+        responder.delete_trackers(HashSet::from_iter([uuid]), false);
+        assert!(!responder.has_tracker(&uuid));
+
+        // Check partial info must return false (data is only in trackers)
+        let tracker = TransactionTracker::new(breach.clone(), user_id);
+        responder.trackers.borrow_mut().insert(uuid, tracker);
+        assert!(!responder.has_tracker(&uuid));
+
+        // Adding the data to tx_tracker_map and checking back should return true
+        responder
+            .tx_tracker_map
+            .borrow_mut()
+            .insert(breach.penalty_tx.txid(), HashSet::from_iter([uuid]));
+        assert!(responder.has_tracker(&uuid));
+    }
+
+    #[test]
+    fn test_get_tracker() {
+        // Should return a tracker as long as it exists
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
+        let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
+
+        // Add a new tracker
+        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let uuid = generate_uuid();
+        let breach = get_random_breach();
+
+        // Data should not be there before adding it
+        responder.delete_trackers(HashSet::from_iter([uuid]), false);
+        assert_eq!(responder.get_tracker(&uuid), None);
+
+        // Data should be there now
+        responder.add_tracker(uuid, breach.clone(), user_id, 0);
+        let tracker = TransactionTracker::new(breach, user_id);
+        assert_eq!(responder.get_tracker(&uuid).unwrap(), tracker);
+
+        // After deleting the data it should be gone
+        responder.delete_trackers(HashSet::from_iter([uuid]), false);
+        assert_eq!(responder.get_tracker(&uuid), None);
     }
 
     #[test]

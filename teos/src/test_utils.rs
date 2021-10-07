@@ -12,12 +12,15 @@ use rand::Rng;
 
 use std::io::BufRead;
 use std::io::Write;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use jsonrpc_http_server::jsonrpc_core::error::ErrorCode as JsonRpcErrorCode;
 use jsonrpc_http_server::jsonrpc_core::{Error as JsonRpcError, IoHandler, Params, Value};
 use jsonrpc_http_server::{Server, ServerBuilder};
+
+use bitcoincore_rpc::{Auth, Client as BitcoindClient};
 
 use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::constants::genesis_block;
@@ -39,11 +42,13 @@ use lightning_block_sync::{
     AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError, UnboundedCache,
 };
 
-use teos_common::appointment::Appointment;
+use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography::encrypt;
 use teos_common::UserId;
 
+use crate::carrier::Carrier;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::watcher::Breach;
 
 pub static TX_HEX: &str =  "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff54038e830a1b4d696e656420627920416e74506f6f6c373432c2005b005e7a0ae3fabe6d6d7841cd582ead8ea5dd8e3de1173cae6fcd2a53c7362ebb7fb6f815604fe07cbe0200000000000000ac0e060005f90000ffffffff04d9476026000000001976a91411dbe48cc6b617f9c6adaf4d9ed5f625b1c7cb5988ac0000000000000000266a24aa21a9ed7248c6efddd8d99bfddd7f499f0b915bffa8253003cc934df1ff14a81301e2340000000000000000266a24b9e11b6d7054937e13f39529d6ad7e685e9dd4efa426f247d5f5a5bed58cdddb2d0fa60100000000000000002b6a2952534b424c4f434b3a054a68aa5368740e8b3e3c67bce45619c2cfd07d4d4f0936a5612d2d0034fa0a0120000000000000000000000000000000000000000000000000000000000000000000000000";
 pub static TXID_HEX: &str = "338bda693c4a26e0d41a01f7f2887aaf48bf0bdf93e6415c9110b29349349d3e";
@@ -344,6 +349,34 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
     let start_block = 42;
 
     ExtendedAppointment::new(appointment, user_id, user_signature, start_block)
+}
+
+pub fn get_random_breach() -> Breach {
+    let dispute_tx = get_random_tx();
+    let penalty_tx = get_random_tx();
+    let locator = Locator::new(dispute_tx.txid());
+
+    Breach::new(locator, dispute_tx, penalty_tx)
+}
+
+pub enum MockedServerQuery {
+    Regular,
+    Confirmations(u32),
+    Error(i64),
+}
+
+pub fn create_carrier(query: MockedServerQuery) -> Carrier {
+    let bitcoind_mock = match query {
+        MockedServerQuery::Regular => BitcoindMock::new(MockOptions::empty()),
+        MockedServerQuery::Confirmations(x) => {
+            BitcoindMock::new(MockOptions::with_confirmations(x))
+        }
+        MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
+    };
+    let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+    start_server(bitcoind_mock);
+
+    Carrier::new(bitcoin_cli)
 }
 
 /// Timeout for operations on TCP streams.
