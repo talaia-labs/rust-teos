@@ -52,10 +52,10 @@ pub async fn main() {
     const DURATION: u32 = 500;
     const EXPIRY_DELTA: u32 = 42;
 
-    // Init with loglevel=Error for now, make it configurable later on.
-    init_with_level(log::Level::Error).unwrap();
+    // Init with loglevel=Debug for now, make it configurable later on.
+    init_with_level(log::Level::Debug).unwrap();
 
-    // // Initialize our bitcoind client.
+    // Initialize our bitcoind client.
     let bitcoin_cli =
         match BitcoindClient::new(host.clone(), port.clone(), user.clone(), password.clone()).await
         {
