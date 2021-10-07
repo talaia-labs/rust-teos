@@ -24,19 +24,12 @@ impl std::fmt::Display for UUID {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-pub enum AppointmentStatus {
-    BeingWatched,
-    DisputeResponded,
-}
-
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct ExtendedAppointment {
     pub inner: Appointment,
     pub user_id: UserId,
     pub user_signature: String,
     pub start_block: u32,
-    pub status: AppointmentStatus,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -57,12 +50,7 @@ impl ExtendedAppointment {
             user_id,
             user_signature,
             start_block,
-            status: AppointmentStatus::BeingWatched,
         }
-    }
-
-    pub fn triggered(&mut self) {
-        self.status = AppointmentStatus::DisputeResponded;
     }
 
     pub fn get_summary(&self) -> AppointmentSummary {
@@ -115,14 +103,12 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
         let user_signature = String::new();
         let start_block = 42;
-        let status = AppointmentStatus::BeingWatched;
 
         let data = json!({
             "inner": appointment,
             "user_id": user_id,
             "user_signature": user_signature,
             "start_block": start_block,
-            "status":status
         })
         .to_string();
 
@@ -157,6 +143,5 @@ mod tests {
         assert_eq!(e_json["user_id"], json!(user_id));
         assert_eq!(e_json["user_signature"], json!(user_signature));
         assert_eq!(e_json["start_block"], json!(start_block));
-        assert_eq!(e_json["status"], json!(AppointmentStatus::BeingWatched));
     }
 }
