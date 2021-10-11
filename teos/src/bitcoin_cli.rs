@@ -119,28 +119,3 @@ impl BitcoindClient {
             .await
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::HttpServer;
-
-    /// Credentials encoded in base64.
-    const CREDENTIALS: &'static str = "dXNlcjpwYXNzd29yZA==";
-
-    impl BitcoindClient {
-        pub(crate) fn new_dummy(server: HttpServer) -> Self {
-            let client = Arc::new(Mutex::new(
-                RpcClient::new(CREDENTIALS, server.endpoint()).unwrap(),
-            ));
-
-            BitcoindClient {
-                bitcoind_rpc_client: client,
-                host: "host".to_string(),
-                port: 18443,
-                rpc_user: "user".to_string(),
-                rpc_password: "password".to_string(),
-            }
-        }
-    }
-}

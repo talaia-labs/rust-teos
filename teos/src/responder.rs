@@ -120,8 +120,8 @@ impl<'a> Responder<'a> {
         // Has tracker should return true as long as the given tracker is hold by the Responder.
         // If the tracker is partially kept, the function will log and the return will be false.
         // This may point out that some partial data deletion is happening, which must be fixed.
-        match self.trackers.borrow().get(uuid) {
-            Some(tracker) => match self.tx_tracker_map.borrow().get(&tracker.penalty_tx.txid()) {
+        self.trackers.borrow().get(uuid).map_or(false, |tracker| {
+            match self.tx_tracker_map.borrow().get(&tracker.penalty_tx.txid()) {
                 Some(_) => true,
                 None => {
                     log::debug!(
@@ -129,9 +129,8 @@ impl<'a> Responder<'a> {
                     );
                     false
                 }
-            },
-            None => false,
-        }
+            }
+        })
     }
 
     pub fn get_tracker(&self, uuid: &UUID) -> Option<TransactionTracker> {
@@ -330,6 +329,8 @@ impl<'a> Listen for Responder<'a> {
         };
     }
 
+    // FIXME: To be implemented
+    #[allow(unused_variables)]
     fn block_disconnected(&self, header: &BlockHeader, height: u32) {
         todo!()
     }

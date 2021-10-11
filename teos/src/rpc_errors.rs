@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Ported from https://github.com/bitcoin/bitcoin/blob/0.18/src/rpc/protocol.h
 
 // General application defined errors
