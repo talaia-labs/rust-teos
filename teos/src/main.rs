@@ -85,11 +85,13 @@ pub async fn main() {
     let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
     let carrier = Carrier::new(rpc.clone());
     let responder = Responder::new(carrier, &gatekeeper, tip);
-    let watcher = Watcher::new(&gatekeeper, responder, last_n_blocks, tip, TOWER_SK).await;
+    let watcher = Watcher::new(&gatekeeper, &responder, last_n_blocks, tip, TOWER_SK).await;
 
-    let listener = &(&watcher, &gatekeeper);
+    let listener = &(&watcher, &(&responder, &gatekeeper));
     let spv_client = SpvClient::new(tip, poller, cache, listener);
 
+    // DISCUSS: the CM may not be necessary since it's only being used to log stuff. Doing spv_client.poll_best_tip().await will
+    // have the same functionality. Consider whether to get rid of it of to massively simplify it.
     let mut chain_monitor = ChainMonitor::new(spv_client, tip, 1).await;
     chain_monitor.monitor_chain().await.unwrap();
 }

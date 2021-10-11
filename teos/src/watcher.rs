@@ -177,7 +177,7 @@ pub struct Watcher<'a> {
     appointments: RefCell<HashMap<UUID, ExtendedAppointment>>,
     locator_uuid_map: RefCell<HashMap<Locator, HashSet<UUID>>>,
     locator_cache: RefCell<LocatorCache>,
-    responder: Responder<'a>,
+    responder: &'a Responder<'a>,
     gatekeeper: &'a Gatekeeper,
     last_known_block_header: RefCell<BlockHeaderData>,
     signing_key: SecretKey,
@@ -186,7 +186,7 @@ pub struct Watcher<'a> {
 impl<'a> Watcher<'a> {
     pub async fn new(
         gatekeeper: &'a Gatekeeper,
-        responder: Responder<'a>,
+        responder: &'a Responder<'a>,
         last_n_blocks: Vec<ValidatedBlock>,
         last_known_block_header: ValidatedBlockHeader,
         signing_key: SecretKey,
@@ -598,17 +598,28 @@ mod tests {
         last_n_blocks
     }
 
-    async fn create_watcher<'a>(chain: &mut Blockchain, gatekeeper: &'a Gatekeeper) -> Watcher<'a> {
+    fn create_responder<'a>(
+        tip: ValidatedBlockHeader,
+        gatekeeper: &'a Gatekeeper,
+        server_url: String,
+    ) -> Responder<'a> {
+        let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
+        let carrier = Carrier::new(bitcoin_cli);
+
+        Responder::new(carrier, &gatekeeper, tip)
+    }
+
+    async fn create_watcher<'a>(
+        chain: &mut Blockchain,
+        responder: &'a Responder<'a>,
+        gatekeeper: &'a Gatekeeper,
+        bitcoind_mock: BitcoindMock,
+    ) -> Watcher<'a> {
         let tip = chain.tip();
         let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
-        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
-
-        let carrier = Carrier::new(bitcoin_cli);
-        let responder = Responder::new(carrier, &gatekeeper, tip);
-        Watcher::new(&gatekeeper, responder, last_n_blocks, tip, TOWER_SK).await
+        Watcher::new(&gatekeeper, &responder, last_n_blocks, tip, TOWER_SK).await
     }
 
     fn assert_appointment_added(
@@ -642,10 +653,12 @@ mod tests {
         // register calls Gatekeeper::add_update_user and signs the UserInfo returned by it.
         // Not testing the update / rejection logic, since that's already covered in the Gatekeeper, just that the data makes
         // sense and the signature verifies.
-
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = create_watcher(&mut chain, &gk).await;
+        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
+        let mut watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
 
         let user_pk = PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY);
         let user_id = UserId(user_pk);
@@ -667,11 +680,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_appointment() {
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let tip_txs = chain.blocks.last().unwrap().txdata.clone();
 
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = create_watcher(&mut chain, &gk).await;
+        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
+        let mut watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
 
         // add_appointment should add a given appointment to the Watcher given the following logic:
         //      - if the appointment does not exist for a given user, add the appointment
@@ -771,9 +786,11 @@ mod tests {
         assert_eq!(watcher.appointments.borrow().len(), 2);
 
         // Transaction rejected
-        *watcher.responder.carrier.get_mut() = create_carrier(MockedServerQuery::Error(
+        // Update the Responder with a new Carrier
+        *watcher.responder.carrier.borrow_mut() = create_carrier(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
         ));
+
         let dispute_tx = &tip_txs[tip_txs.len() - 2];
         let invalid_appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
         let user_sig = cryptography::sign(&invalid_appointment.serialize(), &user_sk).unwrap();
@@ -836,9 +853,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_appointment() {
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = create_watcher(&mut chain, &gk).await;
+        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
+        let mut watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
 
         let appointment = generate_dummy_appointment(None).inner;
 
@@ -919,10 +939,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_breaches() {
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(12, None);
         let txs = chain.blocks.last().unwrap().txdata.clone();
+
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let watcher = create_watcher(&mut chain, &gk).await;
+        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
+        let watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -952,10 +975,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_breaches() {
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
         let txs = chain.blocks.last().unwrap().txdata.clone();
+
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let watcher = create_watcher(&mut chain, &gk).await;
+        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
+        let watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -1018,9 +1044,12 @@ mod tests {
     async fn test_delete_appointments() {
         // TODO: This is an adaptation of Responder::test_delete_trackers, merge together once the method
         // is implemented using generics.
-        let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let watcher = create_watcher(&mut chain, &gk).await;
+        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
+        let watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
 
         // Delete appointments removes data from the appointments and locator_uuid_map
         // Add data to the map first
@@ -1098,9 +1127,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_connected() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, Some(12));
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let mut watcher = create_watcher(&mut chain, &gk).await;
+        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
+        let mut watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
 
         // block_connected for the Watcher is used to keep track of what new transactions has been mined whose may be potential
         // channel breaches.
