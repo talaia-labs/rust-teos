@@ -26,8 +26,8 @@ use bitcoin::hash_types::Txid;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::Hash;
 use bitcoin::network::constants::Network;
-use bitcoin::secp256k1::key::ONE_KEY;
-use bitcoin::secp256k1::{PublicKey, Secp256k1};
+use bitcoin::secp256k1::key::{PublicKey, SecretKey, ONE_KEY};
+use bitcoin::secp256k1::Secp256k1;
 use bitcoin::util::hash::bitcoin_merkle_root;
 use bitcoin::util::psbt::serialize::Deserialize;
 use bitcoin::util::uint::Uint256;
@@ -295,15 +295,37 @@ impl BlockSource for Blockchain {
     }
 }
 
+pub(crate) fn get_random_32_bytes() -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    rng.gen::<[u8; 32]>().to_vec()
+}
+
 pub(crate) fn generate_uuid() -> UUID {
     let mut rng = rand::thread_rng();
 
     UUID(rng.gen())
 }
 
+pub(crate) fn get_random_keypair() -> (SecretKey, PublicKey) {
+    let raw_sk = get_random_32_bytes();
+
+    loop {
+        match SecretKey::from_slice(&raw_sk) {
+            Ok(sk) => return (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
+            Err(_) => (),
+        }
+    }
+}
+
+pub(crate) fn get_random_user_id() -> UserId {
+    let (_, pk) = get_random_keypair();
+
+    UserId(pk)
+}
+
 pub(crate) fn get_random_tx() -> Transaction {
     let mut rng = rand::thread_rng();
-    let prev_txid_bytes = rng.gen::<[u8; 32]>();
+    let prev_txid_bytes = get_random_32_bytes();
 
     Transaction {
         version: 2,
@@ -328,8 +350,7 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
     let dispute_txid = match dispute_txid {
         Some(l) => l.clone(),
         None => {
-            let mut rng = rand::thread_rng();
-            let prev_txid_bytes = rng.gen::<[u8; 32]>();
+            let prev_txid_bytes = get_random_32_bytes();
             Txid::from_slice(&prev_txid_bytes).unwrap()
         }
     };
