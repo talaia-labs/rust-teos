@@ -7,6 +7,7 @@
  * at your option.
 */
 
+use rand::distributions::Uniform;
 use rand::Rng;
 use std::sync::Arc;
 use std::thread;
@@ -296,9 +297,12 @@ impl BlockSource for Blockchain {
     }
 }
 
-pub(crate) fn get_random_32_bytes() -> Vec<u8> {
+pub(crate) fn get_random_bytes(size: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
-    rng.gen::<[u8; 32]>().to_vec()
+    let uniform_u8 = Uniform::new(u8::MIN, u8::MAX);
+    let v: Vec<u8> = (&mut rng).sample_iter(uniform_u8).take(size).collect();
+
+    v
 }
 
 pub(crate) fn generate_uuid() -> UUID {
@@ -308,7 +312,7 @@ pub(crate) fn generate_uuid() -> UUID {
 }
 
 pub(crate) fn get_random_keypair() -> (SecretKey, PublicKey) {
-    let raw_sk = get_random_32_bytes();
+    let raw_sk = get_random_bytes(32);
 
     loop {
         match SecretKey::from_slice(&raw_sk) {
@@ -326,7 +330,7 @@ pub(crate) fn get_random_user_id() -> UserId {
 
 pub(crate) fn get_random_tx() -> Transaction {
     let mut rng = rand::thread_rng();
-    let prev_txid_bytes = get_random_32_bytes();
+    let prev_txid_bytes = get_random_bytes(32);
 
     Transaction {
         version: 2,
@@ -351,7 +355,7 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
     let dispute_txid = match dispute_txid {
         Some(l) => l.clone(),
         None => {
-            let prev_txid_bytes = get_random_32_bytes();
+            let prev_txid_bytes = get_random_bytes(32);
             Txid::from_slice(&prev_txid_bytes).unwrap()
         }
     };
