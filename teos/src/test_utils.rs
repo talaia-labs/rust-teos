@@ -42,6 +42,7 @@ use teos_common::UserId;
 
 use crate::carrier::Carrier;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::responder::TransactionTracker;
 use crate::watcher::Breach;
 
 pub static TX_HEX: &str =  "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff54038e830a1b4d696e656420627920416e74506f6f6c373432c2005b005e7a0ae3fabe6d6d7841cd582ead8ea5dd8e3de1173cae6fcd2a53c7362ebb7fb6f815604fe07cbe0200000000000000ac0e060005f90000ffffffff04d9476026000000001976a91411dbe48cc6b617f9c6adaf4d9ed5f625b1c7cb5988ac0000000000000000266a24aa21a9ed7248c6efddd8d99bfddd7f499f0b915bffa8253003cc934df1ff14a81301e2340000000000000000266a24b9e11b6d7054937e13f39529d6ad7e685e9dd4efa426f247d5f5a5bed58cdddb2d0fa60100000000000000002b6a2952534b424c4f434b3a054a68aa5368740e8b3e3c67bce45619c2cfd07d4d4f0936a5612d2d0034fa0a0120000000000000000000000000000000000000000000000000000000000000000000000000";
@@ -376,6 +377,11 @@ pub fn get_random_breach() -> Breach {
     let locator = Locator::new(dispute_tx.txid());
 
     Breach::new(locator, dispute_tx, penalty_tx)
+}
+
+pub fn get_random_tracker(user_id: UserId) -> TransactionTracker {
+    let breach = get_random_breach();
+    TransactionTracker::new(breach, user_id)
 }
 
 pub enum MockedServerQuery {

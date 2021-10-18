@@ -23,9 +23,9 @@ const CONFIRMATIONS_BEFORE_RETRY: u8 = 6;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionTracker {
     pub locator: Locator,
-    dispute_tx: Transaction,
-    penalty_tx: Transaction,
-    user_id: UserId,
+    pub dispute_tx: Transaction,
+    pub penalty_tx: Transaction,
+    pub user_id: UserId,
 }
 
 impl TransactionTracker {
@@ -343,8 +343,8 @@ mod tests {
     use crate::{
         rpc_errors,
         test_utils::{
-            create_carrier, generate_uuid, get_random_breach, get_random_tx, Blockchain,
-            MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+            create_carrier, generate_uuid, get_random_breach, get_random_tracker, get_random_tx,
+            Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
         },
     };
 
@@ -358,11 +358,6 @@ mod tests {
         let tip = chain.tip();
         let carrier = create_carrier(query);
         Responder::new(carrier, &gatekeeper, tip)
-    }
-
-    fn get_random_tracker(user_id: UserId) -> TransactionTracker {
-        let breach = get_random_breach();
-        TransactionTracker::new(breach, user_id)
     }
 
     #[tokio::test]
