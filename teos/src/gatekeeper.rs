@@ -1,5 +1,3 @@
-use serde::{Deserialize, Serialize};
-use serde_json::{Error as JSONError, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
@@ -11,9 +9,9 @@ use teos_common::cryptography;
 use teos_common::receipts::RegistrationReceipt;
 use teos_common::UserId;
 
-use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::extended_appointment::{compute_appointment_slots, ExtendedAppointment, UUID};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserInfo {
     pub(crate) available_slots: u32,
     pub(crate) subscription_expiry: u32,
@@ -27,13 +25,6 @@ impl UserInfo {
             subscription_expiry,
             appointments: HashMap::new(),
         }
-    }
-    pub fn from_json(data: &str) -> Result<Self, JSONError> {
-        serde_json::from_str::<UserInfo>(data)
-    }
-
-    pub fn to_json(self) -> Value {
-        serde_json::to_value(&self).unwrap()
     }
 }
 
@@ -143,9 +134,10 @@ impl Gatekeeper {
         let user_info = borrowed.get_mut(user_id).unwrap();
         let used_slots = user_info.appointments.get(&uuid).map_or(0, |x| x.clone());
 
-        let required_slots = (appointment.inner.encrypted_blob.len() as f32
-            / ENCRYPTED_BLOB_MAX_SIZE as f32)
-            .ceil() as u32;
+        let required_slots = compute_appointment_slots(
+            appointment.inner.encrypted_blob.len(),
+            ENCRYPTED_BLOB_MAX_SIZE,
+        );
 
         let diff = required_slots as i64 - used_slots as i64;
         if diff <= user_info.available_slots as i64 {
