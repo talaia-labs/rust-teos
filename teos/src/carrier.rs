@@ -187,7 +187,6 @@ mod tests {
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::hashes::hex::FromHex;
     use bitcoincore_rpc::Auth;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_send_transaction_ok() {

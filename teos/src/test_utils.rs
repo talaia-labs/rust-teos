@@ -9,6 +9,7 @@
 
 use rand::distributions::Uniform;
 use rand::Rng;
+use std::convert::TryInto;
 use std::sync::Arc;
 use std::thread;
 
@@ -27,7 +28,7 @@ use bitcoin::hash_types::Txid;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::Hash;
 use bitcoin::network::constants::Network;
-use bitcoin::secp256k1::key::{PublicKey, SecretKey, ONE_KEY};
+use bitcoin::secp256k1::key::{PublicKey, SecretKey};
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::util::hash::bitcoin_merkle_root;
 use bitcoin::util::psbt::serialize::Deserialize;
@@ -363,12 +364,12 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
     let tx_bytes = Vec::from_hex(TX_HEX).unwrap();
     let penalty_tx = Transaction::deserialize(&tx_bytes).unwrap();
 
-    let mut locator = [0; 16];
+    let mut locator: [u8; 16] = get_random_bytes(16).try_into().unwrap();
     locator.copy_from_slice(&dispute_txid[..16]);
 
     let encrypted_blob = encrypt(&penalty_tx, &dispute_txid).unwrap();
     let appointment = Appointment::new(locator, encrypted_blob, 21);
-    let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
+    let user_id = get_random_user_id();
     let user_signature = String::new();
     let start_block = 42;
 

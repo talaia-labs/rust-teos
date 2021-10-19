@@ -69,18 +69,20 @@ pub fn compute_appointment_slots(blob_size: usize, blob_max_size: usize) -> u32 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::secp256k1::key::ONE_KEY;
-    use bitcoin::secp256k1::{PublicKey, Secp256k1};
+
+    use std::convert::TryInto;
+
+    use crate::test_utils::{get_random_bytes, get_random_user_id};
+
     use teos_common::appointment::Appointment;
-    use teos_common::UserId;
 
     #[test]
     fn test_get_summary() {
-        let locator = [1; 16];
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
+        let locator = get_random_bytes(16).try_into().unwrap();
+        let user_id = get_random_user_id();
         let signature = String::new();
 
-        let a = Appointment::new(locator, [2; 32].to_vec(), 42);
+        let a = Appointment::new(locator, get_random_bytes(32), 42);
         let e = ExtendedAppointment::new(a, user_id, signature, 21);
 
         let s = e.get_summary();

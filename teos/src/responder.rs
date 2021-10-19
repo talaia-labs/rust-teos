@@ -344,11 +344,10 @@ mod tests {
         rpc_errors,
         test_utils::{
             create_carrier, generate_uuid, get_random_breach, get_random_tracker, get_random_tx,
-            Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+            get_random_user_id, Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS,
+            START_HEIGHT,
         },
     };
-
-    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 
     fn create_responder<'a>(
         chain: &mut Blockchain,
@@ -366,8 +365,7 @@ mod tests {
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
         let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let user_id = get_random_user_id();
         let uuid = generate_uuid();
         let breach = get_random_breach();
         let penalty_txid = breach.penalty_tx.txid();
@@ -396,8 +394,7 @@ mod tests {
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
         );
 
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let user_id = get_random_user_id();
         let uuid = generate_uuid();
         let breach = get_random_breach();
         let penalty_txid = breach.penalty_tx.txid();
@@ -422,8 +419,7 @@ mod tests {
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
         let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let user_id = get_random_user_id();
         let mut uuid = generate_uuid();
         let mut breach = get_random_breach();
 
@@ -488,8 +484,7 @@ mod tests {
         let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
         // Add a new tracker
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let user_id = get_random_user_id();
         let uuid = generate_uuid();
         let breach = get_random_breach();
         responder.add_tracker(uuid, breach.clone(), user_id, 0);
@@ -521,8 +516,7 @@ mod tests {
         let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
 
         // Add a new tracker
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let user_id = get_random_user_id();
         let uuid = generate_uuid();
         let breach = get_random_breach();
 
@@ -621,8 +615,7 @@ mod tests {
         let mut responder = create_responder(&mut chain, &gk, MockedServerQuery::Confirmations(1));
 
         // Let's add a tracker first
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let user_id = get_random_user_id();
         let uuid = generate_uuid();
         let breach = get_random_breach();
         responder.add_tracker(uuid, breach.clone(), user_id, 1);
@@ -653,8 +646,7 @@ mod tests {
         // Outdated trackers are those whose associated subscription is outdated and have not been confirmed yet (they don't have
         // a single confirmation).
         let target_block_height = 100;
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let user_id = get_random_user_id();
 
         // Mock data into the GK
         let mut uuids = Vec::new();
@@ -700,9 +692,7 @@ mod tests {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
         let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
-
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let user_id = get_random_user_id();
 
         // Transactions are rebroadcast once they hit CONFIRMATIONS_BEFORE_RETRY
         // Add some trackers and set their missed confirmation count
@@ -762,9 +752,7 @@ mod tests {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
         let responder = create_responder(&mut chain, &gk, MockedServerQuery::Regular);
-
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let user_id = get_random_user_id();
 
         // Delete trackers removes data from the trackers, tx_tracker_map maps (and unconfirmed_txs if the data is outdated)
         // The deletion of the later is better check in test_block_connected
@@ -866,16 +854,10 @@ mod tests {
         // - Delete completed and outdated data (including data in the GK)
 
         // Let's start by doing the data setup for each test (i.e. adding all the necessary data to the Responder and GK)
-        let standalone_user_sk = SecretKey::from_slice(&[1; 32]).unwrap();
-        let standalone_user_id = UserId(PublicKey::from_secret_key(
-            &Secp256k1::new(),
-            &standalone_user_sk,
-        ));
-
+        let standalone_user_id = get_random_user_id();
         let mut users = Vec::new();
-        for i in 2..23 {
-            let user_sk = SecretKey::from_slice(&[i; 32]).unwrap();
-            let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        for _ in 2..23 {
+            let user_id = get_random_user_id();
 
             gk.add_update_user(&user_id).unwrap();
             users.push(user_id);

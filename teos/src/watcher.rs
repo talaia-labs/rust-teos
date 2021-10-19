@@ -564,15 +564,15 @@ mod tests {
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, generate_dummy_appointment, generate_uuid, get_random_breach,
-        get_random_tx, start_server, BitcoindMock, Blockchain, MockOptions, MockedServerQuery,
-        DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        get_random_bytes, get_random_keypair, get_random_tx, start_server, BitcoindMock,
+        Blockchain, MockOptions, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
     use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::key::ONE_KEY;
-    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use bitcoincore_rpc::{Auth, Client as BitcoindClient};
     use lightning::chain::Listen;
     use lightning_block_sync::poll::{ChainPoller, Poll};
@@ -659,8 +659,9 @@ mod tests {
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
         let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
         let mut watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
+        let tower_pk = PublicKey::from_secret_key(&Secp256k1::new(), &TOWER_SK);
 
-        let user_pk = PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY);
+        let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
         let receipt = watcher.register(&user_id).unwrap();
 
@@ -674,7 +675,7 @@ mod tests {
         assert!(cryptography::verify(
             &receipt.serialize(),
             &receipt.signature().unwrap(),
-            &user_pk
+            &tower_pk
         ));
     }
 
@@ -702,8 +703,8 @@ mod tests {
             &Secp256k1::new(),
             &watcher.signing_key,
         ));
-        let user_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
         watcher.register(&user_id).unwrap();
         let appointment = generate_dummy_appointment(None).inner;
 
@@ -719,8 +720,8 @@ mod tests {
         }
 
         // Add the same appointment but for another user
-        let user2_sk = SecretKey::from_slice(&[3; 32]).unwrap();
-        let user2_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user2_sk));
+        let (user2_sk, user2_pk) = get_random_keypair();
+        let user2_id = UserId(user2_pk);
         watcher.register(&user2_id).unwrap();
 
         let user2_sig = cryptography::sign(&appointment.serialize(), &user2_sk).unwrap();
@@ -825,7 +826,7 @@ mod tests {
             .unwrap()
             .available_slots = 0;
 
-        let dispute_txid = Txid::from_slice(&[2; 32]).unwrap();
+        let dispute_txid = Txid::from_slice(&get_random_bytes(32)).unwrap();
         let new_appointment = generate_dummy_appointment(Some(&dispute_txid)).inner;
         let new_app_sig = cryptography::sign(&new_appointment.serialize(), &user_sk).unwrap();
 
@@ -870,8 +871,8 @@ mod tests {
         ));
 
         // If the user does exist and there's an appointment with the given locator belonging to him, it will be returned
-        let user_sk = ONE_KEY;
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
         watcher.register(&user_id).unwrap();
         watcher
             .add_appointment(
@@ -912,8 +913,8 @@ mod tests {
 
         // If the user does exists but the requested locator does not belong to any of their associated appointments, NotFound
         // should be returned.
-        let user2_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user2_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user2_sk));
+        let (user2_sk, user2_pk) = get_random_keypair();
+        let user2_id = UserId(user2_pk);
         watcher.register(&user2_id).unwrap();
 
         let signature2 = cryptography::sign(message.as_bytes(), &user2_sk).unwrap();
@@ -1157,9 +1158,10 @@ mod tests {
         //  - Delete invalid appointments also from the Gatekeeper (not outdated tough, the GK will take care of those via it's own Listen)
 
         // Let's first check how data gets outdated (create two users, add an appointment to both and outdate only one)
-        let all_two_sk = SecretKey::from_slice(&[2; 32]).unwrap();
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &ONE_KEY));
-        let user2_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &all_two_sk));
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        let (user2_sk, user2_pk) = get_random_keypair();
+        let user2_id = UserId(user2_pk);
         watcher.register(&user_id).unwrap();
         watcher.register(&user2_id).unwrap();
 
@@ -1167,12 +1169,12 @@ mod tests {
         let uuid1 = UUID::new(&appointment.inner.locator, &user_id);
         let uuid2 = UUID::new(&appointment.inner.locator, &user2_id);
 
-        let user_sig = cryptography::sign(&appointment.inner.serialize(), &ONE_KEY).unwrap();
+        let user_sig = cryptography::sign(&appointment.inner.serialize(), &user_sk).unwrap();
         watcher
             .add_appointment(appointment.inner.clone(), user_sig)
             .await
             .unwrap();
-        let user2_sig = cryptography::sign(&appointment.inner.serialize(), &all_two_sk).unwrap();
+        let user2_sig = cryptography::sign(&appointment.inner.serialize(), &user2_sk).unwrap();
         watcher
             .add_appointment(appointment.inner.clone(), user2_sig)
             .await
@@ -1215,7 +1217,7 @@ mod tests {
         // Check triggers. Add a new appointment and trigger it with valid data.
         let dispute_tx = get_random_tx();
         let appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
-        let sig = cryptography::sign(&appointment.inner.serialize(), &all_two_sk).unwrap();
+        let sig = cryptography::sign(&appointment.inner.serialize(), &user2_sk).unwrap();
         let uuid = UUID::new(&appointment.inner.locator, &user2_id);
         watcher
             .add_appointment(appointment.inner.clone(), sig)
@@ -1240,8 +1242,8 @@ mod tests {
         let dispute_tx = get_random_tx();
         let mut appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
         // Modify the encrypted blob so the data is invalid both non-decryptable blobs and blobs with invalid transactions will yield an invalid trigger
-        appointment.inner.encrypted_blob = vec![1; 64];
-        let sig = cryptography::sign(&appointment.inner.serialize(), &all_two_sk).unwrap();
+        appointment.inner.encrypted_blob = get_random_bytes(64);
+        let sig = cryptography::sign(&appointment.inner.serialize(), &user2_sk).unwrap();
         let uuid = UUID::new(&appointment.inner.locator, &user2_id);
         watcher
             .add_appointment(appointment.inner.clone(), sig)

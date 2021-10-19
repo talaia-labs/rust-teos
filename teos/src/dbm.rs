@@ -367,7 +367,7 @@ impl DBM {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gatekeeper::UserInfo;
+
     use crate::test_utils::{
         generate_dummy_appointment, generate_uuid, get_random_bytes, get_random_tracker,
         get_random_user_id,
