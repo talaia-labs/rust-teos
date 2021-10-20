@@ -376,12 +376,28 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
     ExtendedAppointment::new(appointment, user_id, user_signature, start_block)
 }
 
+pub(crate) fn generate_dummy_appointment_with_user(
+    user_id: UserId,
+    dispute_txid: Option<&Txid>,
+) -> (UUID, ExtendedAppointment) {
+    let mut app = generate_dummy_appointment(dispute_txid);
+    app.user_id = user_id;
+
+    (UUID::new(&app.inner.locator, &user_id), app)
+}
+
 pub fn get_random_breach() -> Breach {
     let dispute_tx = get_random_tx();
     let penalty_tx = get_random_tx();
     let locator = Locator::new(dispute_tx.txid());
 
     Breach::new(locator, dispute_tx, penalty_tx)
+}
+
+pub fn get_random_breach_from_locator(locator: Locator) -> Breach {
+    let mut breach = get_random_breach();
+    breach.locator = locator;
+    breach
 }
 
 pub fn get_random_tracker(user_id: UserId) -> TransactionTracker {
