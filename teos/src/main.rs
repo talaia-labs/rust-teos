@@ -1,6 +1,6 @@
 use simple_logger::init_with_level;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::key::ONE_KEY;
@@ -13,6 +13,7 @@ use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 use rusty_teos::bitcoin_cli::BitcoindClient;
 use rusty_teos::carrier::Carrier;
 use rusty_teos::chain_monitor::ChainMonitor;
+use rusty_teos::dbm::DBM;
 use rusty_teos::gatekeeper::Gatekeeper;
 use rusty_teos::responder::Responder;
 use rusty_teos::watcher::Watcher;
@@ -82,10 +83,20 @@ pub async fn main() {
     let cache = &mut UnboundedCache::new();
     let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
 
-    let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA);
+    let dbm = Arc::new(Mutex::new(DBM::new("teos_db.sql3").unwrap()));
+
+    let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
     let carrier = Carrier::new(rpc.clone());
-    let responder = Responder::new(carrier, &gatekeeper, tip);
-    let watcher = Watcher::new(&gatekeeper, &responder, last_n_blocks, tip, TOWER_SK).await;
+    let responder = Responder::new(carrier, &gatekeeper, dbm.clone(), tip);
+    let watcher = Watcher::new(
+        &gatekeeper,
+        &responder,
+        last_n_blocks,
+        tip,
+        TOWER_SK,
+        dbm.clone(),
+    )
+    .await;
 
     let listener = &(&watcher, &(&responder, &gatekeeper));
     let spv_client = SpvClient::new(tip, poller, cache, listener);

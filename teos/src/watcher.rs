@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::iter::FromIterator;
 use std::ops::Deref;
+use std::sync::{Arc, Mutex};
 
 use bitcoin::hash_types::BlockHash;
 use bitcoin::secp256k1::SecretKey;
@@ -18,7 +19,8 @@ use teos_common::cryptography;
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::UserId;
 
-use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::dbm::DBM;
+use crate::extended_appointment::{AppointmentSummary, ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, MaxSlotsReached};
 use crate::responder::{Responder, TransactionTracker};
 
@@ -57,7 +59,7 @@ impl LocatorCache {
             let mut locators = Vec::new();
             for tx in block.txdata.clone() {
                 let locator = Locator::new(tx.txid());
-                cache.insert(locator.clone(), tx);
+                cache.insert(locator, tx);
                 locators.push(locator);
             }
 
@@ -174,13 +176,14 @@ pub enum AppointmentInfo {
 }
 
 pub struct Watcher<'a> {
-    appointments: RefCell<HashMap<UUID, ExtendedAppointment>>,
+    appointments: RefCell<HashMap<UUID, AppointmentSummary>>,
     locator_uuid_map: RefCell<HashMap<Locator, HashSet<UUID>>>,
     locator_cache: RefCell<LocatorCache>,
     responder: &'a Responder<'a>,
     gatekeeper: &'a Gatekeeper,
     last_known_block_header: RefCell<BlockHeaderData>,
     signing_key: SecretKey,
+    dbm: Arc<Mutex<DBM>>,
 }
 
 impl<'a> Watcher<'a> {
@@ -190,6 +193,7 @@ impl<'a> Watcher<'a> {
         last_n_blocks: Vec<ValidatedBlock>,
         last_known_block_header: ValidatedBlockHeader,
         signing_key: SecretKey,
+        dbm: Arc<Mutex<DBM>>,
     ) -> Watcher<'a> {
         let appointments = RefCell::new(HashMap::new());
         let locator_uuid_map = RefCell::new(HashMap::new());
@@ -203,6 +207,7 @@ impl<'a> Watcher<'a> {
             gatekeeper,
             last_known_block_header: RefCell::new(last_known_block_header.deref().clone()),
             signing_key,
+            dbm,
         }
     }
 
@@ -249,8 +254,8 @@ impl<'a> Watcher<'a> {
             .add_update_appointment(&user_id, uuid, &extended_appointment)
             .map_err(|_| AddAppointmentFailure::NotEnoughSlots)?;
 
-        let locator = &extended_appointment.inner.locator;
-        match self.locator_cache.borrow().get_tx(locator) {
+        let locator = extended_appointment.inner.locator;
+        match self.locator_cache.borrow().get_tx(&locator) {
             // Appointments that were triggered in blocks held in the cache
             Some(dispute_tx) => {
                 log::info!("Trigger for locator {} found in cache", locator);
@@ -259,7 +264,15 @@ impl<'a> Watcher<'a> {
                     &dispute_tx.txid(),
                 ) {
                     Ok(penalty_tx) => {
-                        let breach = Breach::new(locator.clone(), dispute_tx.clone(), penalty_tx);
+                        // Data needs to be added the database straightaway since appointments are
+                        // FKs to trackers. If handle breach fails, data will be deleted later.
+                        self.dbm
+                            .lock()
+                            .unwrap()
+                            .store_appointment(&uuid, &extended_appointment)
+                            .unwrap();
+
+                        let breach = Breach::new(locator, dispute_tx.clone(), penalty_tx);
                         let receipt = self.responder.handle_breach(uuid, breach, user_id).await;
 
                         if receipt.delivered() {
@@ -271,6 +284,8 @@ impl<'a> Watcher<'a> {
                                 "Appointment bounced in the Responder. Reason: {:?}",
                                 receipt.reason()
                             );
+
+                            self.dbm.lock().unwrap().remove_appointment(&uuid);
                         }
                     }
 
@@ -285,29 +300,44 @@ impl<'a> Watcher<'a> {
             None => {
                 self.appointments
                     .borrow_mut()
-                    .insert(uuid, extended_appointment.clone());
-                if self.locator_uuid_map.borrow().contains_key(locator) {
+                    .insert(uuid, extended_appointment.get_summary());
+                if self.locator_uuid_map.borrow().contains_key(&locator) {
                     // Either an update or an appointment from another user sharing the same locator
                     if self
                         .locator_uuid_map
                         .borrow_mut()
-                        .get_mut(locator)
+                        .get_mut(&locator)
                         .unwrap()
                         .insert(uuid)
                     {
                         log::debug!(
-                            "Adding an additional appointment to locator {:?}: {:?}",
+                            "Adding an additional appointment to locator {}: {}",
                             locator,
                             uuid
-                        )
+                        );
+                        self.dbm
+                            .lock()
+                            .unwrap()
+                            .store_appointment(&uuid, &extended_appointment)
+                            .unwrap();
                     } else {
-                        log::debug!("Update received for {:?}, locator map not modified", uuid);
+                        log::debug!("Update received for {}, locator map not modified", uuid);
+                        self.dbm
+                            .lock()
+                            .unwrap()
+                            .update_appointment(&uuid, &extended_appointment);
                     }
                 } else {
                     // New appointment
                     self.locator_uuid_map
                         .borrow_mut()
-                        .insert(locator.clone(), HashSet::from_iter(vec![uuid]));
+                        .insert(locator, HashSet::from_iter(vec![uuid]));
+
+                    self.dbm
+                        .lock()
+                        .unwrap()
+                        .store_appointment(&uuid, &extended_appointment)
+                        .unwrap();
                 }
             }
         }
@@ -342,17 +372,23 @@ impl<'a> Watcher<'a> {
 
         let uuid = UUID::new(locator, &user_id);
 
-        match self.appointments.borrow().get(&uuid) {
-            Some(extended_appointment) => Ok(AppointmentInfo::Appointment(
-                extended_appointment.inner.clone(),
-            )),
-            None => match self.responder.get_tracker(&uuid) {
-                Some(tracker) => Ok(AppointmentInfo::Tracker(tracker.clone())),
-                None => {
+        if self.appointments.borrow().contains_key(&uuid) {
+            Ok(AppointmentInfo::Appointment(
+                self.dbm
+                    .lock()
+                    .unwrap()
+                    .load_appointment(&uuid)
+                    .unwrap()
+                    .inner,
+            ))
+        } else {
+            self.responder
+                .get_tracker(&uuid)
+                .map(|tracker| AppointmentInfo::Tracker(tracker))
+                .ok_or({
                     log::info!("Cannot find {}", locator);
-                    Err(GetAppointmentFailure::NotFound)
-                }
-            },
+                    GetAppointmentFailure::NotFound
+                })
         }
     }
 
@@ -399,15 +435,12 @@ impl<'a> Watcher<'a> {
                 .unwrap()
                 .clone()
             {
-                // FIXME: this should load data from the DB
-                let borrowed = self.appointments.borrow();
-                let appointment = borrowed.get(&uuid).unwrap();
-
+                let appointment = self.dbm.lock().unwrap().load_appointment(&uuid).unwrap();
                 match decrypted_blobs.get(&appointment.inner.encrypted_blob) {
                     Some(penalty_tx) => {
                         valid_breaches.insert(
                             uuid,
-                            Breach::new(locator.clone(), dispute_tx.clone(), penalty_tx.clone()),
+                            Breach::new(locator, dispute_tx.clone(), penalty_tx.clone()),
                         );
                     }
                     None => {
@@ -422,7 +455,7 @@ impl<'a> Watcher<'a> {
                                 );
                                 valid_breaches.insert(
                                     uuid,
-                                    Breach::new(locator.clone(), dispute_tx.clone(), penalty_tx),
+                                    Breach::new(locator, dispute_tx.clone(), penalty_tx),
                                 );
                             }
                             Err(e) => {
@@ -437,8 +470,12 @@ impl<'a> Watcher<'a> {
         (valid_breaches, invalid_breaches)
     }
 
+    // DISCUSS:: For outdated data this may be nicer if implemented with a callback from the GK given that:
+    // - The GK is queried for the data to be deleted
+    // - Appointment and tracker data can be deleted in cascade when a user is deleted
+    // If done, the GK can notify the Watcher and Responder to delete data in memory and
+    // take care of the database itself.
     fn delete_appointments(&self, appointments: HashSet<UUID>, outdated: bool) {
-        // FIXME: Delete data, this should be handled by the Cleaner when implemented
         // FIXME: This is identical to Responder::delete_trackers. It can be implemented using generics.
         for uuid in appointments.iter() {
             if outdated {
@@ -456,17 +493,12 @@ impl<'a> Watcher<'a> {
             match self.appointments.borrow_mut().remove(uuid) {
                 Some(appointment) => {
                     let mut locator_uuid_map = self.locator_uuid_map.borrow_mut();
-                    let appointments = locator_uuid_map
-                        .get_mut(&appointment.inner.locator)
-                        .unwrap();
+                    let appointments = locator_uuid_map.get_mut(&appointment.locator).unwrap();
 
                     if appointments.len() == 1 {
-                        locator_uuid_map.remove(&appointment.inner.locator);
+                        locator_uuid_map.remove(&appointment.locator);
 
-                        log::info!(
-                            "No more appointments for locator: {}",
-                            appointment.inner.locator
-                        );
+                        log::info!("No more appointments for locator: {}", appointment.locator);
                     } else {
                         appointments.remove(uuid);
                     }
@@ -477,6 +509,12 @@ impl<'a> Watcher<'a> {
                 }
             }
         }
+
+        // Remove data from the database
+        self.dbm
+            .lock()
+            .unwrap()
+            .batch_remove_appointments(&appointments);
     }
 }
 
@@ -505,10 +543,10 @@ impl<'a> chain::Listen for Watcher<'a> {
 
             let mut appointments_to_delete: HashSet<UUID> = HashSet::new();
             let mut appointments_to_delete_gatekeeper: HashMap<UUID, UserId> = HashMap::new();
-            for uuid in invalid_breaches.keys() {
-                appointments_to_delete.insert(uuid.clone());
+            for uuid in invalid_breaches.into_keys() {
+                appointments_to_delete.insert(uuid);
                 appointments_to_delete_gatekeeper
-                    .insert(uuid.clone(), self.appointments.borrow()[&uuid].user_id);
+                    .insert(uuid, self.appointments.borrow()[&uuid].user_id);
             }
 
             // Send data to the Responder and remove it from the Watcher
@@ -521,13 +559,12 @@ impl<'a> chain::Listen for Watcher<'a> {
                 //DISCUSS: This cannot be async given block_connected is not.
                 // Is there any alternative? Remove async from here altogether?
                 block_on(self.responder.handle_breach(
-                    uuid.clone(),
+                    uuid,
                     breach,
                     self.appointments.borrow()[&uuid].user_id,
                 ));
 
-                // DISCUSS: Not using triggered flags from now (i.e. this is one way atm)
-                appointments_to_delete.insert(uuid.clone());
+                appointments_to_delete.insert(uuid);
             }
 
             // Delete data from the Watcher (invalid + triggered)
@@ -547,6 +584,10 @@ impl<'a> chain::Listen for Watcher<'a> {
             height,
             chainwork: block.header.work(),
         };
+        self.dbm
+            .lock()
+            .unwrap()
+            .store_last_known_block_watcher(&block.header.block_hash());
     }
 
     // FIXME: To be implemented
@@ -561,11 +602,13 @@ mod tests {
     use super::*;
 
     use crate::carrier::Carrier;
+    use crate::dbm::{Error as DBError, DBM};
     use crate::rpc_errors;
     use crate::test_utils::{
-        create_carrier, generate_dummy_appointment, generate_uuid, get_random_breach,
-        get_random_bytes, get_random_keypair, get_random_tx, start_server, BitcoindMock,
-        Blockchain, MockOptions, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        create_carrier, generate_dummy_appointment, generate_dummy_appointment_with_user,
+        generate_uuid, get_random_breach_from_locator, get_random_bytes, get_random_keypair,
+        get_random_tx, start_server, store_appointment_and_fks_to_db, BitcoindMock, Blockchain,
+        MockOptions, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
 
     use bitcoin::hash_types::Txid;
@@ -576,7 +619,7 @@ mod tests {
     use bitcoincore_rpc::{Auth, Client as BitcoindClient};
     use lightning::chain::Listen;
     use lightning_block_sync::poll::{ChainPoller, Poll};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     const TOWER_SK: SecretKey = ONE_KEY;
 
@@ -601,12 +644,13 @@ mod tests {
     fn create_responder<'a>(
         tip: ValidatedBlockHeader,
         gatekeeper: &'a Gatekeeper,
+        dbm: Arc<Mutex<DBM>>,
         server_url: String,
     ) -> Responder<'a> {
         let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
         let carrier = Carrier::new(bitcoin_cli);
 
-        Responder::new(carrier, &gatekeeper, tip)
+        Responder::new(carrier, &gatekeeper, dbm, tip)
     }
 
     async fn create_watcher<'a>(
@@ -614,12 +658,13 @@ mod tests {
         responder: &'a Responder<'a>,
         gatekeeper: &'a Gatekeeper,
         bitcoind_mock: BitcoindMock,
+        dbm: Arc<Mutex<DBM>>,
     ) -> Watcher<'a> {
         let tip = chain.tip();
         let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
         start_server(bitcoind_mock);
-        Watcher::new(&gatekeeper, &responder, last_n_blocks, tip, TOWER_SK).await
+        Watcher::new(&gatekeeper, &responder, last_n_blocks, tip, TOWER_SK, dbm).await
     }
 
     fn assert_appointment_added(
@@ -656,9 +701,11 @@ mod tests {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
 
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
-        let mut watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+        let responder = create_responder(chain.tip(), &gk, dbm.clone(), bitcoind_mock.url());
+        let mut watcher =
+            create_watcher(&mut chain, &responder, &gk, bitcoind_mock, dbm.clone()).await;
         let tower_pk = PublicKey::from_secret_key(&Secp256k1::new(), &TOWER_SK);
 
         let (_, user_pk) = get_random_keypair();
@@ -685,9 +732,11 @@ mod tests {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let tip_txs = chain.blocks.last().unwrap().txdata.clone();
 
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
-        let mut watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+        let responder = create_responder(chain.tip(), &gk, dbm.clone(), bitcoind_mock.url());
+        let mut watcher =
+            create_watcher(&mut chain, &responder, &gk, bitcoind_mock, dbm.clone()).await;
 
         // add_appointment should add a given appointment to the Watcher given the following logic:
         //      - if the appointment does not exist for a given user, add the appointment
@@ -709,7 +758,7 @@ mod tests {
         let appointment = generate_dummy_appointment(None).inner;
 
         // Add the appointment for a new user (twice so we can check that updates work)
-        for _ in 0..1 {
+        for _ in 0..2 {
             let user_sig = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
             let (receipt, slots, expiry) = watcher
                 .add_appointment(appointment.clone(), user_sig.clone())
@@ -739,14 +788,27 @@ mod tests {
             2
         );
 
+        // Check data was added to the database
+        for uuid in watcher.appointments.borrow().keys() {
+            assert!(matches!(
+                dbm.lock().unwrap().load_appointment(&uuid),
+                Ok(ExtendedAppointment { .. })
+            ));
+        }
+
         // If an appointment is already in the Responder, it should bounce
-        let triggered_appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&triggered_appointment.serialize(), &user_sk).unwrap();
-        let breach = get_random_breach();
-        let uuid = UUID::new(&triggered_appointment.locator, &user_id);
+        let (uuid, triggered_appointment) = generate_dummy_appointment_with_user(user_id, None);
+        let signature =
+            cryptography::sign(&triggered_appointment.inner.serialize(), &user_sk).unwrap();
+        watcher
+            .add_appointment(triggered_appointment.inner.clone(), signature.clone())
+            .await
+            .unwrap();
+
+        let breach = get_random_breach_from_locator(triggered_appointment.inner.locator);
         watcher.responder.add_tracker(uuid, breach, user_id, 0);
         let receipt = watcher
-            .add_appointment(triggered_appointment, signature)
+            .add_appointment(triggered_appointment.inner, signature)
             .await;
         assert!(matches!(
             receipt,
@@ -755,36 +817,60 @@ mod tests {
 
         // If the trigger is already in the cache, the appointment will go straight to the Responder
         let dispute_tx = tip_txs.last().unwrap();
-        let appointment_in_cache = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
-        let user_sig = cryptography::sign(&appointment_in_cache.serialize(), &user_sk).unwrap();
+        let (uuid, appointment_in_cache) =
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+        let user_sig =
+            cryptography::sign(&appointment_in_cache.inner.serialize(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
-            .add_appointment(appointment_in_cache.clone(), user_sig.clone())
+            .add_appointment(appointment_in_cache.inner.clone(), user_sig.clone())
             .await
             .unwrap();
 
-        // The appointment should have been accepted, slots should have been decreased, and data should not be in the Watcher.
-        // Moreover, the data should be found in the Responder
-        assert_appointment_added(slots, SLOTS - 2, expiry, receipt, &user_sig, &tower_id);
-        assert_eq!(watcher.appointments.borrow().len(), 2);
+        // The appointment should have been accepted, slots should have been decreased, and data should have been deleted from
+        // the Watcher's memory. Moreover, a new tracker should be found in the Responder
+        assert_appointment_added(slots, SLOTS - 3, expiry, receipt, &user_sig, &tower_id);
+        assert_eq!(watcher.appointments.borrow().len(), 3);
         assert!(!watcher
             .locator_uuid_map
             .borrow()
-            .contains_key(&appointment_in_cache.locator));
+            .contains_key(&appointment_in_cache.inner.locator));
         assert!(watcher.responder.has_tracker(&uuid));
+
+        // Check data was added to the database
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(&uuid),
+            Ok(ExtendedAppointment { .. })
+        ));
+        assert!(matches!(
+            dbm.lock().unwrap().load_tracker(&uuid),
+            Ok(TransactionTracker { .. })
+        ));
 
         // If an appointment is rejected by the Responder, it is considered misbehavior and the slot count is kept
         // Wrong penalty
         let dispute_tx = &tip_txs[tip_txs.len() - 2];
-        let mut invalid_appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
-        invalid_appointment.encrypted_blob.reverse();
-        let user_sig = cryptography::sign(&invalid_appointment.serialize(), &user_sk).unwrap();
+        let (uuid, mut invalid_appointment) =
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+        invalid_appointment.inner.encrypted_blob.reverse();
+        let user_sig =
+            cryptography::sign(&invalid_appointment.inner.serialize(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
-            .add_appointment(invalid_appointment.clone(), user_sig.clone())
+            .add_appointment(invalid_appointment.inner.clone(), user_sig.clone())
             .await
             .unwrap();
 
-        assert_appointment_added(slots, SLOTS - 3, expiry, receipt, &user_sig, &tower_id);
-        assert_eq!(watcher.appointments.borrow().len(), 2);
+        assert_appointment_added(slots, SLOTS - 4, expiry, receipt, &user_sig, &tower_id);
+        assert_eq!(watcher.appointments.borrow().len(), 3);
+
+        // Data should not be in the database
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(&uuid),
+            Err(DBError::NotFound)
+        ));
+        assert!(matches!(
+            dbm.lock().unwrap().load_tracker(&uuid),
+            Err(DBError::NotFound)
+        ));
 
         // Transaction rejected
         // Update the Responder with a new Carrier
@@ -800,8 +886,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_appointment_added(slots, SLOTS - 3, expiry, receipt, &user_sig, &tower_id);
-        assert_eq!(watcher.appointments.borrow().len(), 2);
+        assert_appointment_added(slots, SLOTS - 4, expiry, receipt, &user_sig, &tower_id);
+        assert_eq!(watcher.appointments.borrow().len(), 3);
+
+        // Data should not be in the database
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(&uuid),
+            Err(DBError::NotFound)
+        ));
 
         // FAIL cases (non-registered, subscription expired and not enough slots)
 
@@ -814,6 +906,11 @@ mod tests {
                 .add_appointment(appointment.clone(), user3_sig.clone())
                 .await,
             Err(AddAppointmentFailure::AuthenticationFailure)
+        ));
+        // Data should not be in the database
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(&uuid),
+            Err(DBError::NotFound)
         ));
 
         // If the user has no enough slots, the appointment is rejected. We do not test all possible cases since updates are
@@ -834,6 +931,11 @@ mod tests {
             watcher.add_appointment(new_appointment, new_app_sig).await,
             Err(AddAppointmentFailure::NotEnoughSlots)
         ));
+        // Data should not be in the database
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(&uuid),
+            Err(DBError::NotFound)
+        ));
 
         // If the user subscription has expired, the appointment should be rejected.
         watcher
@@ -850,6 +952,11 @@ mod tests {
                 .await,
             Err(AddAppointmentFailure::SubscriptionExpired { .. })
         ));
+        // Data should not be in the database
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(&uuid),
+            Err(DBError::NotFound)
+        ));
     }
 
     #[tokio::test]
@@ -857,9 +964,11 @@ mod tests {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
 
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
-        let mut watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+        let responder = create_responder(chain.tip(), &gk, dbm.clone(), bitcoind_mock.url());
+        let mut watcher =
+            create_watcher(&mut chain, &responder, &gk, bitcoind_mock, dbm.clone()).await;
 
         let appointment = generate_dummy_appointment(None).inner;
 
@@ -893,10 +1002,19 @@ mod tests {
             AppointmentInfo::Tracker { .. } => assert!(false),
         }
 
-        // If the appointment is in the Responder (in the form os a Tracker), data should be also returned
-        let breach = get_random_breach();
+        // If the appointment is in the Responder (in the form of a Tracker), data should be also returned
+
+        // Remove the data from the Watcher memory first (data is kept in the db tho)
+        let uuid = UUID::new(&appointment.locator, &user_id);
+        watcher.appointments.borrow_mut().remove(&uuid);
+        watcher
+            .locator_uuid_map
+            .borrow_mut()
+            .remove(&appointment.locator);
+
+        // Add data to the Responder
+        let breach = get_random_breach_from_locator(appointment.locator);
         let tracker = TransactionTracker::new(breach.clone(), user_id);
-        let uuid = UUID::new(&breach.locator, &user_id);
 
         watcher.responder.add_tracker(uuid, breach, user_id, 0);
 
@@ -944,9 +1062,10 @@ mod tests {
         let mut chain = Blockchain::default().with_height_and_txs(12, None);
         let txs = chain.blocks.last().unwrap().txdata.clone();
 
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
-        let watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+        let responder = create_responder(chain.tip(), &gk, dbm.clone(), bitcoind_mock.url());
+        let watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock, dbm.clone()).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -980,9 +1099,10 @@ mod tests {
         let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
         let txs = chain.blocks.last().unwrap().txdata.clone();
 
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
-        let watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+        let responder = create_responder(chain.tip(), &gk, dbm.clone(), bitcoind_mock.url());
+        let watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock, dbm.clone()).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -1009,14 +1129,19 @@ mod tests {
                     _ => local_invalid.push(uuid),
                 }
 
+                let appointment = generate_dummy_appointment(dispute_txid);
+
                 watcher
                     .appointments
                     .borrow_mut()
-                    .insert(uuid, generate_dummy_appointment(dispute_txid));
+                    .insert(uuid, appointment.get_summary());
                 watcher
                     .locator_uuid_map
                     .borrow_mut()
                     .insert(locator.clone(), HashSet::from_iter(vec![uuid]));
+
+                // Store data in the database (the user needs to be there as well since it is a FK for appointments)
+                store_appointment_and_fks_to_db(&dbm.lock().unwrap(), &uuid, &appointment);
             }
         }
 
@@ -1048,9 +1173,10 @@ mod tests {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
 
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
-        let watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+        let responder = create_responder(chain.tip(), &gk, dbm.clone(), bitcoind_mock.url());
+        let watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock, dbm.clone()).await;
 
         // Delete appointments removes data from the appointments and locator_uuid_map
         // Add data to the map first
@@ -1065,26 +1191,30 @@ mod tests {
             watcher
                 .appointments
                 .borrow_mut()
-                .insert(uuid, appointment.clone());
-            watcher.locator_uuid_map.borrow_mut().insert(
-                appointment.inner.locator.clone(),
-                HashSet::from_iter([uuid]),
-            );
+                .insert(uuid, appointment.clone().get_summary());
+            watcher
+                .locator_uuid_map
+                .borrow_mut()
+                .insert(appointment.inner.locator, HashSet::from_iter([uuid]));
+
+            // Add data to the database to check data deletion
+            store_appointment_and_fks_to_db(&dbm.lock().unwrap(), &uuid, &appointment);
 
             // Make it so some of the locators have multiple associated uuids
             if i % 3 == 0 {
+                // We don't need to store this properly since they will not be targeted
                 let uuid2 = generate_uuid();
                 watcher
                     .locator_uuid_map
                     .borrow_mut()
-                    .get_mut(&appointment.inner.locator.clone())
+                    .get_mut(&appointment.inner.locator)
                     .unwrap()
                     .insert(uuid2);
-                locator_with_multiple_uuids.insert(appointment.inner.locator.clone());
+                locator_with_multiple_uuids.insert(appointment.inner.locator);
             }
 
-            all_appointments.insert(uuid.clone());
-            uuid_locator_map.insert(uuid.clone(), appointment.inner.locator.clone());
+            all_appointments.insert(uuid);
+            uuid_locator_map.insert(uuid, appointment.inner.locator);
 
             // Add some appointments to be deleted
             if i % 2 == 0 {
@@ -1099,6 +1229,11 @@ mod tests {
         for uuid in all_appointments {
             if target_appointments.contains(&uuid) {
                 assert!(!watcher.appointments.borrow().contains_key(&uuid));
+                assert!(matches!(
+                    dbm.lock().unwrap().load_appointment(&uuid),
+                    Err(DBError::NotFound)
+                ));
+
                 let locator = &uuid_locator_map[&uuid];
                 // If the penalty had more than one associated uuid, only one has been deleted
                 // (because that's how the test has been designed)
@@ -1122,6 +1257,10 @@ mod tests {
                     .locator_uuid_map
                     .borrow()
                     .contains_key(&uuid_locator_map[&uuid]));
+                assert!(matches!(
+                    dbm.lock().unwrap().load_appointment(&uuid),
+                    Ok(ExtendedAppointment { .. })
+                ));
             }
         }
     }
@@ -1131,9 +1270,11 @@ mod tests {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
 
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA);
-        let responder = create_responder(chain.tip(), &gk, bitcoind_mock.url());
-        let mut watcher = create_watcher(&mut chain, &responder, &gk, bitcoind_mock).await;
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+        let responder = create_responder(chain.tip(), &gk, dbm.clone(), bitcoind_mock.url());
+        let mut watcher =
+            create_watcher(&mut chain, &responder, &gk, bitcoind_mock, dbm.clone()).await;
 
         // block_connected for the Watcher is used to keep track of what new transactions has been mined whose may be potential
         // channel breaches.
@@ -1148,6 +1289,16 @@ mod tests {
         assert_eq!(
             watcher.last_known_block_header.borrow().header,
             chain.tip().header
+        );
+        // Check the data also matches the on in database
+        assert_eq!(
+            watcher
+                .dbm
+                .lock()
+                .unwrap()
+                .load_last_known_block_watcher()
+                .unwrap(),
+            chain.tip().header.block_hash()
         );
 
         // If there are appointments to watch, the Watcher will:
@@ -1207,12 +1358,20 @@ mod tests {
         assert!(watcher.gatekeeper.registered_users.borrow()[&user_id]
             .appointments
             .contains_key(&uuid1));
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(&uuid1),
+            Err(DBError::NotFound)
+        ));
 
         assert!(watcher.appointments.borrow().contains_key(&uuid2));
         assert!(watcher.locator_uuid_map.borrow()[&appointment.inner.locator].contains(&uuid2));
         assert!(watcher.gatekeeper.registered_users.borrow()[&user2_id]
             .appointments
             .contains_key(&uuid2));
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(&uuid2),
+            Ok(ExtendedAppointment { .. })
+        ));
 
         // Check triggers. Add a new appointment and trigger it with valid data.
         let dispute_tx = get_random_tx();
@@ -1261,5 +1420,9 @@ mod tests {
         assert!(!watcher.gatekeeper.registered_users.borrow()[&user2_id]
             .appointments
             .contains_key(&uuid));
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(&uuid),
+            Err(DBError::NotFound)
+        ));
     }
 }

@@ -43,7 +43,9 @@ use teos_common::cryptography::encrypt;
 use teos_common::UserId;
 
 use crate::carrier::Carrier;
+use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::gatekeeper::UserInfo;
 use crate::responder::TransactionTracker;
 use crate::watcher::Breach;
 
@@ -403,6 +405,12 @@ pub fn get_random_breach_from_locator(locator: Locator) -> Breach {
 pub fn get_random_tracker(user_id: UserId) -> TransactionTracker {
     let breach = get_random_breach();
     TransactionTracker::new(breach, user_id)
+}
+
+pub fn store_appointment_and_fks_to_db(dbm: &DBM, uuid: &UUID, appointment: &ExtendedAppointment) {
+    dbm.store_user(&appointment.user_id, &UserInfo::new(21, 42))
+        .unwrap();
+    dbm.store_appointment(&uuid, &appointment).unwrap();
 }
 
 pub enum MockedServerQuery {

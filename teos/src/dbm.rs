@@ -523,7 +523,7 @@ mod tests {
 
     use crate::test_utils::{
         generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_bytes, get_random_tracker, get_random_user_id,
+        get_random_breach_from_locator, get_random_bytes, get_random_tracker, get_random_user_id,
     };
     use std::iter::FromIterator;
 
@@ -750,6 +750,33 @@ mod tests {
 
         // We should get all the appointments back except from the triggered one
         assert_eq!(dbm.load_all_appointments(), appointments);
+    }
+
+    #[test]
+    fn test_remove_appointment() {
+        let dbm = DBM::in_memory().unwrap();
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(21, 42);
+        dbm.store_user(&user_id, &user).unwrap();
+
+        // Store and delete appointment
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        dbm.store_appointment(&uuid, &appointment).unwrap();
+        assert_eq!(dbm.load_appointment(&uuid).unwrap(), appointment);
+        dbm.remove_appointment(&uuid);
+
+        assert!(matches!(dbm.load_appointment(&uuid), Err(Error::NotFound)));
+    }
+
+    #[test]
+    fn test_remove_nonexistent_appointment() {
+        let dbm = DBM::in_memory().unwrap();
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(21, 42);
+        dbm.store_user(&user_id, &user).unwrap();
+
+        // Test it does not fail even if the appointment does not exist (it will log though)
+        dbm.remove_appointment(&generate_uuid());
     }
 
     #[test]
@@ -993,5 +1020,37 @@ mod tests {
 
         // Test it does not fail even if the user does not exist (it will log though)
         dbm.batch_remove_appointments(&appointments);
+    }
+
+    #[test]
+    fn test_remove_user_cascade() {
+        // Users are FKs to appointments, and appointments are FKs to trackers.
+        // Both tables have a ON DELETE CASCADE trigger for those FKs, therefore
+        // Deleting a user should delete their associated appointments and trackers
+        let dbm = DBM::in_memory().unwrap();
+        let user_id = get_random_user_id();
+
+        let mut user = UserInfo::new(21, 42);
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        user.appointments.insert(uuid, 1);
+        let tracker = TransactionTracker::new(
+            get_random_breach_from_locator(appointment.inner.locator),
+            user_id,
+        );
+
+        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_appointment(&uuid, &appointment).unwrap();
+        dbm.store_tracker(&uuid, &tracker).unwrap();
+
+        // Check data is in the DB (this is implicitly checked by the unwraps, but anyway)
+        assert_eq!(dbm.load_user(&user_id).unwrap(), user);
+        assert_eq!(dbm.load_appointment(&uuid).unwrap(), appointment);
+        assert_eq!(dbm.load_tracker(&uuid).unwrap(), tracker);
+
+        // Remove the user and check again
+        dbm.remove_user(&user_id);
+        assert!(matches!(dbm.load_user(&user_id), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_appointment(&uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_tracker(&uuid), Err(Error::NotFound)));
     }
 }
