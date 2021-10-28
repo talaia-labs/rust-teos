@@ -35,8 +35,8 @@ pub struct ExtendedAppointment {
 }
 
 pub struct AppointmentSummary {
-    locator: Locator,
-    user_id: UserId,
+    pub locator: Locator,
+    pub user_id: UserId,
 }
 
 impl ExtendedAppointment {
@@ -56,7 +56,7 @@ impl ExtendedAppointment {
 
     pub fn get_summary(&self) -> AppointmentSummary {
         AppointmentSummary {
-            locator: self.inner.locator.clone(),
+            locator: self.inner.locator,
             user_id: self.user_id,
         }
     }

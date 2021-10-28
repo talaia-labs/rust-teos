@@ -3,7 +3,7 @@ use std::fmt;
 
 use bitcoin::Txid;
 
-#[derive(Debug, Eq, PartialEq, Clone, Hash)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone, Hash)]
 pub struct Locator([u8; 16]);
 
 impl Locator {
