@@ -54,9 +54,21 @@ impl ExtendedAppointment {
         }
     }
 
+    pub fn locator(&self) -> Locator {
+        self.inner.locator
+    }
+
+    pub fn encrypted_blob(&self) -> &Vec<u8> {
+        &self.inner.encrypted_blob
+    }
+
+    pub fn to_self_delay(&self) -> u32 {
+        self.inner.to_self_delay
+    }
+
     pub fn get_summary(&self) -> AppointmentSummary {
         AppointmentSummary {
-            locator: self.inner.locator,
+            locator: self.locator(),
             user_id: self.user_id,
         }
     }
@@ -87,7 +99,7 @@ mod tests {
 
         let s = e.get_summary();
 
-        assert_eq!(e.inner.locator, s.locator);
+        assert_eq!(e.locator(), s.locator);
         assert_eq!(e.user_id, s.user_id);
     }
 }

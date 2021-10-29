@@ -246,9 +246,9 @@ impl DBM {
             query,
             params![
                 uuid.serialize(),
-                appointment.inner.locator.serialize(),
-                appointment.inner.encrypted_blob,
-                appointment.inner.to_self_delay,
+                appointment.locator().serialize(),
+                appointment.encrypted_blob(),
+                appointment.to_self_delay(),
                 appointment.user_signature,
                 appointment.start_block,
                 appointment.user_id.serialize(),
@@ -272,8 +272,8 @@ impl DBM {
         match self.update_data(
             query,
             params![
-                appointment.inner.encrypted_blob,
-                appointment.inner.to_self_delay,
+                appointment.encrypted_blob(),
+                appointment.to_self_delay(),
                 appointment.user_signature,
                 appointment.start_block,
                 uuid.serialize(),
@@ -745,7 +745,7 @@ mod tests {
         dbm.store_appointment(&uuid, &appointment).unwrap();
 
         let mut tracker = get_random_tracker(user_id);
-        tracker.locator = appointment.inner.locator;
+        tracker.locator = appointment.locator();
         dbm.store_tracker(&uuid, &tracker).unwrap();
 
         // We should get all the appointments back except from the triggered one
@@ -794,7 +794,7 @@ mod tests {
 
         let mut tracker = get_random_tracker(user_id);
         // Set the locator to match between appointment and tracker
-        tracker.locator = appointment.inner.locator;
+        tracker.locator = appointment.locator();
 
         assert!(matches!(dbm.store_tracker(&uuid, &tracker), Ok { .. }));
         assert_eq!(dbm.load_tracker(&uuid).unwrap(), tracker);
@@ -812,7 +812,7 @@ mod tests {
         dbm.store_appointment(&uuid, &appointment).unwrap();
 
         let mut tracker = get_random_tracker(user_id);
-        tracker.locator = appointment.inner.locator;
+        tracker.locator = appointment.locator();
         assert!(matches!(dbm.store_tracker(&uuid, &tracker), Ok { .. }));
 
         // Try to store it again, but it shouldn't go trough
@@ -858,7 +858,7 @@ mod tests {
             dbm.store_appointment(&uuid, &appointment).unwrap();
 
             let mut tracker = get_random_tracker(user_id);
-            tracker.locator = appointment.inner.locator;
+            tracker.locator = appointment.locator();
             dbm.store_tracker(&uuid, &tracker).unwrap();
             trackers.insert(uuid, tracker);
         }
@@ -1034,7 +1034,7 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         user.appointments.insert(uuid, 1);
         let tracker = TransactionTracker::new(
-            get_random_breach_from_locator(appointment.inner.locator),
+            get_random_breach_from_locator(appointment.locator()),
             user_id,
         );
 

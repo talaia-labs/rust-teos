@@ -147,10 +147,8 @@ impl Gatekeeper {
         let user_info = borrowed.get_mut(user_id).unwrap();
         let used_slots = user_info.appointments.get(&uuid).map_or(0, |x| x.clone());
 
-        let required_slots = compute_appointment_slots(
-            appointment.inner.encrypted_blob.len(),
-            ENCRYPTED_BLOB_MAX_SIZE,
-        );
+        let required_slots =
+            compute_appointment_slots(appointment.encrypted_blob().len(), ENCRYPTED_BLOB_MAX_SIZE);
 
         let diff = required_slots as i64 - used_slots as i64;
         if diff <= user_info.available_slots as i64 {

@@ -242,7 +242,7 @@ impl<'a> Watcher<'a> {
             self.last_known_block_header.borrow().height,
         );
 
-        let uuid = UUID::new(&extended_appointment.inner.locator, &user_id);
+        let uuid = UUID::new(&extended_appointment.locator(), &user_id);
 
         if self.responder.has_tracker(&uuid) {
             log::info!("Tracker for {} already found in Responder", uuid);
@@ -254,13 +254,13 @@ impl<'a> Watcher<'a> {
             .add_update_appointment(&user_id, uuid, &extended_appointment)
             .map_err(|_| AddAppointmentFailure::NotEnoughSlots)?;
 
-        let locator = extended_appointment.inner.locator;
+        let locator = extended_appointment.locator();
         match self.locator_cache.borrow().get_tx(&locator) {
             // Appointments that were triggered in blocks held in the cache
             Some(dispute_tx) => {
                 log::info!("Trigger for locator {} found in cache", locator);
                 match cryptography::decrypt(
-                    &extended_appointment.inner.encrypted_blob,
+                    &extended_appointment.encrypted_blob(),
                     &dispute_tx.txid(),
                 ) {
                     Ok(penalty_tx) => {
@@ -436,7 +436,7 @@ impl<'a> Watcher<'a> {
                 .clone()
             {
                 let appointment = self.dbm.lock().unwrap().load_appointment(&uuid).unwrap();
-                match decrypted_blobs.get(&appointment.inner.encrypted_blob) {
+                match decrypted_blobs.get(appointment.encrypted_blob()) {
                     Some(penalty_tx) => {
                         valid_breaches.insert(
                             uuid,
@@ -445,12 +445,12 @@ impl<'a> Watcher<'a> {
                     }
                     None => {
                         match cryptography::decrypt(
-                            &appointment.inner.encrypted_blob,
+                            &appointment.encrypted_blob(),
                             &dispute_tx.txid(),
                         ) {
                             Ok(penalty_tx) => {
                                 decrypted_blobs.insert(
-                                    appointment.inner.encrypted_blob.clone(),
+                                    appointment.encrypted_blob().clone(),
                                     penalty_tx.clone(),
                                 );
                                 valid_breaches.insert(
@@ -805,7 +805,7 @@ mod tests {
             .await
             .unwrap();
 
-        let breach = get_random_breach_from_locator(triggered_appointment.inner.locator);
+        let breach = get_random_breach_from_locator(triggered_appointment.locator());
         watcher.responder.add_tracker(uuid, breach, user_id, 0);
         let receipt = watcher
             .add_appointment(triggered_appointment.inner, signature)
@@ -833,7 +833,7 @@ mod tests {
         assert!(!watcher
             .locator_uuid_map
             .borrow()
-            .contains_key(&appointment_in_cache.inner.locator));
+            .contains_key(&appointment_in_cache.locator()));
         assert!(watcher.responder.has_tracker(&uuid));
 
         // Check data was added to the database
@@ -1195,7 +1195,7 @@ mod tests {
             watcher
                 .locator_uuid_map
                 .borrow_mut()
-                .insert(appointment.inner.locator, HashSet::from_iter([uuid]));
+                .insert(appointment.locator(), HashSet::from_iter([uuid]));
 
             // Add data to the database to check data deletion
             store_appointment_and_fks_to_db(&dbm.lock().unwrap(), &uuid, &appointment);
@@ -1207,14 +1207,14 @@ mod tests {
                 watcher
                     .locator_uuid_map
                     .borrow_mut()
-                    .get_mut(&appointment.inner.locator)
+                    .get_mut(&appointment.locator())
                     .unwrap()
                     .insert(uuid2);
-                locator_with_multiple_uuids.insert(appointment.inner.locator);
+                locator_with_multiple_uuids.insert(appointment.locator());
             }
 
             all_appointments.insert(uuid);
-            uuid_locator_map.insert(uuid, appointment.inner.locator);
+            uuid_locator_map.insert(uuid, appointment.locator());
 
             // Add some appointments to be deleted
             if i % 2 == 0 {
@@ -1317,8 +1317,8 @@ mod tests {
         watcher.register(&user2_id).unwrap();
 
         let appointment = generate_dummy_appointment(None);
-        let uuid1 = UUID::new(&appointment.inner.locator, &user_id);
-        let uuid2 = UUID::new(&appointment.inner.locator, &user2_id);
+        let uuid1 = UUID::new(&appointment.locator(), &user_id);
+        let uuid2 = UUID::new(&appointment.locator(), &user2_id);
 
         let user_sig = cryptography::sign(&appointment.inner.serialize(), &user_sk).unwrap();
         watcher
@@ -1342,7 +1342,7 @@ mod tests {
         // Both appointments can be found before mining a block, only the user's 2 can be found afterwards
         for uuid in vec![uuid1, uuid2] {
             assert!(watcher.appointments.borrow().contains_key(&uuid));
-            assert!(watcher.locator_uuid_map.borrow()[&appointment.inner.locator].contains(&uuid));
+            assert!(watcher.locator_uuid_map.borrow()[&appointment.locator()].contains(&uuid));
         }
         assert!(watcher.gatekeeper.registered_users.borrow()[&user_id]
             .appointments
@@ -1354,7 +1354,7 @@ mod tests {
         watcher.block_connected(&chain.generate(None), chain.blocks.len() as u32);
 
         assert!(!watcher.appointments.borrow().contains_key(&uuid1));
-        assert!(!watcher.locator_uuid_map.borrow()[&appointment.inner.locator].contains(&uuid1));
+        assert!(!watcher.locator_uuid_map.borrow()[&appointment.locator()].contains(&uuid1));
         assert!(watcher.gatekeeper.registered_users.borrow()[&user_id]
             .appointments
             .contains_key(&uuid1));
@@ -1364,7 +1364,7 @@ mod tests {
         ));
 
         assert!(watcher.appointments.borrow().contains_key(&uuid2));
-        assert!(watcher.locator_uuid_map.borrow()[&appointment.inner.locator].contains(&uuid2));
+        assert!(watcher.locator_uuid_map.borrow()[&appointment.locator()].contains(&uuid2));
         assert!(watcher.gatekeeper.registered_users.borrow()[&user2_id]
             .appointments
             .contains_key(&uuid2));
@@ -1377,7 +1377,7 @@ mod tests {
         let dispute_tx = get_random_tx();
         let appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
         let sig = cryptography::sign(&appointment.inner.serialize(), &user2_sk).unwrap();
-        let uuid = UUID::new(&appointment.inner.locator, &user2_id);
+        let uuid = UUID::new(&appointment.locator(), &user2_id);
         watcher
             .add_appointment(appointment.inner.clone(), sig)
             .await
@@ -1400,10 +1400,11 @@ mod tests {
         // Checks invalid triggers. Add a new appointment and trigger it with invalid data.
         let dispute_tx = get_random_tx();
         let mut appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
-        // Modify the encrypted blob so the data is invalid both non-decryptable blobs and blobs with invalid transactions will yield an invalid trigger
-        appointment.inner.encrypted_blob = get_random_bytes(64);
+        // Modify the encrypted blob so the data is invalid.
+        //Both non-decryptable blobs and blobs with invalid transactions will yield an invalid trigger
+        appointment.inner.encrypted_blob.reverse();
         let sig = cryptography::sign(&appointment.inner.serialize(), &user2_sk).unwrap();
-        let uuid = UUID::new(&appointment.inner.locator, &user2_id);
+        let uuid = UUID::new(&appointment.locator(), &user2_id);
         watcher
             .add_appointment(appointment.inner.clone(), sig)
             .await

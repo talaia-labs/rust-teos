@@ -385,7 +385,7 @@ pub(crate) fn generate_dummy_appointment_with_user(
     let mut app = generate_dummy_appointment(dispute_txid);
     app.user_id = user_id;
 
-    (UUID::new(&app.inner.locator, &user_id), app)
+    (UUID::new(&app.locator(), &user_id), app)
 }
 
 pub fn get_random_breach() -> Breach {
