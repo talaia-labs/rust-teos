@@ -522,10 +522,11 @@ impl<'a> chain::Listen for Watcher<'a> {
     fn block_connected(&self, block: &Block, height: u32) {
         log::info!("New block received: {}", block.header.block_hash());
 
-        let mut locator_tx_map = HashMap::new();
-        for tx in block.txdata.iter() {
-            locator_tx_map.insert(Locator::new(tx.txid()), tx.clone());
-        }
+        let locator_tx_map = block
+            .txdata
+            .iter()
+            .map(|tx| (Locator::new(tx.txid()), tx.clone()))
+            .collect();
 
         self.locator_cache
             .borrow_mut()
@@ -541,8 +542,8 @@ impl<'a> chain::Listen for Watcher<'a> {
             let (valid_breaches, invalid_breaches) =
                 self.filter_breaches(self.get_breaches(locator_tx_map));
 
-            let mut appointments_to_delete: HashSet<UUID> = HashSet::new();
-            let mut appointments_to_delete_gatekeeper: HashMap<UUID, UserId> = HashMap::new();
+            let mut appointments_to_delete = HashSet::new();
+            let mut appointments_to_delete_gatekeeper = HashMap::new();
             for uuid in invalid_breaches.into_keys() {
                 appointments_to_delete.insert(uuid);
                 appointments_to_delete_gatekeeper

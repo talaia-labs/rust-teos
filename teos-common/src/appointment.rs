@@ -1,5 +1,5 @@
 use hex;
-use std::fmt;
+use std::{convert::TryInto, fmt};
 
 use bitcoin::Txid;
 
@@ -8,9 +8,7 @@ pub struct Locator([u8; 16]);
 
 impl Locator {
     pub fn new(txid: Txid) -> Self {
-        let mut raw_locator = [0; 16];
-        raw_locator.copy_from_slice(&txid[..16]);
-        Locator(raw_locator)
+        Locator(txid[..16].try_into().unwrap())
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -19,9 +17,7 @@ impl Locator {
 
     pub fn deserialize(data: Vec<u8>) -> Result<Self, ()> {
         if data.len() == 16 {
-            let mut raw_locator = [0; 16];
-            raw_locator.copy_from_slice(&data);
-            Ok(Self(raw_locator))
+            data[..16].try_into().map(|x| Self(x)).map_err(|_| ())
         } else {
             // TODO: Maybe add a more expressive error?
             Err(())

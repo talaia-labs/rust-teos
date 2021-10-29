@@ -21,10 +21,7 @@ pub fn sign(msg: &[u8], sk: &SecretKey) -> Result<String, Error> {
 
 /// Shadows message_signing::verify.
 pub fn verify(msg: &[u8], sig: &str, pk: &PublicKey) -> bool {
-    match message_signing::recover_pk(msg, sig) {
-        Ok(x) => x == *pk,
-        Err(_) => false,
-    }
+    message_signing::recover_pk(msg, sig).map_or_else(|_| false, |x| x == *pk)
 }
 
 /// Shadows message_signing::recover_pk.
@@ -57,10 +54,9 @@ pub fn decrypt(encrypted_blob: &Vec<u8>, secret: &Txid) -> Result<Transaction, D
     let cypher = ChaCha20Poly1305::new(key);
 
     match cypher.decrypt(&nonce, encrypted_blob.as_ref()) {
-        Ok(tx_bytes) => match Transaction::deserialize(&tx_bytes) {
-            Ok(tx) => Ok(tx),
-            Err(e) => Err(DecryptingError::Encode(e)),
-        },
+        Ok(tx_bytes) => {
+            Transaction::deserialize(&tx_bytes).map_err(|e| (DecryptingError::Encode(e)))
+        }
         Err(e) => Err(DecryptingError::AED(e)),
     }
 }

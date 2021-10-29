@@ -62,8 +62,9 @@ impl Carrier {
         let receipt: Receipt;
 
         // FIXME: Temporary hack until bitcoincore_rpc bumps it's version to match ldk's
-        let rpc_tx: RpcTransaction =
-            bitcoincore_rpc::bitcoin::consensus::deserialize(&tx.serialize()).unwrap();
+        let rpc_tx =
+            bitcoincore_rpc::bitcoin::consensus::deserialize::<RpcTransaction>(&tx.serialize())
+                .unwrap();
 
         match self.bitcoin_cli.send_raw_transaction(&rpc_tx) {
             Ok(_) => {
@@ -195,7 +196,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli);
-        let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
         assert!(r.delivered);
@@ -212,7 +213,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli);
-        let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
         assert!(!r.delivered);
@@ -228,7 +229,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli);
-        let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
         assert!(!r.delivered);
@@ -247,7 +248,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli);
-        let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
         assert!(r.delivered);
@@ -263,7 +264,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli);
-        let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
         assert!(!r.delivered);
@@ -277,7 +278,7 @@ mod tests {
         let bitcoin_cli =
             Arc::new(BitcoindClient::new("http://localhost:1234".to_string(), Auth::None).unwrap());
         let mut carrier = Carrier::new(bitcoin_cli);
-        let tx: Transaction = deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
 
         assert!(!r.delivered);

@@ -150,15 +150,18 @@ impl<'a> Responder<'a> {
         // If the tracker is partially kept, the function will log and the return will be false.
         // This may point out that some partial data deletion is happening, which must be fixed.
         self.trackers.borrow().get(uuid).map_or(false, |tracker| {
-            match self.tx_tracker_map.borrow().get(&tracker.penalty_txid) {
-                Some(_) => true,
-                None => {
-                    log::debug!(
-                        "Partially found Tracker. Some data may have not been properly deleted"
-                    );
-                    false
-                }
-            }
+            self.tx_tracker_map
+                .borrow()
+                .get(&tracker.penalty_txid)
+                .map_or(
+                    {
+                        log::debug!(
+                            "Partially found Tracker. Some data may have not been properly deleted"
+                        );
+                        false
+                    },
+                    |_| true,
+                )
         })
     }
 
@@ -348,10 +351,10 @@ impl<'a> Listen for Responder<'a> {
             let completed_trackers = block_on(self.get_completed_trackers());
             let outdated_trackers = self.get_outdated_trackers(&height);
 
-            let mut trackers_to_delete_gk = HashMap::new();
-            for uuid in completed_trackers.iter() {
-                trackers_to_delete_gk.insert(uuid.clone(), self.trackers.borrow()[uuid].user_id);
-            }
+            let trackers_to_delete_gk = completed_trackers
+                .iter()
+                .map(|uuid| (uuid.clone(), self.trackers.borrow()[uuid].user_id))
+                .collect();
 
             self.check_confirmations(&block.txdata);
             self.delete_trackers(completed_trackers, false);

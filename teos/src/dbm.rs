@@ -358,7 +358,10 @@ impl DBM {
 
     pub fn batch_remove_appointments(&self, appointments: &HashSet<UUID>) -> usize {
         let limit = self.connection.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
-        let iter: Vec<Vec<u8>> = appointments.iter().map(|uuid| uuid.serialize()).collect();
+        let iter = appointments
+            .iter()
+            .map(|uuid| uuid.serialize())
+            .collect::<Vec<Vec<u8>>>();
         for chunk in iter.chunks(limit) {
             let query = "DELETE FROM appointments WHERE UUID IN ".to_owned();
             let placeholders = format!("(?{})", (", ?").repeat(chunk.len() - 1));
@@ -403,9 +406,9 @@ impl DBM {
 
         stmt.query_row([key], |row| {
             let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
-            let dispute_tx: Transaction = deserialize(&raw_dispute_tx).unwrap();
+            let dispute_tx = deserialize::<Transaction>(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
-            let penalty_tx: Transaction = deserialize(&raw_penalty_tx).unwrap();
+            let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
             let raw_locator: Vec<u8> = row.get(3).unwrap();
             let locator = Locator::deserialize(raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(4).unwrap();
@@ -433,9 +436,9 @@ impl DBM {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
             let uuid = UUID(raw_uuid[0..20].try_into().unwrap());
             let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
-            let dispute_tx: Transaction = deserialize(&raw_dispute_tx).unwrap();
+            let dispute_tx = deserialize::<Transaction>(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
-            let penalty_tx: Transaction = deserialize(&raw_penalty_tx).unwrap();
+            let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
             let raw_locator: Vec<u8> = row.get(3).unwrap();
             let locator = Locator::deserialize(raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(4).unwrap();

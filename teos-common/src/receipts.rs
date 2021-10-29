@@ -38,7 +38,7 @@ impl RegistrationReceipt {
 
     pub fn serialize(&self) -> Vec<u8> {
         let mut ser = Vec::new();
-        ser.extend_from_slice(&self.user_id.0.serialize());
+        ser.extend_from_slice(&self.user_id.serialize());
         ser.extend_from_slice(&self.available_slots.to_be_bytes());
         ser.extend_from_slice(&self.subscription_expiry.to_be_bytes());
 

@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
 use std::sync::{Arc, Mutex};
 
 use lightning::chain;
@@ -98,19 +99,14 @@ impl Gatekeeper {
         let user_info = match borrowed.get_mut(user_id) {
             // User already exists, updating the info
             Some(user_info) => {
-                match user_info
+                user_info.available_slots = user_info
                     .available_slots
                     .checked_add(self.subscription_slots)
-                {
-                    Some(x) => {
-                        user_info.available_slots = x;
-                        user_info.subscription_expiry = block_count + self.subscription_duration;
-                        self.dbm.lock().unwrap().update_user(user_id, &user_info);
+                    .ok_or(MaxSlotsReached)?;
+                user_info.subscription_expiry = block_count + self.subscription_duration;
+                self.dbm.lock().unwrap().update_user(user_id, &user_info);
 
-                        user_info.clone()
-                    }
-                    None => return Err(MaxSlotsReached),
-                }
+                user_info.clone()
             }
             // New user
             None => {
@@ -169,14 +165,15 @@ impl Gatekeeper {
         &self,
         user_id: &UserId,
     ) -> Result<(bool, u32), AuthenticationFailure<'_>> {
-        match self.registered_users.borrow().get(&user_id) {
-            Some(user_info) => Ok((
-                self.last_known_block_header.height >= user_info.subscription_expiry,
-                user_info.subscription_expiry,
-            )),
-            // This should never happen as long as calls to this method are guarded by authenticate_user
-            None => Err(AuthenticationFailure("User not found.")),
-        }
+        self.registered_users.borrow().get(&user_id).map_or(
+            Err(AuthenticationFailure("User not found.")),
+            |user_info| {
+                Ok((
+                    self.last_known_block_header.height >= user_info.subscription_expiry,
+                    user_info.subscription_expiry,
+                ))
+            },
+        )
     }
 
     pub fn get_outdated_users(&self, block_height: &u32) -> HashMap<UserId, Vec<UUID>> {
@@ -205,13 +202,11 @@ impl Gatekeeper {
     }
 
     pub fn get_outdated_appointments(&self, block_height: &u32) -> HashSet<UUID> {
-        let mut appointments = HashSet::new();
-
-        for uuids in self.get_outdated_users(block_height).into_values() {
-            appointments.extend(uuids);
-        }
-
-        appointments
+        HashSet::from_iter(
+            self.get_outdated_users(block_height)
+                .into_values()
+                .flatten(),
+        )
     }
 
     pub fn update_outdated_users_cache(&self, block_height: &u32) -> HashMap<UserId, Vec<UUID>> {
@@ -229,7 +224,7 @@ impl Gatekeeper {
             // Remove the first entry from the cache if it grows beyond the limit size
             if borrowed.len() > OUTDATED_USERS_CACHE_SIZE_BLOCKS {
                 // TODO: This may be simpler using BTreeMaps once first_entry is not nightly anymore
-                let mut keys: Vec<&u32> = borrowed.keys().to_owned().collect();
+                let mut keys = borrowed.keys().to_owned().collect::<Vec<&u32>>();
                 keys.sort();
                 let first = keys[0].clone();
 
@@ -544,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_get_outdated_users() {
-        let start_height: u32 = START_HEIGHT as u32 + EXPIRY_DELTA;
+        let start_height = START_HEIGHT as u32 + EXPIRY_DELTA;
         let chain = Blockchain::default().with_height(start_height as usize);
         let tip = chain.tip();
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
@@ -603,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_get_outdated_appointments() {
-        let start_height: u32 = START_HEIGHT as u32 + EXPIRY_DELTA;
+        let start_height = START_HEIGHT as u32 + EXPIRY_DELTA;
         let chain = Blockchain::default().with_height(start_height as usize);
         let tip = chain.tip();
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
@@ -656,7 +651,7 @@ mod tests {
 
     #[test]
     fn test_update_outdated_users_cache() {
-        let start_height: u32 = START_HEIGHT as u32 + EXPIRY_DELTA;
+        let start_height = START_HEIGHT as u32 + EXPIRY_DELTA;
         let chain = Blockchain::default().with_height(start_height as usize);
         let tip = chain.tip();
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
