@@ -20,8 +20,6 @@ use lightning_block_sync::http::HttpEndpoint;
 use lightning_block_sync::rpc::RpcClient;
 use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
 
-use crate::convert::BlockchainInfo;
-
 pub struct BitcoindClient {
     bitcoind_rpc_client: Arc<Mutex<RpcClient>>,
     host: String,
@@ -81,7 +79,7 @@ impl BitcoindClient {
         };
 
         // Test that bitcoind is reachable
-        match block_on(client.get_blockchain_info()) {
+        match block_on(client.get_best_block_hash_and_height()) {
             Ok(_) => Ok(client),
             Err(e) => Err(e),
         }
@@ -97,9 +95,11 @@ impl BitcoindClient {
         RpcClient::new(&rpc_credentials, http_endpoint)
     }
 
-    pub async fn get_blockchain_info(&self) -> Result<BlockchainInfo, std::io::Error> {
+    pub async fn get_best_block_hash_and_height(
+        &self,
+    ) -> Result<(BlockHash, Option<u32>), std::io::Error> {
         let mut rpc = self.bitcoind_rpc_client.lock().await;
-        rpc.call_method::<BlockchainInfo>("getblockchaininfo", &vec![])
+        rpc.call_method::<(BlockHash, Option<u32>)>("getblockchaininfo", &vec![])
             .await
     }
 

@@ -1,7 +1,6 @@
 pub mod bitcoin_cli;
 pub mod carrier;
 pub mod chain_monitor;
-mod convert;
 pub mod dbm;
 mod errors;
 mod extended_appointment;
