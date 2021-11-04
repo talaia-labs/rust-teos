@@ -1,6 +1,8 @@
 use simple_logger::init_with_level;
+use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
+use structopt::StructOpt;
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::key::ONE_KEY;
@@ -13,6 +15,7 @@ use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 use rusty_teos::bitcoin_cli::BitcoindClient;
 use rusty_teos::carrier::Carrier;
 use rusty_teos::chain_monitor::ChainMonitor;
+use rusty_teos::config::{Config, Opt};
 use rusty_teos::dbm::DBM;
 use rusty_teos::gatekeeper::Gatekeeper;
 use rusty_teos::responder::Responder;
@@ -43,36 +46,54 @@ where
 
 #[tokio::main]
 pub async fn main() {
-    let host = String::from("localhost");
-    let port = 18443;
-    let user = String::from("user");
-    let password = String::from("passwd");
+    let opt = Opt::from_args();
 
+    // Create data dir if it does not exist
+    fs::create_dir_all(opt.data_dir_absolute_path()).unwrap_or_else(|e| {
+        eprint!("Cannot create data dir: {:?}", e);
+        std::process::exit(-1);
+    });
+
+    // Load conf (from file or defaults) and patch it with the command line parameters received (if any)
+    let mut conf = Config::from_file(opt.data_dir_absolute_path().join("teos.toml"));
+    conf.patch_with_options(opt);
+
+    if conf.debug {
+        init_with_level(log::Level::Debug).unwrap()
+    } else {
+        init_with_level(log::Level::Info).unwrap()
+    }
+
+    // FIXME: Load/ Create a new private key (use the db for this or create a key file?)
     const TOWER_SK: SecretKey = ONE_KEY;
-    const SLOTS: u32 = 21;
-    const DURATION: u32 = 500;
-    const EXPIRY_DELTA: u32 = 42;
 
-    // Init with loglevel=Debug for now, make it configurable later on.
-    init_with_level(log::Level::Debug).unwrap();
-
-    // Initialize our bitcoind client.
-    let bitcoin_cli =
-        match BitcoindClient::new(host.clone(), port.clone(), user.clone(), password.clone()).await
-        {
-            Ok(client) => Arc::new(client),
-            Err(e) => {
-                log::error!("Failed to connect to bitcoind client: {}", e);
-                return;
-            }
-        };
+    // Initialize our bitcoind client
+    let bitcoin_cli = match BitcoindClient::new(
+        conf.btc_rpc_connect.clone(),
+        conf.btc_rpc_port,
+        conf.btc_rpc_user.clone(),
+        conf.btc_rpc_password.clone(),
+    )
+    .await
+    {
+        Ok(client) => Arc::new(client),
+        Err(e) => {
+            log::error!("Failed to connect to bitcoind client: {}", e);
+            return;
+        }
+    };
 
     // FIXME: Temporary. We're using bitcoin_core_rpc and rust-lightning's rpc until they both get merged
     // https://github.com/rust-bitcoin/rust-bitcoincore-rpc/issues/166
+    let schema = if !conf.btc_rpc_connect.starts_with("http") {
+        "http://"
+    } else {
+        ""
+    };
     let rpc = Arc::new(
         Client::new(
-            "http://localhost:18443".to_string(),
-            Auth::UserPass("user".to_string(), "passwd".to_string()),
+            format!("{}{}:{}", schema, conf.btc_rpc_connect, conf.btc_rpc_port).to_string(),
+            Auth::UserPass(conf.btc_rpc_user, conf.btc_rpc_password),
         )
         .unwrap(),
     );
@@ -85,7 +106,13 @@ pub async fn main() {
 
     let dbm = Arc::new(Mutex::new(DBM::new("teos_db.sql3").unwrap()));
 
-    let gatekeeper = Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+    let gatekeeper = Gatekeeper::new(
+        tip,
+        conf.subscription_slots,
+        conf.subscription_duration,
+        conf.expiry_delta,
+        dbm.clone(),
+    );
     let carrier = Carrier::new(rpc.clone());
     let responder = Responder::new(carrier, &gatekeeper, dbm.clone(), tip);
     let watcher = Watcher::new(
