@@ -59,7 +59,6 @@ pub struct Opt {
     #[structopt(long)]
     pub debug: Option<bool>,
 
-    // FIXME: Not currently used
     /// Overwrites the tower secret key. THIS IS IRREVERSIBLE AND WILL CHANGE YOUR TOWER ID
     #[structopt(long)]
     pub overwrite_key: bool,
@@ -111,6 +110,7 @@ pub struct Config {
     // Flags
     pub daemon: bool,
     pub debug: bool,
+    pub overwrite_key: bool,
 
     // General
     pub subscription_slots: u32,
@@ -176,6 +176,8 @@ impl Config {
         if options.debug.is_some() {
             self.debug = options.debug.unwrap()
         }
+
+        self.overwrite_key = options.overwrite_key
     }
 
     pub fn verify(&self) {
@@ -221,6 +223,7 @@ impl Default for Config {
             btc_rpc_port: 8832,
             daemon: false,
             debug: false,
+            overwrite_key: false,
             subscription_slots: 10000,
             subscription_duration: 4320,
             expiry_delta: 6,

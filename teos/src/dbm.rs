@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
+use std::str::FromStr;
 
+use bitcoin::secp256k1::SecretKey;
 use rusqlite::ffi::{SQLITE_CONSTRAINT_FOREIGNKEY, SQLITE_CONSTRAINT_PRIMARYKEY};
 use rusqlite::limits::Limit;
 use rusqlite::{params, params_from_iter, Connection, Error as SqliteError, ErrorCode, Params};
@@ -86,6 +88,14 @@ impl DBM {
             "CREATE TABLE IF NOT EXISTS last_known_block (
                 id INT PRIMARY KEY,
                 block_hash INT NOT NULL
+            )",
+            [],
+        )?;
+
+        self.connection.execute(
+            "CREATE TABLE IF NOT EXISTS keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key INT NOT NULL
             )",
             [],
         )?;
@@ -518,6 +528,26 @@ impl DBM {
     pub fn load_last_known_block_responder(&self) -> Result<BlockHash, Error> {
         self.load_last_known_block(Component::Responder)
     }
+
+    pub fn store_key(&self, sk: &SecretKey) -> Result<(), Error> {
+        let query = "INSERT INTO keys (key) VALUES (?)";
+        self.store_data(query, params![sk.to_string()])
+    }
+
+    pub fn load_tower_key(&self) -> Result<SecretKey, Error> {
+        let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT key FROM keys WHERE id = (SELECT seq FROM sqlite_sequence WHERE name=(?))",
+            )
+            .unwrap();
+
+        stmt.query_row(["keys"], |row| {
+            let sk: String = row.get(0).unwrap();
+            Ok(SecretKey::from_str(&sk).unwrap())
+        })
+        .map_err(|_| Error::NotFound)
+    }
 }
 
 #[cfg(test)]
@@ -526,9 +556,10 @@ mod tests {
 
     use crate::test_utils::{
         generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_breach_from_locator, get_random_bytes, get_random_tracker, get_random_user_id,
+        get_random_breach_from_locator, get_random_tracker, get_random_user_id,
     };
     use std::iter::FromIterator;
+    use teos_common::cryptography::get_random_bytes;
 
     impl DBM {
         pub fn in_memory() -> Result<Self, SqliteError> {

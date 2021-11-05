@@ -5,8 +5,7 @@ use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
 
 use bitcoin::network::constants::Network;
-use bitcoin::secp256k1::key::ONE_KEY;
-use bitcoin::secp256k1::SecretKey;
+use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use bitcoincore_rpc::{Auth, Client};
 use lightning_block_sync::init::validate_best_block_header;
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlock, ValidatedBlockHeader};
@@ -20,6 +19,7 @@ use rusty_teos::dbm::DBM;
 use rusty_teos::gatekeeper::Gatekeeper;
 use rusty_teos::responder::Responder;
 use rusty_teos::watcher::Watcher;
+use teos_common::cryptography::get_random_keypair;
 
 async fn get_last_n_blocks<B, T>(
     poller: &mut ChainPoller<B, T>,
@@ -44,6 +44,12 @@ where
     last_n_blocks
 }
 
+fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
+    let (sk, pk) = get_random_keypair();
+    db.store_key(&sk).unwrap();
+    (sk, pk)
+}
+
 #[tokio::main]
 pub async fn main() {
     let opt = Opt::from_args();
@@ -58,14 +64,33 @@ pub async fn main() {
     let mut conf = Config::from_file(opt.data_dir_absolute_path().join("teos.toml"));
     conf.patch_with_options(opt);
 
+    // Set log level
     if conf.debug {
         init_with_level(log::Level::Debug).unwrap()
     } else {
         init_with_level(log::Level::Info).unwrap()
     }
 
-    // FIXME: Load/ Create a new private key (use the db for this or create a key file?)
-    const TOWER_SK: SecretKey = ONE_KEY;
+    let dbm = Arc::new(Mutex::new(DBM::new("teos_db.sql3").unwrap()));
+
+    // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
+    // key straightaway
+    let locked_db = dbm.lock().unwrap();
+
+    let (tower_sk, tower_pk) = if conf.overwrite_key {
+        log::info!("Overwriting tower keys");
+        create_new_tower_keypair(&locked_db)
+    } else {
+        match locked_db.load_tower_key() {
+            Ok(sk) => (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
+            Err(_) => {
+                log::info!("Tower keys not found. Creating a fresh set");
+                create_new_tower_keypair(&locked_db)
+            }
+        }
+    };
+
+    log::info!("tower_id = {}", tower_pk);
 
     // Initialize our bitcoind client
     let bitcoin_cli = match BitcoindClient::new(
@@ -104,8 +129,6 @@ pub async fn main() {
     let cache = &mut UnboundedCache::new();
     let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
 
-    let dbm = Arc::new(Mutex::new(DBM::new("teos_db.sql3").unwrap()));
-
     let gatekeeper = Gatekeeper::new(
         tip,
         conf.subscription_slots,
@@ -120,7 +143,7 @@ pub async fn main() {
         &responder,
         last_n_blocks,
         tip,
-        TOWER_SK,
+        tower_sk,
         dbm.clone(),
     )
     .await;
@@ -130,6 +153,6 @@ pub async fn main() {
 
     // DISCUSS: the CM may not be necessary since it's only being used to log stuff. Doing spv_client.poll_best_tip().await will
     // have the same functionality. Consider whether to get rid of it of to massively simplify it.
-    let mut chain_monitor = ChainMonitor::new(spv_client, tip, 1).await;
+    let mut chain_monitor = ChainMonitor::new(spv_client, tip, 60).await;
     chain_monitor.monitor_chain().await.unwrap();
 }
