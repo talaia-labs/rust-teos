@@ -81,12 +81,11 @@ pub fn compute_appointment_slots(blob_size: usize, blob_max_size: usize) -> u32 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use std::convert::TryInto;
 
-    use crate::test_utils::{get_random_bytes, get_random_user_id};
-
+    use crate::test_utils::get_random_user_id;
     use teos_common::appointment::Appointment;
+    use teos_common::cryptography::get_random_bytes;
 
     #[test]
     fn test_get_summary() {

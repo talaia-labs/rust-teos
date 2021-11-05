@@ -7,7 +7,6 @@
  * at your option.
 */
 
-use rand::distributions::Uniform;
 use rand::Rng;
 use std::convert::TryInto;
 use std::sync::Arc;
@@ -28,8 +27,6 @@ use bitcoin::hash_types::Txid;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::Hash;
 use bitcoin::network::constants::Network;
-use bitcoin::secp256k1::key::{PublicKey, SecretKey};
-use bitcoin::secp256k1::Secp256k1;
 use bitcoin::util::hash::bitcoin_merkle_root;
 use bitcoin::util::psbt::serialize::Deserialize;
 use bitcoin::util::uint::Uint256;
@@ -39,7 +36,7 @@ use lightning_block_sync::{
 };
 
 use teos_common::appointment::{Appointment, Locator};
-use teos_common::cryptography::encrypt;
+use teos_common::cryptography::{encrypt, get_random_bytes, get_random_keypair};
 use teos_common::UserId;
 
 use crate::carrier::Carrier;
@@ -300,29 +297,10 @@ impl BlockSource for Blockchain {
     }
 }
 
-pub(crate) fn get_random_bytes(size: usize) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
-    let uniform_u8 = Uniform::new(u8::MIN, u8::MAX);
-    let v: Vec<u8> = (&mut rng).sample_iter(uniform_u8).take(size).collect();
-
-    v
-}
-
 pub(crate) fn generate_uuid() -> UUID {
     let mut rng = rand::thread_rng();
 
     UUID(rng.gen())
-}
-
-pub(crate) fn get_random_keypair() -> (SecretKey, PublicKey) {
-    let raw_sk = get_random_bytes(32);
-
-    loop {
-        match SecretKey::from_slice(&raw_sk) {
-            Ok(sk) => return (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
-            Err(_) => (),
-        }
-    }
 }
 
 pub(crate) fn get_random_user_id() -> UserId {

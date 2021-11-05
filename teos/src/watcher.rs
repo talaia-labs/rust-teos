@@ -607,10 +607,11 @@ mod tests {
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, generate_dummy_appointment, generate_dummy_appointment_with_user,
-        generate_uuid, get_random_breach_from_locator, get_random_bytes, get_random_keypair,
-        get_random_tx, start_server, store_appointment_and_fks_to_db, BitcoindMock, Blockchain,
-        MockOptions, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        generate_uuid, get_random_breach_from_locator, get_random_tx, start_server,
+        store_appointment_and_fks_to_db, BitcoindMock, Blockchain, MockOptions, MockedServerQuery,
+        DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
+    use teos_common::cryptography::{get_random_bytes, get_random_keypair};
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;

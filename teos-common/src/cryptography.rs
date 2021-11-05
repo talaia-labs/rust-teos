@@ -1,8 +1,11 @@
+use rand::distributions::Uniform;
+use rand::Rng;
+
 use chacha20poly1305::aead::{Aead, NewAead};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 
 use bitcoin::hashes::{sha256, Hash};
-use bitcoin::secp256k1::{Error, PublicKey, SecretKey};
+use bitcoin::secp256k1::{Error, PublicKey, Secp256k1, SecretKey};
 use bitcoin::util::psbt::serialize::{Deserialize, Serialize};
 use bitcoin::{Transaction, Txid};
 use lightning::util::message_signing;
@@ -58,6 +61,25 @@ pub fn decrypt(encrypted_blob: &Vec<u8>, secret: &Txid) -> Result<Transaction, D
             Transaction::deserialize(&tx_bytes).map_err(|e| (DecryptingError::Encode(e)))
         }
         Err(e) => Err(DecryptingError::AED(e)),
+    }
+}
+
+pub fn get_random_bytes(size: usize) -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    let uniform_u8 = Uniform::new(u8::MIN, u8::MAX);
+    let v: Vec<u8> = (&mut rng).sample_iter(uniform_u8).take(size).collect();
+
+    v
+}
+
+pub fn get_random_keypair() -> (SecretKey, PublicKey) {
+    let raw_sk = get_random_bytes(32);
+
+    loop {
+        match SecretKey::from_slice(&raw_sk) {
+            Ok(sk) => return (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
+            Err(_) => (),
+        }
     }
 }
 

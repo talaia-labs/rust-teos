@@ -10,6 +10,7 @@ edition = "2018"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 hex = "0.4.3"
 
+rand = "0.8.4"
 chacha20poly1305 = "0.8.0"
 
 bitcoin = "0.27"
