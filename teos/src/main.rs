@@ -53,15 +53,16 @@ fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
 #[tokio::main]
 pub async fn main() {
     let opt = Opt::from_args();
+    let path = opt.data_dir_absolute_path();
 
     // Create data dir if it does not exist
-    fs::create_dir_all(opt.data_dir_absolute_path()).unwrap_or_else(|e| {
+    fs::create_dir_all(&path).unwrap_or_else(|e| {
         eprint!("Cannot create data dir: {:?}", e);
         std::process::exit(-1);
     });
 
     // Load conf (from file or defaults) and patch it with the command line parameters received (if any)
-    let mut conf = Config::from_file(opt.data_dir_absolute_path().join("teos.toml"));
+    let mut conf = Config::from_file(path.join("teos.toml"));
     conf.patch_with_options(opt);
 
     // Set log level
@@ -71,7 +72,7 @@ pub async fn main() {
         init_with_level(log::Level::Info).unwrap()
     }
 
-    let dbm = Arc::new(Mutex::new(DBM::new("teos_db.sql3").unwrap()));
+    let dbm = Arc::new(Mutex::new(DBM::new(path.join("teos_db.sql3")).unwrap()));
 
     // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
     // key straightaway

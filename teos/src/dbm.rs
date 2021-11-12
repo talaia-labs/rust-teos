@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use bitcoin::secp256k1::SecretKey;
@@ -40,7 +41,7 @@ pub struct DBM {
 }
 
 impl DBM {
-    pub fn new(db_path: &str) -> Result<Self, SqliteError> {
+    pub fn new(db_path: PathBuf) -> Result<Self, SqliteError> {
         let connection = Connection::open(db_path)?;
         connection.execute("PRAGMA foreign_keys=1;", [])?;
         let dbm = Self { connection };
