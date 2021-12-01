@@ -22,9 +22,9 @@ rusqlite = {version = "0.26.0", features = ["bundled", "limits"]}
 tokio = { version = "1.5", features = [ "io-util", "macros", "rt", "rt-multi-thread", "sync", "net", "time" ] }
 
 bitcoin = "0.27"
-lightning-block-sync = {version = "0.0.100", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
-lightning-net-tokio = { version = "0.0.100", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
-lightning = { version = "0.0.100", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+lightning-block-sync = {version = "0.0.103", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
+lightning-net-tokio = { version = "0.0.103", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+lightning = { version = "0.0.103", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
 bitcoincore-rpc = "0.13.0"
 
 teos-common = {path = "../teos-common"}
