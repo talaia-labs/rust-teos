@@ -130,7 +130,6 @@ impl Config {
                 },
                 |config| {
                     println!("Loading configuration from file");
-                    config.verify();
                     config
                 },
             ),
@@ -144,43 +143,43 @@ impl Config {
 
     pub fn patch_with_options(&mut self, options: Opt) {
         if options.api_bind.is_some() {
-            self.api_bind = options.api_bind.unwrap()
+            self.api_bind = options.api_bind.unwrap();
         }
         if options.api_port.is_some() {
-            self.api_port = options.api_port.unwrap()
+            self.api_port = options.api_port.unwrap();
         }
         if options.rpc_bind.is_some() {
-            self.rpc_bind = options.rpc_bind.unwrap()
+            self.rpc_bind = options.rpc_bind.unwrap();
         }
         if options.rpc_port.is_some() {
-            self.rpc_port = options.rpc_port.unwrap()
+            self.rpc_port = options.rpc_port.unwrap();
         }
         if options.btc_network.is_some() {
-            self.btc_network = options.btc_network.unwrap()
+            self.btc_network = options.btc_network.unwrap();
         }
         if options.btc_rpc_user.is_some() {
-            self.btc_rpc_user = options.btc_rpc_user.unwrap()
+            self.btc_rpc_user = options.btc_rpc_user.unwrap();
         }
         if options.btc_rpc_password.is_some() {
-            self.btc_rpc_password = options.btc_rpc_password.unwrap()
+            self.btc_rpc_password = options.btc_rpc_password.unwrap();
         }
         if options.btc_rpc_connect.is_some() {
-            self.btc_rpc_connect = options.btc_rpc_connect.unwrap()
+            self.btc_rpc_connect = options.btc_rpc_connect.unwrap();
         }
         if options.btc_rpc_port.is_some() {
-            self.btc_rpc_port = options.btc_rpc_port.unwrap()
+            self.btc_rpc_port = options.btc_rpc_port.unwrap();
         }
         if options.daemon.is_some() {
-            self.daemon = options.daemon.unwrap()
+            self.daemon = options.daemon.unwrap();
         }
         if options.debug.is_some() {
-            self.debug = options.debug.unwrap()
+            self.debug = options.debug.unwrap();
         }
-
-        self.overwrite_key = options.overwrite_key
+        self.overwrite_key = options.overwrite_key;
     }
 
-    pub fn verify(&self) {
+    // FIXME: this may not be the best name given the btc_rpc_port default logic
+    pub fn verify(&mut self) {
         if self.btc_rpc_user == String::new() {
             eprint!("btc_rpc_user must be set");
             std::process::exit(-1);
@@ -191,20 +190,21 @@ impl Config {
         }
 
         // TODO: check if we can simplify this
-        if ![
-            "main".to_owned(),
-            "mainnet".to_owned(),
-            "test".to_owned(),
-            "testnet".to_owned(),
-            "regtest".to_owned(),
-        ]
-        .contains(&self.btc_network)
-        {
+        if !["main", "mainnet", "test", "testnet", "regtest"].contains(&self.btc_network.as_str()) {
             eprint!(
                 "btc_network not recognized. Expected [mainnet, testnet, regtest], received {}",
                 self.btc_network
             );
             std::process::exit(-1);
+        } else if self.btc_rpc_port == 0 {
+            // btc_rpc_port is set to 0 by default so users do not have to set both btc_network and btc_rpc_port
+            // if they are using default values, but they are also able to specify a custom port if desired.
+            // If the value is still 0 at this point, set it up to the proper default.
+            self.btc_rpc_port = match self.btc_network.as_str() {
+                "test" | "testnet" => 18333,
+                "regtest" => 18443,
+                _ => 8442,
+            };
         }
     }
 }
@@ -220,7 +220,7 @@ impl Default for Config {
             btc_rpc_user: String::new(),
             btc_rpc_password: String::new(),
             btc_rpc_connect: "localhost".to_owned(),
-            btc_rpc_port: 8832,
+            btc_rpc_port: 0,
             daemon: false,
             debug: false,
             overwrite_key: false,

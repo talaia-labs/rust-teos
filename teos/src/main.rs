@@ -64,6 +64,7 @@ pub async fn main() {
     // Load conf (from file or defaults) and patch it with the command line parameters received (if any)
     let mut conf = Config::from_file(path.join("teos.toml"));
     conf.patch_with_options(opt);
+    conf.verify();
 
     // Set log level
     if conf.debug {
