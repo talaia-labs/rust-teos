@@ -74,11 +74,11 @@ impl Carrier {
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                 // Since we're pushing a raw transaction to the network we can face several rejections
                 rpc_errors::RPC_VERIFY_REJECTED => {
-                    log::error!("Transaction couldn't be broadcast.  {:?}", rpcerr);
+                    log::error!("Transaction couldn't be broadcast. {:?}", rpcerr);
                     receipt = Receipt::new(false, None, Some(rpc_errors::RPC_VERIFY_REJECTED))
                 }
                 rpc_errors::RPC_VERIFY_ERROR => {
-                    log::error!("Transaction couldn't be broadcast.  {:?}", rpcerr);
+                    log::error!("Transaction couldn't be broadcast. {:?}", rpcerr);
                     receipt = Receipt::new(false, None, Some(rpc_errors::RPC_VERIFY_ERROR))
                 }
                 rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {

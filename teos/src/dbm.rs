@@ -3,13 +3,13 @@ use std::convert::TryInto;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use bitcoin::secp256k1::SecretKey;
 use rusqlite::ffi::{SQLITE_CONSTRAINT_FOREIGNKEY, SQLITE_CONSTRAINT_PRIMARYKEY};
 use rusqlite::limits::Limit;
 use rusqlite::{params, params_from_iter, Connection, Error as SqliteError, ErrorCode, Params};
 
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::Hash;
+use bitcoin::secp256k1::SecretKey;
 use bitcoin::util::psbt::serialize::Serialize;
 use bitcoin::{BlockHash, Transaction};
 
@@ -185,7 +185,7 @@ impl DBM {
             .prepare("SELECT available_slots, subscription_expiry FROM users WHERE user_id=(?)")
             .unwrap();
         let mut user = stmt
-            .query_row([key.clone()], |row| {
+            .query_row([&key], |row| {
                 let slots = row.get(0).unwrap();
                 let expiry = row.get(1).unwrap();
                 Ok(UserInfo::new(slots, expiry))
