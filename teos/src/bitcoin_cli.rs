@@ -20,15 +20,22 @@ use lightning_block_sync::http::HttpEndpoint;
 use lightning_block_sync::rpc::RpcClient;
 use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
 
+/// A simple implementation of a bitcoind client (`bitcoin-cli`) with the minimal functionality required by the tower.
 pub struct BitcoindClient<'a> {
+    /// The underlying RPC client.
     bitcoind_rpc_client: Arc<Mutex<RpcClient>>,
+    /// The hostname to connect to.
     host: &'a str,
+    /// The port to connect to.
     port: u16,
+    /// The RPC user `bitcoind` is configured with.
     rpc_user: &'a str,
+    /// The RPC password for the given user.
     rpc_password: &'a str,
 }
 
 impl BlockSource for &BitcoindClient<'_> {
+    /// Gets a block header given its hash.
     fn get_header<'a>(
         &'a mut self,
         header_hash: &'a BlockHash,
@@ -40,6 +47,7 @@ impl BlockSource for &BitcoindClient<'_> {
         })
     }
 
+    /// Gets a block given its hash.
     fn get_block<'a>(
         &'a mut self,
         header_hash: &'a BlockHash,
@@ -50,6 +58,7 @@ impl BlockSource for &BitcoindClient<'_> {
         })
     }
 
+    /// Get the best block known by our node.
     fn get_best_block<'a>(&'a mut self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
         Box::pin(async move {
             let mut rpc = self.bitcoind_rpc_client.lock().await;
@@ -59,6 +68,7 @@ impl BlockSource for &BitcoindClient<'_> {
 }
 
 impl<'a> BitcoindClient<'a> {
+    /// Creates a new [BitcoindClient] instance.
     pub async fn new(
         host: &'a str,
         port: u16,
@@ -84,12 +94,14 @@ impl<'a> BitcoindClient<'a> {
         }
     }
 
+    /// Gets a fresh RPC client.
     pub fn get_new_rpc_client(&self) -> std::io::Result<RpcClient> {
         let http_endpoint = HttpEndpoint::for_host(self.host.to_owned()).with_port(self.port);
         let rpc_credentials = base64::encode(format!("{}:{}", self.rpc_user, self.rpc_password));
         RpcClient::new(&rpc_credentials, http_endpoint)
     }
 
+    /// Gets the hash of the chain tip and its height.
     pub async fn get_best_block_hash_and_height(
         &self,
     ) -> Result<(BlockHash, Option<u32>), std::io::Error> {
@@ -98,6 +110,7 @@ impl<'a> BitcoindClient<'a> {
             .await
     }
 
+    /// Sends a transaction to the network.
     pub async fn send_raw_transaction(&self, raw_tx: &Transaction) -> Result<Txid, std::io::Error> {
         let mut rpc = self.bitcoind_rpc_client.lock().await;
 
@@ -106,6 +119,7 @@ impl<'a> BitcoindClient<'a> {
             .await
     }
 
+    /// Gets a transaction given its id.
     pub async fn get_raw_transaction(&self, txid: &Txid) -> Result<Transaction, std::io::Error> {
         let mut rpc = self.bitcoind_rpc_client.lock().await;
 

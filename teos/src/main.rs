@@ -45,7 +45,7 @@ where
 
 fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
     let (sk, pk) = get_random_keypair();
-    db.store_key(&sk).unwrap();
+    db.store_tower_key(&sk).unwrap();
     (sk, pk)
 }
 
@@ -57,7 +57,7 @@ pub async fn main() {
     // Create data dir if it does not exist
     fs::create_dir_all(&path).unwrap_or_else(|e| {
         eprint!("Cannot create data dir: {:?}", e);
-        std::process::exit(-1);
+        std::process::exit(1);
     });
 
     // Load conf (from file or defaults) and patch it with the command line parameters received (if any)
