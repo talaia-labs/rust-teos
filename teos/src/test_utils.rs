@@ -104,12 +104,7 @@ impl Blockchain {
         };
 
         for _ in 1..=height {
-            let mut txs = Vec::new();
-            for _ in 0..tx_count {
-                txs.push(get_random_tx());
-            }
-
-            self.generate_with_txs(txs);
+            self.generate_with_txs((0..tx_count).map(|_| get_random_tx()).collect());
         }
 
         self
@@ -334,7 +329,7 @@ pub(crate) fn get_random_tx() -> Transaction {
 
 pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> ExtendedAppointment {
     let dispute_txid = match dispute_txid {
-        Some(l) => l.clone(),
+        Some(l) => *l,
         None => {
             let prev_txid_bytes = get_random_bytes(32);
             Txid::from_slice(&prev_txid_bytes).unwrap()
@@ -363,7 +358,7 @@ pub(crate) fn generate_dummy_appointment_with_user(
     let mut app = generate_dummy_appointment(dispute_txid);
     app.user_id = user_id;
 
-    (UUID::new(&app.locator(), &user_id), app)
+    (UUID::new(app.locator(), user_id), app)
 }
 
 pub fn get_random_breach() -> Breach {
@@ -385,10 +380,10 @@ pub fn get_random_tracker(user_id: UserId) -> TransactionTracker {
     TransactionTracker::new(breach, user_id)
 }
 
-pub fn store_appointment_and_fks_to_db(dbm: &DBM, uuid: &UUID, appointment: &ExtendedAppointment) {
-    dbm.store_user(&appointment.user_id, &UserInfo::new(21, 42))
+pub fn store_appointment_and_fks_to_db(dbm: &DBM, uuid: UUID, appointment: &ExtendedAppointment) {
+    dbm.store_user(appointment.user_id, &UserInfo::new(21, 42))
         .unwrap();
-    dbm.store_appointment(&uuid, &appointment).unwrap();
+    dbm.store_appointment(uuid, &appointment).unwrap();
 }
 
 pub enum MockedServerQuery {

@@ -20,15 +20,15 @@ use lightning_block_sync::http::HttpEndpoint;
 use lightning_block_sync::rpc::RpcClient;
 use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
 
-pub struct BitcoindClient {
+pub struct BitcoindClient<'a> {
     bitcoind_rpc_client: Arc<Mutex<RpcClient>>,
-    host: String,
+    host: &'a str,
     port: u16,
-    rpc_user: String,
-    rpc_password: String,
+    rpc_user: &'a str,
+    rpc_password: &'a str,
 }
 
-impl BlockSource for &BitcoindClient {
+impl BlockSource for &BitcoindClient<'_> {
     fn get_header<'a>(
         &'a mut self,
         header_hash: &'a BlockHash,
@@ -58,16 +58,15 @@ impl BlockSource for &BitcoindClient {
     }
 }
 
-impl BitcoindClient {
+impl<'a> BitcoindClient<'a> {
     pub async fn new(
-        host: String,
+        host: &'a str,
         port: u16,
-        rpc_user: String,
-        rpc_password: String,
-    ) -> std::io::Result<Self> {
-        let http_endpoint = HttpEndpoint::for_host(host.clone()).with_port(port);
-        let rpc_credentials =
-            base64::encode(format!("{}:{}", rpc_user.clone(), rpc_password.clone()));
+        rpc_user: &'a str,
+        rpc_password: &'a str,
+    ) -> std::io::Result<BitcoindClient<'a>> {
+        let http_endpoint = HttpEndpoint::for_host(host.to_owned()).with_port(port);
+        let rpc_credentials = base64::encode(format!("{}:{}", rpc_user, rpc_password));
         let bitcoind_rpc_client = RpcClient::new(&rpc_credentials, http_endpoint)?;
 
         let client = Self {
@@ -86,12 +85,8 @@ impl BitcoindClient {
     }
 
     pub fn get_new_rpc_client(&self) -> std::io::Result<RpcClient> {
-        let http_endpoint = HttpEndpoint::for_host(self.host.clone()).with_port(self.port);
-        let rpc_credentials = base64::encode(format!(
-            "{}:{}",
-            self.rpc_user.clone(),
-            self.rpc_password.clone()
-        ));
+        let http_endpoint = HttpEndpoint::for_host(self.host.to_owned()).with_port(self.port);
+        let rpc_credentials = base64::encode(format!("{}:{}", self.rpc_user, self.rpc_password));
         RpcClient::new(&rpc_credentials, http_endpoint)
     }
 

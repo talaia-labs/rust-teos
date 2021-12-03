@@ -133,7 +133,7 @@ impl DBM {
         self.remove_data(query, params)
     }
 
-    pub fn store_user(&self, user_id: &UserId, user_info: &UserInfo) -> Result<(), Error> {
+    pub fn store_user(&self, user_id: UserId, user_info: &UserInfo) -> Result<(), Error> {
         let query =
             "INSERT INTO users (user_id, available_slots, subscription_expiry) VALUES (?1, ?2, ?3)";
 
@@ -156,7 +156,7 @@ impl DBM {
         }
     }
 
-    pub fn update_user(&self, user_id: &UserId, user_info: &UserInfo) {
+    pub fn update_user(&self, user_id: UserId, user_info: &UserInfo) {
         let query =
             "UPDATE users SET available_slots=(?1), subscription_expiry=(?2) WHERE user_id=(?3)";
         match self.update_data(
@@ -178,7 +178,7 @@ impl DBM {
 
     // DISCUSS: This could be implemented with an INNER JOIN query, but the logic will be more complex given each row
     // will have the user info replicated. Consider whether it makes sense to change it.
-    pub fn load_user(&self, user_id: &UserId) -> Result<UserInfo, Error> {
+    pub fn load_user(&self, user_id: UserId) -> Result<UserInfo, Error> {
         let key = user_id.serialize();
         let mut stmt = self
             .connection
@@ -235,7 +235,7 @@ impl DBM {
         users
     }
 
-    pub fn remove_user(&self, user_id: &UserId) {
+    pub fn remove_user(&self, user_id: UserId) {
         let query = "DELETE FROM users WHERE user_id=(?)";
         match self.remove_data(query, params![user_id.serialize()]) {
             Ok(_) => {
@@ -249,7 +249,7 @@ impl DBM {
 
     pub fn store_appointment(
         &self,
-        uuid: &UUID,
+        uuid: UUID,
         appointment: &ExtendedAppointment,
     ) -> Result<(), Error> {
         let query = "INSERT INTO appointments (UUID, locator, encrypted_blob, to_self_delay, user_signature, start_block, user_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
@@ -276,7 +276,7 @@ impl DBM {
         }
     }
 
-    pub fn update_appointment(&self, uuid: &UUID, appointment: &ExtendedAppointment) {
+    pub fn update_appointment(&self, uuid: UUID, appointment: &ExtendedAppointment) {
         // DISCUSS: Check what fields we'd like to make updatable. e_blob and signature are the obvious, to_self_delay and start_block may not be necessary (or even risky)
         let query =
             "UPDATE appointments SET encrypted_blob=(?1), to_self_delay=(?2), user_signature=(?3), start_block=(?4) WHERE UUID=(?5)";
@@ -299,7 +299,7 @@ impl DBM {
         }
     }
 
-    pub fn load_appointment(&self, uuid: &UUID) -> Result<ExtendedAppointment, Error> {
+    pub fn load_appointment(&self, uuid: UUID) -> Result<ExtendedAppointment, Error> {
         let key = uuid.serialize();
         let mut stmt = self
             .connection
@@ -355,7 +355,7 @@ impl DBM {
         appointments
     }
 
-    pub fn remove_appointment(&self, uuid: &UUID) {
+    pub fn remove_appointment(&self, uuid: UUID) {
         let query = "DELETE FROM appointments WHERE UUID=(?)";
         match self.remove_data(query, params![uuid.serialize()]) {
             Ok(_) => {
@@ -389,7 +389,7 @@ impl DBM {
         (appointments.len() as f64 / limit as f64).ceil() as usize
     }
 
-    pub fn store_tracker(&self, uuid: &UUID, tracker: &TransactionTracker) -> Result<(), Error> {
+    pub fn store_tracker(&self, uuid: UUID, tracker: &TransactionTracker) -> Result<(), Error> {
         let query = "INSERT INTO trackers (UUID, dispute_tx, penalty_tx) VALUES (?1, ?2, ?3)";
         match self.store_data(
             query,
@@ -410,7 +410,7 @@ impl DBM {
         }
     }
 
-    pub fn load_tracker(&self, uuid: &UUID) -> Result<TransactionTracker, Error> {
+    pub fn load_tracker(&self, uuid: UUID) -> Result<TransactionTracker, Error> {
         let key = uuid.serialize();
         let mut stmt = self.connection.prepare(
             "SELECT t.*, a.locator, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID WHERE t.UUID=(?)").unwrap();
@@ -587,13 +587,13 @@ mod tests {
         let user_id = get_random_user_id();
         let mut user = UserInfo::new(21, 42);
 
-        assert!(matches!(dbm.store_user(&user_id, &user), Ok { .. }));
-        assert_eq!(dbm.load_user(&user_id).unwrap(), user);
+        assert!(matches!(dbm.store_user(user_id, &user), Ok { .. }));
+        assert_eq!(dbm.load_user(user_id).unwrap(), user);
 
         // User info should be updatable but only via the update_user method
         user = UserInfo::new(42, 21);
         assert!(matches!(
-            dbm.store_user(&user_id, &user),
+            dbm.store_user(user_id, &user),
             Err(Error::AlreadyExists)
         ));
     }
@@ -605,16 +605,16 @@ mod tests {
         let user_id = get_random_user_id();
         let mut user = UserInfo::new(21, 42);
 
-        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
 
         // Add some appointments to the user
         for _ in 0..10 {
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-            dbm.store_appointment(&uuid, &appointment).unwrap();
+            dbm.store_appointment(uuid, &appointment).unwrap();
             user.appointments.insert(uuid, 1);
         }
 
-        assert_eq!(dbm.load_user(&user_id).unwrap(), user);
+        assert_eq!(dbm.load_user(user_id).unwrap(), user);
     }
 
     #[test]
@@ -622,7 +622,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let user_id = get_random_user_id();
-        assert!(matches!(dbm.load_user(&user_id), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_user(user_id), Err(Error::NotFound)));
     }
 
     #[test]
@@ -632,12 +632,12 @@ mod tests {
         let user_id = get_random_user_id();
         let mut user = UserInfo::new(21, 42);
 
-        dbm.store_user(&user_id, &user).unwrap();
-        assert_eq!(dbm.load_user(&user_id).unwrap(), user);
+        dbm.store_user(user_id, &user).unwrap();
+        assert_eq!(dbm.load_user(user_id).unwrap(), user);
 
         user.available_slots *= 2;
-        dbm.update_user(&user_id, &user);
-        assert_eq!(dbm.load_user(&user_id).unwrap(), user);
+        dbm.update_user(user_id, &user);
+        assert_eq!(dbm.load_user(user_id).unwrap(), user);
     }
 
     #[test]
@@ -649,7 +649,7 @@ mod tests {
             let user_id = get_random_user_id();
             let user = UserInfo::new(i, i * 2);
             users.insert(user_id, user.clone());
-            dbm.store_user(&user_id, &user).unwrap();
+            dbm.store_user(user_id, &user).unwrap();
         }
 
         assert_eq!(dbm.load_all_users(), users);
@@ -661,10 +661,10 @@ mod tests {
         let user_id = get_random_user_id();
 
         let user = UserInfo::new(21, 42);
-        assert!(matches!(dbm.store_user(&user_id, &user), Ok { .. }));
+        assert!(matches!(dbm.store_user(user_id, &user), Ok { .. }));
 
-        dbm.remove_user(&user_id);
-        assert!(matches!(dbm.load_user(&user_id), Err(Error::NotFound)));
+        dbm.remove_user(user_id);
+        assert!(matches!(dbm.load_user(user_id), Err(Error::NotFound)));
     }
 
     #[test]
@@ -673,7 +673,7 @@ mod tests {
         let user_id = get_random_user_id();
 
         // Test it does not fail even if the user does not exist (it will log though)
-        dbm.remove_user(&user_id);
+        dbm.remove_user(user_id);
     }
 
     #[test]
@@ -683,19 +683,19 @@ mod tests {
         // In order to add an appointment we need the associated user to be present
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
-        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
 
         assert!(matches!(
-            dbm.store_appointment(&uuid, &appointment),
+            dbm.store_appointment(uuid, &appointment),
             Ok { .. }
         ));
-        assert_eq!(dbm.load_appointment(&uuid).unwrap(), appointment);
+        assert_eq!(dbm.load_appointment(uuid).unwrap(), appointment);
 
         // Appointment info should be updatable but only via the update_appointment method
         assert!(matches!(
-            dbm.store_appointment(&uuid, &appointment),
+            dbm.store_appointment(uuid, &appointment),
             Err(Error::AlreadyExists)
         ));
     }
@@ -708,10 +708,10 @@ mod tests {
         let appointment = generate_dummy_appointment(None);
 
         assert!(matches!(
-            dbm.store_appointment(&uuid, &appointment),
+            dbm.store_appointment(uuid, &appointment),
             Err(Error::MissingForeignKey)
         ));
-        assert!(matches!(dbm.load_tracker(&uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
     }
 
     #[test]
@@ -719,7 +719,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let uuid = generate_uuid();
-        assert!(matches!(dbm.load_appointment(&uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
     }
 
     #[test]
@@ -728,11 +728,11 @@ mod tests {
 
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
-        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         assert!(matches!(
-            dbm.store_appointment(&uuid, &appointment),
+            dbm.store_appointment(uuid, &appointment),
             Ok { .. }
         ));
 
@@ -745,10 +745,10 @@ mod tests {
         another_modified_appointment.user_id = get_random_user_id();
 
         // Check how only the modifiable fields have been updated
-        dbm.update_appointment(&uuid, &another_modified_appointment);
-        assert_eq!(dbm.load_appointment(&uuid).unwrap(), modified_appointment);
+        dbm.update_appointment(uuid, &another_modified_appointment);
+        assert_eq!(dbm.load_appointment(uuid).unwrap(), modified_appointment);
         assert_ne!(
-            dbm.load_appointment(&uuid).unwrap(),
+            dbm.load_appointment(uuid).unwrap(),
             another_modified_appointment
         );
     }
@@ -761,10 +761,10 @@ mod tests {
         for i in 1..11 {
             let user_id = get_random_user_id();
             let user = UserInfo::new(i, i * 2);
-            dbm.store_user(&user_id, &user).unwrap();
+            dbm.store_user(user_id, &user).unwrap();
 
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-            dbm.store_appointment(&uuid, &appointment).unwrap();
+            dbm.store_appointment(uuid, &appointment).unwrap();
             appointments.insert(uuid, appointment);
         }
 
@@ -774,14 +774,14 @@ mod tests {
         // as a triggered appointment
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
-        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        dbm.store_appointment(&uuid, &appointment).unwrap();
+        dbm.store_appointment(uuid, &appointment).unwrap();
 
         let mut tracker = get_random_tracker(user_id);
         tracker.locator = appointment.locator();
-        dbm.store_tracker(&uuid, &tracker).unwrap();
+        dbm.store_tracker(uuid, &tracker).unwrap();
 
         // We should get all the appointments back except from the triggered one
         assert_eq!(dbm.load_all_appointments(), appointments);
@@ -792,15 +792,15 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
-        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
 
         // Store and delete appointment
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        dbm.store_appointment(&uuid, &appointment).unwrap();
-        assert_eq!(dbm.load_appointment(&uuid).unwrap(), appointment);
-        dbm.remove_appointment(&uuid);
+        dbm.store_appointment(uuid, &appointment).unwrap();
+        assert_eq!(dbm.load_appointment(uuid).unwrap(), appointment);
+        dbm.remove_appointment(uuid);
 
-        assert!(matches!(dbm.load_appointment(&uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
     }
 
     #[test]
@@ -808,10 +808,10 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
-        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
 
         // Test it does not fail even if the appointment does not exist (it will log though)
-        dbm.remove_appointment(&generate_uuid());
+        dbm.remove_appointment(generate_uuid());
     }
 
     #[test]
@@ -822,17 +822,17 @@ mod tests {
         // at the same time requires an associated user to be present)
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
-        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        dbm.store_appointment(&uuid, &appointment).unwrap();
+        dbm.store_appointment(uuid, &appointment).unwrap();
 
         let mut tracker = get_random_tracker(user_id);
         // Set the locator to match between appointment and tracker
         tracker.locator = appointment.locator();
 
-        assert!(matches!(dbm.store_tracker(&uuid, &tracker), Ok { .. }));
-        assert_eq!(dbm.load_tracker(&uuid).unwrap(), tracker);
+        assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
+        assert_eq!(dbm.load_tracker(uuid).unwrap(), tracker);
     }
 
     #[test]
@@ -841,18 +841,18 @@ mod tests {
 
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
-        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        dbm.store_appointment(&uuid, &appointment).unwrap();
+        dbm.store_appointment(uuid, &appointment).unwrap();
 
         let mut tracker = get_random_tracker(user_id);
         tracker.locator = appointment.locator();
-        assert!(matches!(dbm.store_tracker(&uuid, &tracker), Ok { .. }));
+        assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
         // Try to store it again, but it shouldn't go trough
         assert!(matches!(
-            dbm.store_tracker(&uuid, &tracker),
+            dbm.store_tracker(uuid, &tracker),
             Err(Error::AlreadyExists)
         ));
     }
@@ -866,7 +866,7 @@ mod tests {
         let tracker = get_random_tracker(user_id);
 
         assert!(matches!(
-            dbm.store_tracker(&uuid, &tracker),
+            dbm.store_tracker(uuid, &tracker),
             Err(Error::MissingForeignKey)
         ));
     }
@@ -876,7 +876,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let uuid = generate_uuid();
-        assert!(matches!(dbm.load_tracker(&uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
     }
 
     #[test]
@@ -887,14 +887,14 @@ mod tests {
         for i in 1..11 {
             let user_id = get_random_user_id();
             let user = UserInfo::new(i, i * 2);
-            dbm.store_user(&user_id, &user).unwrap();
+            dbm.store_user(user_id, &user).unwrap();
 
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-            dbm.store_appointment(&uuid, &appointment).unwrap();
+            dbm.store_appointment(uuid, &appointment).unwrap();
 
             let mut tracker = get_random_tracker(user_id);
             tracker.locator = appointment.locator();
-            dbm.store_tracker(&uuid, &tracker).unwrap();
+            dbm.store_tracker(uuid, &tracker).unwrap();
             trackers.insert(uuid, tracker);
         }
 
@@ -986,14 +986,14 @@ mod tests {
 
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
-        dbm.store_user(&user_id, &user).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
 
         let mut rest = HashSet::new();
         for i in 1..6 {
             let mut to_be_deleted = HashSet::new();
             for j in 0..limit * 2 * i {
                 let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-                dbm.store_appointment(&uuid, &appointment).unwrap();
+                dbm.store_appointment(uuid, &appointment).unwrap();
 
                 if j % 2 == 0 {
                     to_be_deleted.insert(uuid);
@@ -1021,31 +1021,31 @@ mod tests {
         let tracker = get_random_tracker(appointment.user_id);
 
         // Add the user b/c of FK restrictions
-        dbm.store_user(&appointment.user_id, &UserInfo::new(21, 42))
+        dbm.store_user(appointment.user_id, &UserInfo::new(21, 42))
             .unwrap();
 
         // Appointment only
         assert!(matches!(
-            dbm.store_appointment(&uuid, &appointment.clone()),
+            dbm.store_appointment(uuid, &appointment.clone()),
             Ok { .. }
         ));
 
         dbm.batch_remove_appointments(&HashSet::from_iter(vec![uuid]));
-        assert!(matches!(dbm.load_appointment(&uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
 
         // Appointment + Tracker
         assert!(matches!(
-            dbm.store_appointment(&uuid, &appointment.clone()),
+            dbm.store_appointment(uuid, &appointment.clone()),
             Ok { .. }
         ));
         assert!(matches!(
-            dbm.store_tracker(&uuid, &tracker.clone()),
+            dbm.store_tracker(uuid, &tracker.clone()),
             Ok { .. }
         ));
 
         dbm.batch_remove_appointments(&HashSet::from_iter(vec![uuid]));
-        assert!(matches!(dbm.load_appointment(&uuid), Err(Error::NotFound)));
-        assert!(matches!(dbm.load_tracker(&uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
     }
 
     #[test]
@@ -1073,19 +1073,19 @@ mod tests {
             user_id,
         );
 
-        dbm.store_user(&user_id, &user).unwrap();
-        dbm.store_appointment(&uuid, &appointment).unwrap();
-        dbm.store_tracker(&uuid, &tracker).unwrap();
+        dbm.store_user(user_id, &user).unwrap();
+        dbm.store_appointment(uuid, &appointment).unwrap();
+        dbm.store_tracker(uuid, &tracker).unwrap();
 
         // Check data is in the DB (this is implicitly checked by the unwraps, but anyway)
-        assert_eq!(dbm.load_user(&user_id).unwrap(), user);
-        assert_eq!(dbm.load_appointment(&uuid).unwrap(), appointment);
-        assert_eq!(dbm.load_tracker(&uuid).unwrap(), tracker);
+        assert_eq!(dbm.load_user(user_id).unwrap(), user);
+        assert_eq!(dbm.load_appointment(uuid).unwrap(), appointment);
+        assert_eq!(dbm.load_tracker(uuid).unwrap(), tracker);
 
         // Remove the user and check again
-        dbm.remove_user(&user_id);
-        assert!(matches!(dbm.load_user(&user_id), Err(Error::NotFound)));
-        assert!(matches!(dbm.load_appointment(&uuid), Err(Error::NotFound)));
-        assert!(matches!(dbm.load_tracker(&uuid), Err(Error::NotFound)));
+        dbm.remove_user(user_id);
+        assert!(matches!(dbm.load_user(user_id), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
     }
 }

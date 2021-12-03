@@ -40,7 +40,7 @@ impl TransactionTracker {
         Self {
             locator: breach.locator,
             dispute_tx: breach.dispute_tx,
-            penalty_tx: breach.penalty_tx.clone(),
+            penalty_tx: breach.penalty_tx,
             user_id,
         }
     }
@@ -84,7 +84,7 @@ impl<'a> Responder<'a> {
             missed_confirmations,
             dbm,
             gatekeeper,
-            last_known_block_header: RefCell::new(last_known_block_header.deref().clone()),
+            last_known_block_header: RefCell::new(*last_known_block_header.deref()),
         }
     }
 
@@ -110,7 +110,7 @@ impl<'a> Responder<'a> {
         confirmations: u32,
     ) {
         let penalty_txid = breach.penalty_tx.txid();
-        let tracker = TransactionTracker::new(breach.clone(), user_id);
+        let tracker = TransactionTracker::new(breach, user_id);
 
         self.trackers
             .borrow_mut()
@@ -129,27 +129,27 @@ impl<'a> Responder<'a> {
         if !self
             .unconfirmed_txs
             .borrow()
-            .contains(&breach.penalty_tx.txid())
+            .contains(&tracker.penalty_tx.txid())
             && confirmations == 0
         {
             self.unconfirmed_txs
                 .borrow_mut()
-                .insert(breach.penalty_tx.txid());
+                .insert(tracker.penalty_tx.txid());
         }
 
         self.dbm
             .lock()
             .unwrap()
-            .store_tracker(&uuid, &tracker)
+            .store_tracker(uuid, &tracker)
             .unwrap();
         log::info!("New tracker added (uuid={}).", uuid);
     }
 
-    pub fn has_tracker(&self, uuid: &UUID) -> bool {
+    pub fn has_tracker(&self, uuid: UUID) -> bool {
         // Has tracker should return true as long as the given tracker is hold by the Responder.
         // If the tracker is partially kept, the function will log and the return will be false.
         // This may point out that some partial data deletion is happening, which must be fixed.
-        self.trackers.borrow().get(uuid).map_or(false, |tracker| {
+        self.trackers.borrow().get(&uuid).map_or(false, |tracker| {
             self.tx_tracker_map
                 .borrow()
                 .get(&tracker.penalty_txid)
@@ -165,9 +165,9 @@ impl<'a> Responder<'a> {
         })
     }
 
-    pub fn get_tracker(&self, uuid: &UUID) -> Option<TransactionTracker> {
+    pub fn get_tracker(&self, uuid: UUID) -> Option<TransactionTracker> {
         if self.trackers.borrow().contains_key(&uuid) {
-            self.dbm.lock().unwrap().load_tracker(&uuid).ok()
+            self.dbm.lock().unwrap().load_tracker(uuid).ok()
         } else {
             None
         }
@@ -188,7 +188,7 @@ impl<'a> Responder<'a> {
             match missed_confirmations.get_mut(txid) {
                 Some(x) => *x += 1,
                 None => {
-                    missed_confirmations.insert(txid.clone(), 1);
+                    missed_confirmations.insert(*txid, 1);
                 }
             }
             log::info!(
@@ -206,7 +206,7 @@ impl<'a> Responder<'a> {
         for (txid, missed_conf) in self.missed_confirmations.borrow().iter() {
             if missed_conf >= &CONFIRMATIONS_BEFORE_RETRY {
                 for uuid in self.tx_tracker_map.borrow().get(txid).unwrap() {
-                    tracker = self.dbm.lock().unwrap().load_tracker(uuid).unwrap();
+                    tracker = self.dbm.lock().unwrap().load_tracker(*uuid).unwrap();
                     tx_to_rebroadcast.push(tracker.penalty_tx)
                 }
             }
@@ -228,7 +228,7 @@ impl<'a> Responder<'a> {
                     .await
                     .map(|confirmations| {
                         if confirmations > constants::IRREVOCABLY_RESOLVED {
-                            completed_trackers.insert(uuid.clone());
+                            completed_trackers.insert(*uuid);
                         }
                     });
             }
@@ -237,13 +237,13 @@ impl<'a> Responder<'a> {
         completed_trackers
     }
 
-    fn get_outdated_trackers(&self, block_height: &u32) -> HashSet<UUID> {
+    fn get_outdated_trackers(&self, block_height: u32) -> HashSet<UUID> {
         let mut outdated_trackers = HashSet::new();
         let trackers: HashSet<UUID> = self.trackers.borrow().keys().cloned().collect();
 
         for uuid in self
             .gatekeeper
-            .get_outdated_appointments(&block_height)
+            .get_outdated_appointments(block_height)
             .intersection(&trackers)
         {
             if self
@@ -251,7 +251,7 @@ impl<'a> Responder<'a> {
                 .borrow()
                 .contains(&self.trackers.borrow()[&uuid].penalty_txid)
             {
-                outdated_trackers.insert(uuid.clone());
+                outdated_trackers.insert(*uuid);
             }
         }
 
@@ -349,11 +349,11 @@ impl<'a> Listen for Responder<'a> {
 
         if self.trackers.borrow().len() > 0 {
             let completed_trackers = block_on(self.get_completed_trackers());
-            let outdated_trackers = self.get_outdated_trackers(&height);
+            let outdated_trackers = self.get_outdated_trackers(height);
 
             let trackers_to_delete_gk = completed_trackers
                 .iter()
-                .map(|uuid| (uuid.clone(), self.trackers.borrow()[uuid].user_id))
+                .map(|uuid| (*uuid, self.trackers.borrow()[uuid].user_id))
                 .collect();
 
             self.check_confirmations(&block.txdata);
@@ -421,7 +421,7 @@ mod tests {
 
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), &uuid, &appointment);
+        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
 
         let breach = get_random_breach_from_locator(appointment.locator());
         let penalty_txid = breach.penalty_tx.txid();
@@ -475,7 +475,7 @@ mod tests {
         // Add the necessary FKs in the database
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), &uuid, &appointment);
+        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
 
         let mut breach = get_random_breach_from_locator(appointment.locator());
         responder.add_tracker(uuid, breach.clone(), user_id, 0);
@@ -493,7 +493,7 @@ mod tests {
             .contains(&breach.penalty_tx.txid()));
         // Check that the data is also in the database
         assert_eq!(
-            dbm.lock().unwrap().load_tracker(&uuid).unwrap(),
+            dbm.lock().unwrap().load_tracker(uuid).unwrap(),
             TransactionTracker::new(breach, user_id)
         );
 
@@ -506,7 +506,7 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_appointment(&uuid, &appointment)
+            .store_appointment(uuid, &appointment)
             .unwrap();
 
         responder.add_tracker(uuid, breach.clone(), user_id, 1);
@@ -525,7 +525,7 @@ mod tests {
             .borrow()
             .contains(&breach.penalty_tx.txid()));
         assert_eq!(
-            dbm.lock().unwrap().load_tracker(&uuid).unwrap(),
+            dbm.lock().unwrap().load_tracker(uuid).unwrap(),
             TransactionTracker::new(breach.clone(), user_id)
         );
 
@@ -535,7 +535,7 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_appointment(&uuid, &appointment)
+            .store_appointment(uuid, &appointment)
             .unwrap();
 
         responder.add_tracker(uuid, breach.clone(), user_id, 1);
@@ -550,7 +550,7 @@ mod tests {
             2
         );
         assert_eq!(
-            dbm.lock().unwrap().load_tracker(&uuid).unwrap(),
+            dbm.lock().unwrap().load_tracker(uuid).unwrap(),
             TransactionTracker::new(breach, user_id)
         );
     }
@@ -569,16 +569,16 @@ mod tests {
         // Add a new tracker
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), &uuid, &appointment);
+        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
 
         let breach = get_random_breach_from_locator(appointment.locator());
         responder.add_tracker(uuid, breach.clone(), user_id, 0);
 
-        assert!(responder.has_tracker(&uuid));
+        assert!(responder.has_tracker(uuid));
 
         // Delete the tracker and check again
         responder.delete_trackers(HashSet::from_iter([uuid]), false);
-        assert!(!responder.has_tracker(&uuid));
+        assert!(!responder.has_tracker(uuid));
     }
 
     #[test]
@@ -592,20 +592,20 @@ mod tests {
         // Store the user and the appointment in the database so we can add the tracker later on (due to FK restrictions)
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), &uuid, &appointment);
+        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
 
         // Data should not be there before adding it
-        assert_eq!(responder.get_tracker(&uuid), None);
+        assert_eq!(responder.get_tracker(uuid), None);
 
         // Data should be there now
         let breach = get_random_breach_from_locator(appointment.locator());
         let tracker = TransactionTracker::new(breach.clone(), user_id);
         responder.add_tracker(uuid, breach, user_id, 0);
-        assert_eq!(responder.get_tracker(&uuid).unwrap(), tracker);
+        assert_eq!(responder.get_tracker(uuid).unwrap(), tracker);
 
         // After deleting the data it should be gone
         responder.delete_trackers(HashSet::from_iter([uuid]), false);
-        assert_eq!(responder.get_tracker(&uuid), None);
+        assert_eq!(responder.get_tracker(uuid), None);
     }
 
     #[test]
@@ -669,7 +669,7 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(&user_id, &UserInfo::new(21, 42))
+            .store_user(user_id, &UserInfo::new(21, 42))
             .unwrap();
 
         // Transactions are flagged to be rebroadcast when they've missed CONFIRMATIONS_BEFORE_RETRY confirmations
@@ -682,7 +682,7 @@ mod tests {
                 .dbm
                 .lock()
                 .unwrap()
-                .store_appointment(&uuid, &appointment)
+                .store_appointment(uuid, &appointment)
                 .unwrap();
 
             // Create a breach and add it, manually setting the missed confirmation count
@@ -718,7 +718,7 @@ mod tests {
 
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), &uuid, &appointment);
+        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
 
         // Let's add a tracker first
         let breach = get_random_breach_from_locator(appointment.locator());
@@ -766,7 +766,7 @@ mod tests {
 
         // If data is not in the unconfirmed_transaction it won't be returned
         assert_eq!(
-            responder.get_outdated_trackers(&target_block_height),
+            responder.get_outdated_trackers(target_block_height),
             HashSet::new(),
         );
 
@@ -792,7 +792,7 @@ mod tests {
 
         // Check the expected data is there
         assert_eq!(
-            responder.get_outdated_trackers(&target_block_height),
+            responder.get_outdated_trackers(target_block_height),
             target_uuids
         );
     }
@@ -810,7 +810,7 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(&user_id, &UserInfo::new(21, 42))
+            .store_user(user_id, &UserInfo::new(21, 42))
             .unwrap();
 
         // Transactions are rebroadcast once they hit CONFIRMATIONS_BEFORE_RETRY
@@ -825,7 +825,7 @@ mod tests {
                 .dbm
                 .lock()
                 .unwrap()
-                .store_appointment(&uuid, &appointment)
+                .store_appointment(uuid, &appointment)
                 .unwrap();
 
             let breach = get_random_breach_from_locator(appointment.locator());
@@ -886,7 +886,7 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(&user_id, &UserInfo::new(21, 42))
+            .store_user(user_id, &UserInfo::new(21, 42))
             .unwrap();
 
         // Delete trackers removes data from the trackers, tx_tracker_map maps, the database (and unconfirmed_txs if the data is outdated)
@@ -904,7 +904,7 @@ mod tests {
                 .dbm
                 .lock()
                 .unwrap()
-                .store_appointment(&uuid, &appointment)
+                .store_appointment(uuid, &appointment)
                 .unwrap();
 
             let breach = get_random_breach_from_locator(appointment.locator());
@@ -922,8 +922,8 @@ mod tests {
                 txs_with_multiple_uuids.insert(breach.penalty_tx.txid());
             }
 
-            all_trackers.insert(uuid.clone());
-            uuid_txid_map.insert(uuid.clone(), breach.penalty_tx.txid());
+            all_trackers.insert(uuid);
+            uuid_txid_map.insert(uuid, breach.penalty_tx.txid());
 
             // Add some trackers to be deleted
             if i % 2 == 0 {
@@ -939,7 +939,7 @@ mod tests {
             if target_trackers.contains(&uuid) {
                 assert!(!responder.trackers.borrow().contains_key(&uuid));
                 assert!(matches!(
-                    dbm.lock().unwrap().load_tracker(&uuid),
+                    dbm.lock().unwrap().load_tracker(uuid),
                     Err(DBError::NotFound)
                 ));
                 let penalty_txid = &uuid_txid_map[&uuid];
@@ -966,7 +966,7 @@ mod tests {
                     .borrow()
                     .contains_key(&uuid_txid_map[&uuid]));
                 assert!(matches!(
-                    dbm.lock().unwrap().load_tracker(&uuid),
+                    dbm.lock().unwrap().load_tracker(uuid),
                     Ok(TransactionTracker { .. })
                 ));
             }
@@ -1025,7 +1025,7 @@ mod tests {
         for _ in 2..23 {
             let user_id = get_random_user_id();
 
-            gk.add_update_user(&user_id).unwrap();
+            gk.add_update_user(user_id).unwrap();
             users.push(user_id);
         }
 
@@ -1041,7 +1041,7 @@ mod tests {
                 .dbm
                 .lock()
                 .unwrap()
-                .store_appointment(&uuid, &appointment)
+                .store_appointment(uuid, &appointment)
                 .unwrap();
 
             let breach = get_random_breach_from_locator(appointment.locator());
@@ -1076,12 +1076,12 @@ mod tests {
                     .dbm
                     .lock()
                     .unwrap()
-                    .store_appointment(&uuid, &appointment)
+                    .store_appointment(*uuid, &appointment)
                     .unwrap();
 
                 let breach = get_random_breach_from_locator(appointment.locator());
                 penalties.push(breach.penalty_tx.txid());
-                responder.add_tracker(uuid.clone(), breach, user_id, 0);
+                responder.add_tracker(*uuid, breach, user_id, 0);
             }
 
             outdated_users.insert(user_id, pair.clone());
@@ -1094,7 +1094,7 @@ mod tests {
 
         // CONFIRMATIONS SETUP
         let standalone_user_id = get_random_user_id();
-        gk.add_update_user(&standalone_user_id).unwrap();
+        gk.add_update_user(standalone_user_id).unwrap();
 
         let mut transactions = Vec::new();
         let mut confirmed_txs = Vec::new();
@@ -1106,7 +1106,7 @@ mod tests {
                 .dbm
                 .lock()
                 .unwrap()
-                .store_appointment(&uuid, &appointment)
+                .store_appointment(uuid, &appointment)
                 .unwrap();
 
             let breach = get_random_breach_from_locator(appointment.locator());
@@ -1129,7 +1129,7 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_appointment(&uuid, &appointment)
+            .store_appointment(uuid, &appointment)
             .unwrap();
 
         let breach_rebroadcast = get_random_breach_from_locator(appointment.locator());

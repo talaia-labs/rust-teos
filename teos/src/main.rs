@@ -23,7 +23,7 @@ use teos_common::cryptography::get_random_keypair;
 
 async fn get_last_n_blocks<B, T>(
     poller: &mut ChainPoller<B, T>,
-    tip: ValidatedBlockHeader,
+    mut last_known_block: ValidatedBlockHeader,
     n: usize,
 ) -> Vec<ValidatedBlock>
 where
@@ -31,7 +31,6 @@ where
     T: BlockSource,
 {
     let mut last_n_blocks = Vec::new();
-    let mut last_known_block = tip;
     for _ in 0..n {
         let block = poller.fetch_block(&last_known_block).await.unwrap();
         last_known_block = poller
@@ -96,10 +95,10 @@ pub async fn main() {
 
     // Initialize our bitcoind client
     let bitcoin_cli = match BitcoindClient::new(
-        conf.btc_rpc_connect.clone(),
+        &conf.btc_rpc_connect,
         conf.btc_rpc_port,
-        conf.btc_rpc_user.clone(),
-        conf.btc_rpc_password.clone(),
+        &conf.btc_rpc_user,
+        &conf.btc_rpc_password,
     )
     .await
     {
@@ -120,7 +119,7 @@ pub async fn main() {
     let rpc = Arc::new(
         Client::new(
             format!("{}{}:{}", schema, conf.btc_rpc_connect, conf.btc_rpc_port).to_string(),
-            Auth::UserPass(conf.btc_rpc_user, conf.btc_rpc_password),
+            Auth::UserPass(conf.btc_rpc_user.clone(), conf.btc_rpc_password.clone()),
         )
         .unwrap(),
     );

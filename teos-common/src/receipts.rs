@@ -20,8 +20,8 @@ impl RegistrationReceipt {
         }
     }
 
-    pub fn user_id(&self) -> &UserId {
-        &self.user_id
+    pub fn user_id(&self) -> UserId {
+        self.user_id
     }
 
     pub fn available_slots(&self) -> u32 {
@@ -66,8 +66,8 @@ impl AppointmentReceipt {
         }
     }
 
-    pub fn user_signature(&self) -> String {
-        self.user_signature.clone()
+    pub fn user_signature(&self) -> &str {
+        &self.user_signature
     }
 
     pub fn start_block(&self) -> u32 {
