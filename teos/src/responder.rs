@@ -14,28 +14,40 @@ use teos_common::appointment::Locator;
 use teos_common::constants;
 use teos_common::UserId;
 
-use crate::carrier::{Carrier, Receipt};
+use crate::carrier::{Carrier, DeliveryReceipt};
 use crate::dbm::DBM;
 use crate::extended_appointment::UUID;
 use crate::gatekeeper::Gatekeeper;
 use crate::watcher::Breach;
 
+/// Number of missed confirmations to wait before rebroadcasting a transaction.
 const CONFIRMATIONS_BEFORE_RETRY: u8 = 6;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TransactionTracker {
-    pub locator: Locator,
-    pub dispute_tx: Transaction,
-    pub penalty_tx: Transaction,
-    pub user_id: UserId,
-}
-
+/// Minimal data required in memory to keep track of transaction trackers.
 pub struct TrackerSummary {
+    /// Identifier of the user who arranged the appointment.
     user_id: UserId,
+    /// Transaction id the [Responder] is keeping track of.
     penalty_txid: Txid,
 }
 
+/// Structure to keep track of triggered appointments.
+///
+/// It is analogous to [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) for the [`Watcher`](crate::watcher::Watcher).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionTracker {
+    /// Matches the corresponding [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) locator.
+    pub locator: Locator,
+    /// Matches the corresponding [Breach] `dispute_tx` field.
+    pub dispute_tx: Transaction,
+    /// Matches the corresponding [Breach] penalty_tx field.
+    pub penalty_tx: Transaction,
+    /// [UserId] the original [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) belongs to.
+    pub user_id: UserId,
+}
+
 impl TransactionTracker {
+    /// Creates a new [TransactionTracker] instance.
     pub fn new(breach: Breach, user_id: UserId) -> Self {
         Self {
             locator: breach.locator,
@@ -45,6 +57,7 @@ impl TransactionTracker {
         }
     }
 
+    /// Computes the [TrackerSummary] of the [TransactionTracker].
     pub fn get_summary(&self) -> TrackerSummary {
         TrackerSummary {
             user_id: self.user_id,
@@ -52,19 +65,35 @@ impl TransactionTracker {
         }
     }
 }
-
+/// Component in charge of keeping track of triggered appointments.
+///
+/// The [Responder] receives data from the [Watcher](crate::watcher::Watcher) in form of a [Breach].
+/// From there, a [TransactionTracker] is created and the penalty transaction is sent to the network via the [Carrier].
+/// The [Transaction] is then monitored to make sure it makes it to a block and it gets [irrevocably resolved](https://github.com/lightning/bolts/blob/master/05-onchain.md#general-nomenclature).
 pub struct Responder<'a> {
+    /// A map holding a summary of every tracker ([TransactionTracker]) hold by the [Responder], identified by [UUID].
+    /// The identifiers match those used by the [Watcher](crate::watcher::Watcher).
     pub(crate) trackers: RefCell<HashMap<UUID, TrackerSummary>>,
+    /// A map between [Txid]s and [UUID]s.
     tx_tracker_map: RefCell<HashMap<Txid, HashSet<UUID>>>,
+    /// A collection of transactions yet to get a single confirmation.
+    /// Only keeps track of penalty transactions being monitored by the [Responder].
     unconfirmed_txs: RefCell<HashSet<Txid>>,
+    /// A collection of [Transaction]s that have missed some confirmation, along with the missed count.
+    /// Only keeps track of penalty transactions being monitored by the [Responder].
     missed_confirmations: RefCell<HashMap<Txid, u8>>,
+    /// A [Carrier] instance. Data is sent to the `bitcoind` trough it.
     pub(crate) carrier: RefCell<Carrier>,
+    /// A [Gatekeeper] instance. Data regarding users is requested to it.
     gatekeeper: &'a Gatekeeper,
+    /// A [DBM] (database manager) instance. Used to persist tracker data into disk.
     dbm: Arc<Mutex<DBM>>,
+    /// The last known block header.
     last_known_block_header: RefCell<BlockHeaderData>,
 }
 
 impl<'a> Responder<'a> {
+    /// Creates a new [Responder] instance.
     pub fn new(
         carrier: Carrier,
         gatekeeper: &'a Gatekeeper,
@@ -88,7 +117,16 @@ impl<'a> Responder<'a> {
         }
     }
 
-    pub async fn handle_breach(&self, uuid: UUID, breach: Breach, user_id: UserId) -> Receipt {
+    /// Data entry point for the [Responder]. Handles a [Breach] provided by the [Watcher](crate::watcher::Watcher).
+    ///
+    /// Breaches can either be added to the [Responder] in the form of a [TransactionTracker] if the [penalty transaction](Breach::penalty_tx)
+    /// is accepted by the `bitcoind` or rejected otherwise.
+    pub async fn handle_breach(
+        &self,
+        uuid: UUID,
+        breach: Breach,
+        user_id: UserId,
+    ) -> DeliveryReceipt {
         let receipt = self
             .carrier
             .borrow_mut()
@@ -102,6 +140,15 @@ impl<'a> Responder<'a> {
         receipt
     }
 
+    /// Adds a [TransactionTracker] to the [Responder] from a given [Breach].
+    ///
+    /// From this point on, transactions are accepted as valid. They may not end up being confirmed, but they
+    /// have been checked syntactically by the [Watcher](crate::watcher::Watcher) and against consensus / network
+    /// acceptance rules by the [Carrier].
+    ///
+    /// The [TransactionTracker] will be added to [self.unconfirmed_txs](Self::unconfirmed_txs) depending on the confirmation count (`confirmations`).
+    /// Some transaction may already be confirmed by the time the tower tries to send them to the network. If that's the case,
+    /// the [Responder] will simply continue tracking the job until its completion.
     pub(crate) fn add_tracker(
         &self,
         uuid: UUID,
@@ -145,6 +192,7 @@ impl<'a> Responder<'a> {
         log::info!("New tracker added (uuid={}).", uuid);
     }
 
+    /// Checks whether a given tracker can be found in the [Responder].
     pub fn has_tracker(&self, uuid: UUID) -> bool {
         // Has tracker should return true as long as the given tracker is hold by the Responder.
         // If the tracker is partially kept, the function will log and the return will be false.
@@ -165,6 +213,9 @@ impl<'a> Responder<'a> {
         })
     }
 
+    /// Gets a tracker from the [Responder] if found. [None] otherwise.
+    ///
+    /// The [TransactionTracker] is queried to the [DBM].
     pub fn get_tracker(&self, uuid: UUID) -> Option<TransactionTracker> {
         if self.trackers.borrow().contains_key(&uuid) {
             self.dbm.lock().unwrap().load_tracker(uuid).ok()
@@ -173,8 +224,10 @@ impl<'a> Responder<'a> {
         }
     }
 
+    /// Checks if any of the unconfirmed tracked transaction has received a confirmation. If so, it is removed from [self.unconfirmed_txs](Self::unconfirmed_txs).
+    /// Otherwise, its unconfirmed count is increased by one.
     fn check_confirmations(&self, txs: &Vec<Transaction>) {
-        // If a new confirmed transaction matches one we are watching, we remove it from the unconfirmed transaction vector
+        // A confirmation has been received
         let mut unconfirmed_txs = self.unconfirmed_txs.borrow_mut();
         for tx in txs.iter() {
             if unconfirmed_txs.remove(&tx.txid()) {
@@ -199,6 +252,11 @@ impl<'a> Responder<'a> {
         }
     }
 
+    /// Gets a vector of transactions that need to be rebroadcast. A [Transaction] is flagged to be rebroadcast
+    /// if its missed confirmation count has reached the threshold ([CONFIRMATIONS_BEFORE_RETRY]).
+    ///
+    /// Given the [Responder] only keeps around the minimal data to track transactions, the [TransactionTracker]s
+    /// are queried to the [DBM].
     fn get_txs_to_rebroadcast(&self) -> Vec<Transaction> {
         let mut tx_to_rebroadcast = Vec::new();
         let mut tracker: TransactionTracker;
@@ -215,6 +273,9 @@ impl<'a> Responder<'a> {
         tx_to_rebroadcast
     }
 
+    /// Gets a collection of trackers that have been completed (and therefore can be removed from the [Responder]).
+    ///
+    /// The confirmation count is not kept by the [Responder]. Instead, data is queried to `bitcoind` via the [Carrier].
     async fn get_completed_trackers(&self) -> HashSet<UUID> {
         // DISCUSS: Not using a checked_txs cache for now, check whether it may be necessary
         let mut completed_trackers = HashSet::new();
@@ -237,6 +298,8 @@ impl<'a> Responder<'a> {
         completed_trackers
     }
 
+    /// Gets a collection of trackers that have been outdated. An outdated tracker is a [TransactionTracker]
+    /// from a user who's subscription has been outdated (and therefore will be removed from the tower).
     fn get_outdated_trackers(&self, block_height: u32) -> HashSet<UUID> {
         let mut outdated_trackers = HashSet::new();
         let trackers: HashSet<UUID> = self.trackers.borrow().keys().cloned().collect();
@@ -258,7 +321,10 @@ impl<'a> Responder<'a> {
         outdated_trackers
     }
 
-    async fn rebroadcast(&self) -> HashMap<Txid, Receipt> {
+    /// Rebroadcasts a list of penalty transactions that have missed too many confirmations.
+    // FIXME: This is not of much use at the moment given fees can not be bumped. It may be
+    // useful if nodes have wiped the transaction from the mempool for some reasons.
+    async fn rebroadcast(&self) -> HashMap<Txid, DeliveryReceipt> {
         let mut receipts = HashMap::new();
 
         for penalty_tx in self.get_txs_to_rebroadcast().into_iter() {
@@ -296,6 +362,7 @@ impl<'a> Responder<'a> {
     }
 
     // DISCUSS: Check comment regarding callbacks in watcher.rs
+    // TODO: Document once modified given the above comment
     fn delete_trackers(&self, trackers: HashSet<UUID>, outdated: bool) {
         for uuid in trackers.iter() {
             if outdated {
@@ -343,7 +410,17 @@ impl<'a> Responder<'a> {
     }
 }
 
+/// Listen implementation by the [Responder]. Handles monitoring and reorgs.
 impl<'a> Listen for Responder<'a> {
+    /// Handles the monitoring process by the [Responder].
+    ///
+    /// Watching is performed in a per-block basis. A [TransactionTracker] is tracked until:
+    /// - It gets [irrevocably resolved](https://github.com/lightning/bolts/blob/master/05-onchain.md#general-nomenclature) or
+    /// - The user subscription expires
+    ///
+    /// Every time a block is received the tracking conditions are checked against the monitored [TransactionTracker]s and
+    /// data deletion is performed accordingly. Moreover, lack of confirmations is check for the tracked transactions and
+    /// rebroadcasting is performed for those that have missed too many.
     fn block_connected(&self, block: &bitcoin::Block, height: u32) {
         log::info!("New block received: {}", block.header.block_hash());
 
@@ -378,7 +455,8 @@ impl<'a> Listen for Responder<'a> {
             .store_last_known_block_responder(&block.header.block_hash());
     }
 
-    // FIXME: To be implemented
+    /// FIXME: To be implemented
+    /// This will handle reorgs on the [Responder].
     #[allow(unused_variables)]
     fn block_disconnected(&self, header: &BlockHeader, height: u32) {
         todo!()

@@ -24,10 +24,17 @@ use crate::extended_appointment::{AppointmentSummary, ExtendedAppointment, UUID}
 use crate::gatekeeper::{Gatekeeper, MaxSlotsReached};
 use crate::responder::{Responder, TransactionTracker};
 
+/// Data structure used to cache locators computed from parsed blocks.
+///
+/// Holds up to `size` blocks with their corresponding computed [Locator]s.
 struct LocatorCache {
+    /// A [Locator]:[Transaction] map.
     cache: HashMap<Locator, Transaction>,
-    blocks: Vec<BlockHeader>,
+    /// Vector of block hashes corresponding to the cached blocks.
+    blocks: Vec<BlockHash>,
+    /// Map of [BlockHash]:[Vec<Locator>]. Used to remove data from the cache.
     tx_in_block: HashMap<BlockHash, Vec<Locator>>,
+    /// Maximum size of the cache.
     size: usize,
 }
 
@@ -42,29 +49,38 @@ impl fmt::Display for LocatorCache {
 }
 
 //TODO: Check if calls to the LocatorCache needs explicit Mutex of if Rust already prevents race conditions in this case.
+// This is accessed both by block_connected (write) and add_appointment (read). The later is an API method.
 impl LocatorCache {
+    /// Creates a new [LocatorCache] instance.
+    /// The cache is initialized using the provided vector of blocks.
+    /// The size of the cache is defined as the size of `last_n_blocks`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the blocks in `last_n_blocks` is unchained. That is, if the given blocks
+    /// are not linked in strict descending order.
     fn new(last_n_blocks: Vec<ValidatedBlock>) -> LocatorCache {
         let size = last_n_blocks.len();
         let mut cache = HashMap::new();
         let mut blocks = Vec::with_capacity(size);
         let mut tx_in_block = HashMap::new();
 
-        for block in last_n_blocks.iter().rev() {
-            blocks.last().map(|prev_block_header: &BlockHeader| {
-                if block.header.prev_blockhash != prev_block_header.block_hash() {
+        for block in last_n_blocks.into_iter().rev() {
+            blocks.last().map(|prev_block_hash| {
+                if block.header.prev_blockhash != *prev_block_hash {
                     panic!("last_n_blocks contains unchained blocks");
                 }
             });
 
             let mut locators = Vec::new();
-            for tx in &block.txdata {
+            for tx in block.txdata.iter() {
                 let locator = Locator::new(tx.txid());
                 cache.insert(locator, tx.clone());
                 locators.push(locator);
             }
 
             tx_in_block.insert(block.block_hash(), locators);
-            blocks.push(block.header);
+            blocks.push(block.header.block_hash());
         }
 
         LocatorCache {
@@ -75,20 +91,23 @@ impl LocatorCache {
         }
     }
 
+    /// Gets a transaction from the cache if present. [None] otherwise.
     pub fn get_tx(&self, locator: Locator) -> Option<&Transaction> {
         self.cache.get(&locator)
     }
 
+    /// Checks if the cache if full.
     pub fn is_full(&self) -> bool {
         self.blocks.len() > self.size
     }
 
+    /// Updates the cache by adding data from a new block. Removes the oldest block if the cache is full afterwards.
     pub fn update(
         &mut self,
         block_header: BlockHeader,
         locator_tx_map: &HashMap<Locator, Transaction>,
     ) {
-        self.blocks.push(block_header);
+        self.blocks.push(block_header.block_hash());
 
         let mut locators = Vec::new();
         for (locator, tx) in locator_tx_map {
@@ -105,8 +124,9 @@ impl LocatorCache {
         }
     }
 
-    // FIXME: To be implemented (this should be called within Watcher::block_disconnected)
     #[allow(dead_code)]
+    /// FIXME: Currently dead code. Fixes the cache by removing reorged blocks and adding the new valid ones.
+    /// This should be called within Watcher::block_disconnected).
     pub async fn fix(&mut self, header: &BlockHeader) {
         for locator in self.tx_in_block[&header.block_hash()].iter() {
             self.cache.remove(locator);
@@ -117,17 +137,18 @@ impl LocatorCache {
         // Log if that's not the case so we can revisit this and fix it.
         match self.blocks.pop() {
             Some(h) => {
-                if h.block_hash() != header.block_hash() {
-                    log::error!("Disconnected block does not match the oldest block stored in the LocatorCache ({} != {})", header.block_hash(), h.block_hash())
+                if h != header.block_hash() {
+                    log::error!("Disconnected block does not match the oldest block stored in the LocatorCache ({} != {})", header.block_hash(), h)
                 };
             }
             None => log::warn!("The cache is already empty"),
         }
     }
 
+    /// Removes the oldest block from the cache.
+    /// This removes data from `self.blocks`, `self.tx_in_block` and `self.cache`.
     pub fn remove_oldest_block(&mut self) {
-        let oldest = self.blocks.remove(0);
-        let oldest_hash = oldest.block_hash();
+        let oldest_hash = self.blocks.remove(0);
         for locator in self.tx_in_block.remove(&oldest_hash).unwrap() {
             self.cache.remove(&locator);
         }
@@ -136,14 +157,23 @@ impl LocatorCache {
     }
 }
 
+/// Structure holding data regarding a breach.
+///
+/// Breaches are computed after spotting a [Locator] on chain and
+/// using the resulting dispute transaction id to decipher the encrypted blob of an ongoing [Appointment].
+/// Breaches are passed to the [Responder] once created.
 #[derive(Debug, Clone)]
 pub struct Breach {
+    /// Breach locator. Matches the [Appointment] locator.
     pub locator: Locator,
+    /// Transaction that triggered the breach.
     pub dispute_tx: Transaction,
+    /// Transaction that will be used as a response to the breach.
     pub penalty_tx: Transaction,
 }
 
 impl Breach {
+    /// Creates a new [Breach] instance.
     pub fn new(locator: Locator, dispute_tx: Transaction, penalty_tx: Transaction) -> Self {
         Breach {
             locator,
@@ -153,6 +183,7 @@ impl Breach {
     }
 }
 
+/// Packs the reasons why trying to add an appointment may fail.
 // TODO: It may be nice to create richer errors so the API can return richer rejection
 #[derive(Debug)]
 pub enum AddAppointmentFailure {
@@ -162,6 +193,7 @@ pub enum AddAppointmentFailure {
     AlreadyTriggered,
 }
 
+/// Packs the reasons why trying to query an appointment may fail.
 #[derive(Debug)]
 pub enum GetAppointmentFailure {
     AuthenticationFailure,
@@ -169,24 +201,38 @@ pub enum GetAppointmentFailure {
     NotFound,
 }
 
+/// Wraps the returning information regarding a queried appointment.
+///
+/// Either an [Appointment] or a [TransactionTracker] can be
+/// returned depending on whether the appointment can be found in the [Watcher] or in the [Responder].
 #[derive(Debug)]
 pub enum AppointmentInfo {
     Appointment(Appointment),
     Tracker(TransactionTracker),
 }
 
+/// Component in charge of watching for triggers in the chain (aka channel breaches for lightning).
 pub struct Watcher<'a> {
+    /// A map holding a summary of every appointment ([ExtendedAppointment]) hold by the [Watcher], identified by a [UUID].
     appointments: RefCell<HashMap<UUID, AppointmentSummary>>,
+    /// A map between [Locator]s (user identifiers for [Appointment]s) and [UUID]s (tower identifiers).
     locator_uuid_map: RefCell<HashMap<Locator, HashSet<UUID>>>,
+    /// A cache of the [Locator]s computed for the transactions in the last few blocks.
     locator_cache: RefCell<LocatorCache>,
+    /// A [Responder] instance. Data will be passed to it once triggered (if valid).
     responder: &'a Responder<'a>,
+    /// A [Gatekeeper] instance. Data regarding users is requested to it.
     gatekeeper: &'a Gatekeeper,
+    /// The last known block header.
     last_known_block_header: RefCell<BlockHeaderData>,
+    /// The tower signing key. Used to sign messages going to users.
     signing_key: SecretKey,
+    /// A [DBM] (database manager) instance. Used to persist appointment data into disk.
     dbm: Arc<Mutex<DBM>>,
 }
 
 impl<'a> Watcher<'a> {
+    /// Creates a new [Watcher] instance.
     pub async fn new(
         gatekeeper: &'a Gatekeeper,
         responder: &'a Responder<'a>,
@@ -211,6 +257,8 @@ impl<'a> Watcher<'a> {
         }
     }
 
+    /// Registers a new user within the [Watcher]. This request is passed to the [Gatekeeper], who is in
+    /// charge of managing users.
     pub fn register(&mut self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let mut receipt = self.gatekeeper.add_update_user(user_id)?;
         receipt.sign(&self.signing_key);
@@ -218,6 +266,18 @@ impl<'a> Watcher<'a> {
         Ok(receipt)
     }
 
+    /// Adds a new [Appointment] to the tower.
+    ///
+    /// Appointments are only added provided:
+    /// - The user is registered into the system
+    /// - The user subscription has not expired
+    /// - The user has enough available slots to fit the appointment
+    /// - The appointment hasn't been responded to yet (data cannot be found in the [Responder])
+    ///
+    /// If an appointment is accepted, an [AppointmentSummary] will be added to the the watching pool and
+    /// monitored by the [Watcher]. An [ExtendedAppointment] (constructed from the [Appointment]) will be persisted on disk.
+    /// In case the locator for the given appointment can be found in the cache (meaning the appointment has been
+    /// triggered recently) the data will be passed to the [Responder] straightaway (modulo it being valid).
     pub async fn add_appointment(
         &mut self,
         appointment: Appointment,
@@ -351,6 +411,13 @@ impl<'a> Watcher<'a> {
         Ok((receipt, available_slots, expiry))
     }
 
+    /// Retrieves an [Appointment] from the tower.
+    ///
+    /// Appointments can only be retrieved provided:
+    /// - The user is registered into the system
+    /// - The user subscription has not expired
+    /// - The appointment belongs to the user
+    /// - The appointment exists within the system (either in the [Watcher] or the [Responder])
     pub fn get_appointment(
         &self,
         locator: Locator,
@@ -392,15 +459,21 @@ impl<'a> Watcher<'a> {
         }
     }
 
+    /// Gets a map of breaches provided a map between locators and transactions.
+    ///
+    /// The provided map if intersected with the map of all locators monitored by [Watcher] and the result
+    /// is considered the list of all breaches. This is queried on a per-block basis with all the
+    /// `(locator, transaction)` pairs computed from the transaction data.
     fn get_breaches(
         &self,
         locator_tx_map: HashMap<Locator, Transaction>,
     ) -> HashMap<Locator, Transaction> {
-        let local_set: HashSet<Locator> = self.locator_uuid_map.borrow().keys().cloned().collect();
-        let new_set = locator_tx_map.keys().cloned().collect();
+        let monitored_locators: HashSet<Locator> =
+            self.locator_uuid_map.borrow().keys().cloned().collect();
+        let new_locators = locator_tx_map.keys().cloned().collect();
         let mut breaches = HashMap::new();
 
-        for locator in local_set.intersection(&new_set) {
+        for locator in monitored_locators.intersection(&new_locators) {
             let (k, v) = locator_tx_map.get_key_value(locator).unwrap();
             breaches.insert(*k, v.clone());
         }
@@ -414,6 +487,9 @@ impl<'a> Watcher<'a> {
         breaches
     }
 
+    /// Filters a map of breaches between those that are valid and those that are not.
+    ///
+    /// Valid breaches are those resulting in a properly formatted [Transaction] once decrypted.
     fn filter_breaches(
         &self,
         breaches: HashMap<Locator, Transaction>,
@@ -469,6 +545,8 @@ impl<'a> Watcher<'a> {
     // - Appointment and tracker data can be deleted in cascade when a user is deleted
     // If done, the GK can notify the Watcher and Responder to delete data in memory and
     // take care of the database itself.
+
+    // TODO: Document once modified given the above comment
     fn delete_appointments(&self, appointments: HashSet<UUID>, outdated: bool) {
         // FIXME: This is identical to Responder::delete_trackers. It can be implemented using generics.
         for uuid in appointments.iter() {
@@ -512,7 +590,19 @@ impl<'a> Watcher<'a> {
     }
 }
 
+/// Listen implementation by the [Watcher]. Handles monitoring and reorgs.
 impl<'a> chain::Listen for Watcher<'a> {
+    /// Handles the monitoring process by the [Watcher].
+    ///
+    /// Watching is performed in a per-block basis. Therefore, a breach is only considered (and detected) if seen
+    /// in a block.
+    ///
+    /// Every time a new block is received a list of all potential locators is computed using the transaction data.
+    /// Then, the potential locators are checked against the data being monitored by the [Watcher] and passed to the
+    /// [Responder] if valid. Otherwise data is removed from the tower.
+    ///
+    /// This also takes care of updating the [LocatorCache] and removing outdated data from the [Watcher] when
+    /// told by the [Gatekeeper].
     fn block_connected(&self, block: &Block, height: u32) {
         log::info!("New block received: {}", block.header.block_hash());
 
@@ -585,8 +675,9 @@ impl<'a> chain::Listen for Watcher<'a> {
             .store_last_known_block_watcher(&block.header.block_hash());
     }
 
-    // FIXME: To be implemented
     #[allow(unused_variables)]
+    /// FIXME: To be implemented.
+    /// This will handle reorgs on the [Watcher].
     fn block_disconnected(&self, header: &BlockHeader, height: u32) {
         todo!()
     }

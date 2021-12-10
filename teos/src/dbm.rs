@@ -22,6 +22,7 @@ use crate::gatekeeper::UserInfo;
 use crate::responder::TransactionTracker;
 use crate::watcher::Breach;
 
+/// Packs the errors than can raise when interacting with the underlying database.
 #[derive(Debug)]
 pub enum Error {
     AlreadyExists,
@@ -30,17 +31,23 @@ pub enum Error {
     Unknown(SqliteError),
 }
 
+/// Identifies the tower component for those who store similar data into the database.
 #[derive(Clone)]
 pub enum Component {
     Watcher,
     Responder,
 }
 
+/// Component in charge of interacting with the underlying database.
+///
+/// Currently works for `SQLite`. `PostgreSQL` should also be added in the future.
 pub struct DBM {
+    /// The underlying database connection.
     connection: Connection,
 }
 
 impl DBM {
+    /// Creates a new [DBM] instance.
     pub fn new(db_path: PathBuf) -> Result<Self, SqliteError> {
         let connection = Connection::open(db_path)?;
         connection.execute("PRAGMA foreign_keys=1;", [])?;
@@ -50,6 +57,14 @@ impl DBM {
         Ok(dbm)
     }
 
+    /// Creates the database tables if not present.
+    ///
+    /// The database consists of the following tables:
+    /// - users
+    /// - appointments
+    /// - trackers
+    /// - last_known_block
+    /// - keys
     fn create_tables(&self) -> Result<(), SqliteError> {
         self.connection.execute(
             "CREATE TABLE IF NOT EXISTS users (
@@ -103,6 +118,7 @@ impl DBM {
         Ok(())
     }
 
+    /// Generic method to store data into the database.
     fn store_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
         match self.connection.execute(query, params) {
             Ok(_) => Ok(()),
@@ -120,6 +136,7 @@ impl DBM {
         }
     }
 
+    /// Generic method to remove data from the database.
     fn remove_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
         match self.connection.execute(query, params).unwrap() {
             0 => Err(Error::NotFound),
@@ -127,13 +144,15 @@ impl DBM {
         }
     }
 
+    /// Generic method to update data from the database.
     fn update_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
         // Updating data is fundamentally the same as deleting it in terms of interface.
         // A query is sent and either no row is modified or some rows are
         self.remove_data(query, params)
     }
 
-    pub fn store_user(&self, user_id: UserId, user_info: &UserInfo) -> Result<(), Error> {
+    /// Stores a user ([UserInfo]) into the database.
+    pub(crate) fn store_user(&self, user_id: UserId, user_info: &UserInfo) -> Result<(), Error> {
         let query =
             "INSERT INTO users (user_id, available_slots, subscription_expiry) VALUES (?1, ?2, ?3)";
 
@@ -156,7 +175,8 @@ impl DBM {
         }
     }
 
-    pub fn update_user(&self, user_id: UserId, user_info: &UserInfo) {
+    /// Updates an existing user ([UserInfo]) in the database.
+    pub(crate) fn update_user(&self, user_id: UserId, user_info: &UserInfo) {
         let query =
             "UPDATE users SET available_slots=(?1), subscription_expiry=(?2) WHERE user_id=(?3)";
         match self.update_data(
@@ -176,9 +196,10 @@ impl DBM {
         }
     }
 
+    /// Loads a user ([UserInfo]) from the database.
     // DISCUSS: This could be implemented with an INNER JOIN query, but the logic will be more complex given each row
     // will have the user info replicated. Consider whether it makes sense to change it.
-    pub fn load_user(&self, user_id: UserId) -> Result<UserInfo, Error> {
+    pub(crate) fn load_user(&self, user_id: UserId) -> Result<UserInfo, Error> {
         let key = user_id.serialize();
         let mut stmt = self
             .connection
@@ -218,7 +239,8 @@ impl DBM {
         Ok(user)
     }
 
-    pub fn load_all_users(&self) -> HashMap<UserId, UserInfo> {
+    /// Loads all users from the database.
+    pub(crate) fn load_all_users(&self) -> HashMap<UserId, UserInfo> {
         let mut users = HashMap::new();
         let mut stmt = self.connection.prepare("SELECT * FROM users").unwrap();
         let mut rows = stmt.query([]).unwrap();
@@ -235,7 +257,8 @@ impl DBM {
         users
     }
 
-    pub fn remove_user(&self, user_id: UserId) {
+    /// Removes a user ([UserInfo]) from the database.
+    pub(crate) fn remove_user(&self, user_id: UserId) {
         let query = "DELETE FROM users WHERE user_id=(?)";
         match self.remove_data(query, params![user_id.serialize()]) {
             Ok(_) => {
@@ -247,7 +270,8 @@ impl DBM {
         }
     }
 
-    pub fn store_appointment(
+    /// Stores an [Appointment] into the database.
+    pub(crate) fn store_appointment(
         &self,
         uuid: UUID,
         appointment: &ExtendedAppointment,
@@ -276,7 +300,8 @@ impl DBM {
         }
     }
 
-    pub fn update_appointment(&self, uuid: UUID, appointment: &ExtendedAppointment) {
+    /// Updates an existing [Appointment] in the database.
+    pub(crate) fn update_appointment(&self, uuid: UUID, appointment: &ExtendedAppointment) {
         // DISCUSS: Check what fields we'd like to make updatable. e_blob and signature are the obvious, to_self_delay and start_block may not be necessary (or even risky)
         let query =
             "UPDATE appointments SET encrypted_blob=(?1), to_self_delay=(?2), user_signature=(?3), start_block=(?4) WHERE UUID=(?5)";
@@ -299,7 +324,8 @@ impl DBM {
         }
     }
 
-    pub fn load_appointment(&self, uuid: UUID) -> Result<ExtendedAppointment, Error> {
+    /// Loads an [Appointment] from the database.
+    pub(crate) fn load_appointment(&self, uuid: UUID) -> Result<ExtendedAppointment, Error> {
         let key = uuid.serialize();
         let mut stmt = self
             .connection
@@ -323,7 +349,8 @@ impl DBM {
         .map_err(|_| Error::NotFound)
     }
 
-    pub fn load_all_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
+    /// Loads all appointments from the database.
+    pub(crate) fn load_all_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
         let mut appointments = HashMap::new();
         let mut stmt = self
             .connection
@@ -355,6 +382,7 @@ impl DBM {
         appointments
     }
 
+    /// Removes an [Appointment] from the database.
     pub fn remove_appointment(&self, uuid: UUID) {
         let query = "DELETE FROM appointments WHERE UUID=(?)";
         match self.remove_data(query, params![uuid.serialize()]) {
@@ -367,7 +395,8 @@ impl DBM {
         }
     }
 
-    pub fn batch_remove_appointments(&self, appointments: &HashSet<UUID>) -> usize {
+    /// Removes some appointments from the database in batch.
+    pub(crate) fn batch_remove_appointments(&self, appointments: &HashSet<UUID>) -> usize {
         let limit = self.connection.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
         let iter = appointments
             .iter()
@@ -389,7 +418,12 @@ impl DBM {
         (appointments.len() as f64 / limit as f64).ceil() as usize
     }
 
-    pub fn store_tracker(&self, uuid: UUID, tracker: &TransactionTracker) -> Result<(), Error> {
+    /// Stores a [TransactionTracker] into the database.
+    pub(crate) fn store_tracker(
+        &self,
+        uuid: UUID,
+        tracker: &TransactionTracker,
+    ) -> Result<(), Error> {
         let query = "INSERT INTO trackers (UUID, dispute_tx, penalty_tx) VALUES (?1, ?2, ?3)";
         match self.store_data(
             query,
@@ -410,7 +444,8 @@ impl DBM {
         }
     }
 
-    pub fn load_tracker(&self, uuid: UUID) -> Result<TransactionTracker, Error> {
+    /// Loads a [TransactionTracker] from the database.
+    pub(crate) fn load_tracker(&self, uuid: UUID) -> Result<TransactionTracker, Error> {
         let key = uuid.serialize();
         let mut stmt = self.connection.prepare(
             "SELECT t.*, a.locator, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID WHERE t.UUID=(?)").unwrap();
@@ -435,7 +470,8 @@ impl DBM {
         .map_err(|_| Error::NotFound)
     }
 
-    pub fn load_all_trackers(&self) -> HashMap<UUID, TransactionTracker> {
+    /// Loads all trackers from the database.
+    pub(crate) fn load_all_trackers(&self) -> HashMap<UUID, TransactionTracker> {
         let mut trackers = HashMap::new();
         let mut stmt = self
             .connection
@@ -464,6 +500,7 @@ impl DBM {
         trackers
     }
 
+    /// Stores the last known block of a given [Component] into the database.
     fn store_last_known_block(
         &self,
         block_hash: &BlockHash,
@@ -477,7 +514,9 @@ impl DBM {
 
         self.store_data(query, params![id, block_hash.to_vec()])
     }
-    pub fn store_last_known_block_watcher(&self, block_hash: &BlockHash) {
+
+    /// Stores the last known block by the [Watcher](crate::watcher::Watcher) into the database.
+    pub(crate) fn store_last_known_block_watcher(&self, block_hash: &BlockHash) {
         match self.store_last_known_block(block_hash, Component::Watcher) {
             Ok(_) => log::debug!(
                 "Watcher's last known block successfully stored: {}",
@@ -491,7 +530,8 @@ impl DBM {
         }
     }
 
-    pub fn store_last_known_block_responder(&self, block_hash: &BlockHash) {
+    /// Stores the last known block by the [Responder](crate::responder::Responder) into the database.
+    pub(crate) fn store_last_known_block_responder(&self, block_hash: &BlockHash) {
         match self.store_last_known_block(block_hash, Component::Responder) {
             Ok(_) => log::debug!(
                 "Responder's last known block successfully stored: {}",
@@ -505,6 +545,7 @@ impl DBM {
         }
     }
 
+    /// Loads the last known block of a [Component] from the database.
     fn load_last_known_block(&self, component: Component) -> Result<BlockHash, Error> {
         let mut stmt = self
             .connection
@@ -522,19 +563,29 @@ impl DBM {
         })
         .map_err(|_| Error::NotFound)
     }
-    pub fn load_last_known_block_watcher(&self) -> Result<BlockHash, Error> {
+
+    /// Loads the last known block by the [Watcher](crate::watcher::Watcher) from the database.
+    pub(crate) fn load_last_known_block_watcher(&self) -> Result<BlockHash, Error> {
         self.load_last_known_block(Component::Watcher)
     }
 
-    pub fn load_last_known_block_responder(&self) -> Result<BlockHash, Error> {
+    /// Loads the last known block by the [Responder](crate::responder::Responder) from the database.
+    pub(crate) fn load_last_known_block_responder(&self) -> Result<BlockHash, Error> {
         self.load_last_known_block(Component::Responder)
     }
 
-    pub fn store_key(&self, sk: &SecretKey) -> Result<(), Error> {
+    /// Stores the tower secret key into the database.
+    ///
+    /// When a new key is generated, old keys are not overwritten but are not retrievable from the API either.
+    pub fn store_tower_key(&self, sk: &SecretKey) -> Result<(), Error> {
         let query = "INSERT INTO keys (key) VALUES (?)";
         self.store_data(query, params![sk.to_string()])
     }
 
+    /// Loads the last known tower secret key from the database.
+    ///
+    /// Loads the key with higher id from the database. Old keys are not overwritten just in case a recovery is needed,
+    /// but they are not accessible from the API either.
     pub fn load_tower_key(&self) -> Result<SecretKey, Error> {
         let mut stmt = self
             .connection
@@ -563,7 +614,7 @@ mod tests {
     use teos_common::cryptography::get_random_bytes;
 
     impl DBM {
-        pub fn in_memory() -> Result<Self, SqliteError> {
+        pub(crate) fn in_memory() -> Result<Self, SqliteError> {
             let connection = Connection::open_in_memory()?;
             connection.execute("PRAGMA foreign_keys=1;", [])?;
             let dbm = Self { connection };

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 // Ported from https://github.com/bitcoin/bitcoin/blob/0.18/src/rpc/protocol.h
+// TODO: Check if e can get rid of this whole module once `bitcoincore-rpc` is fully integrated.
 
 // General application defined errors
 pub const RPC_MISC_ERROR: i32 = -1; // std::exception thrown in command handling

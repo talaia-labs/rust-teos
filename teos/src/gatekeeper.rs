@@ -14,14 +14,19 @@ use teos_common::UserId;
 use crate::dbm::DBM;
 use crate::extended_appointment::{compute_appointment_slots, ExtendedAppointment, UUID};
 
+/// Data regarding a user subscription with the tower.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserInfo {
+    /// Number of appointment slots available for a given user.
     pub(crate) available_slots: u32,
+    /// Block height where the user subscription will expire.
     pub(crate) subscription_expiry: u32,
+    /// Map of appointment ids and the how many slots they take from the subscription.
     pub(crate) appointments: HashMap<UUID, u32>,
 }
 
 impl UserInfo {
+    /// Creates a new [UserInfo] instance.
     pub fn new(available_slots: u32, subscription_expiry: u32) -> Self {
         UserInfo {
             available_slots,
@@ -31,27 +36,48 @@ impl UserInfo {
     }
 }
 
+/// Error raised if the user cannot be authenticated.
 #[derive(Debug, PartialEq)]
 pub struct AuthenticationFailure<'a>(&'a str);
 
+/// Error raised if the user subscription has not enough slots to fit a new appointment.
 #[derive(Debug, PartialEq)]
 pub struct NotEnoughSlots;
 
+/// Error raised if the user subscription slots limit has been reached.
+///
+/// This is currently set to [u32::MAX].
 #[derive(Debug, PartialEq)]
 pub struct MaxSlotsReached;
 
+/// Component in charge of managing access to the tower resources.
+///
+/// The [Gatekeeper] keeps track of user subscriptions and allow users to interact with the tower based on it.
+/// A user is only allowed to send/request data to/from the tower given they have an ongoing subscription with
+/// available slots.
+/// This is the only component in the system that has some knowledge regarding users, all other components do query the
+/// [Gatekeeper] for such information.
 //TODO: Check if calls to the Gatekeeper need explicit Mutex of if Rust already prevents race conditions in this case.
 pub struct Gatekeeper {
+    /// last known block header by the [Gatekeeper].
     last_known_block_header: ValidatedBlockHeader,
+    /// Number of slots new subscriptions get by default.
     subscription_slots: u32,
+    /// Expiry time new subscription get by default, in blocks (starting from the block the subscription is requested).
     subscription_duration: u32,
+    /// Grace period given to renew subscriptions, in blocks.
     expiry_delta: u32,
+    /// Map of users registered within the tower.
     pub(crate) registered_users: RefCell<HashMap<UserId, UserInfo>>,
+    /// Map of users whose subscription has been outdated. Kept around so other components can perform the necessary
+    /// cleanups when deleting data.
     pub(crate) outdated_users_cache: RefCell<HashMap<u32, HashMap<UserId, Vec<UUID>>>>,
+    /// A [DBM] (database manager) instance. Used to persist appointment data into disk.
     dbm: Arc<Mutex<DBM>>,
 }
 
 impl Gatekeeper {
+    /// Creates a new [Gatekeeper] instance.
     pub fn new(
         last_known_block_header: ValidatedBlockHeader,
         subscription_slots: u32,
@@ -71,6 +97,10 @@ impl Gatekeeper {
         }
     }
 
+    /// Authenticates a user.
+    ///
+    /// User authentication is performed using ECRecover against fixed messages (one for each command).
+    /// Notice all interaction with the tower should be guarded by this.
     pub fn authenticate_user(
         &self,
         message: &[u8],
@@ -88,10 +118,11 @@ impl Gatekeeper {
         }
     }
 
+    /// Adds a new user to the tower (or updates its subscription if already registered).
     pub fn add_update_user(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let block_count = self.last_known_block_header.height;
 
-        // TODO: For now, new calls to register add subscription_slots to the current count and reset the expiry time
+        // TODO: For now, new calls to `add_update_user` add subscription_slots to the current count and reset the expiry time
         let mut borrowed = self.registered_users.borrow_mut();
         let user_info = match borrowed.get_mut(&user_id) {
             // User already exists, updating the info
@@ -129,6 +160,7 @@ impl Gatekeeper {
         ))
     }
 
+    /// Adds an appointment to a given user, or updates it if already present in the system (and belonging to the requester).
     pub fn add_update_appointment(
         &self,
         user_id: UserId,
@@ -158,6 +190,7 @@ impl Gatekeeper {
         }
     }
 
+    /// Checks whether a subscription has expired.
     pub fn has_subscription_expired(
         &self,
         user_id: UserId,
@@ -173,6 +206,10 @@ impl Gatekeeper {
         )
     }
 
+    /// Gets a map of outdated users. Outdated users are those whose subscription has expired and the renewal grace period
+    /// has already passed ([expiry_delta](Self::expiry_delta)).
+    ///
+    /// The data is pulled from the cache if present, otherwise it is computed on the fly.
     pub fn get_outdated_users(&self, block_height: u32) -> HashMap<UserId, Vec<UUID>> {
         let borrowed = self.outdated_users_cache.borrow();
         match borrowed.get(&block_height) {
@@ -189,6 +226,8 @@ impl Gatekeeper {
             }
         }
     }
+
+    /// Gets a list of outdated user ids.
     pub fn get_outdated_user_ids(&self, block_height: u32) -> Vec<UserId> {
         self.get_outdated_users(block_height)
             .keys()
@@ -196,6 +235,7 @@ impl Gatekeeper {
             .collect()
     }
 
+    /// Get a map of outdated appointments (from any user).
     pub fn get_outdated_appointments(&self, block_height: u32) -> HashSet<UUID> {
         HashSet::from_iter(
             self.get_outdated_users(block_height)
@@ -204,6 +244,8 @@ impl Gatekeeper {
         )
     }
 
+    /// Updates the outdated users cache by adding new outdated users (for a given height) and deleting old ones if the cache
+    /// grows beyond it's maximum size.
     pub fn update_outdated_users_cache(&self, block_height: u32) -> HashMap<UserId, Vec<UUID>> {
         let mut outdated_users = HashMap::new();
 
@@ -236,6 +278,11 @@ impl Gatekeeper {
         outdated_users
     }
 
+    /// Deletes a collection of appointments from the users' subscriptions (both from memory and from the database).
+    ///
+    /// Notice appointments are only de-linked from users, but not actually removed. This is because the [Gatekeeper]
+    /// does not actually hold any [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) data,
+    /// just references to them (the same applies to the database).
     pub fn delete_appointments(&self, appointments: &HashMap<UUID, UserId>) {
         let mut updated_users = HashSet::new();
 
@@ -264,6 +311,9 @@ impl Gatekeeper {
 }
 
 impl chain::Listen for Gatekeeper {
+    /// Handles the monitoring process by the [Gatekeeper].
+    ///
+    /// This is mainly used to keep track of time and expire / outdate subscriptions when needed.
     fn block_connected(&self, block: &bitcoin::Block, height: u32) {
         // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
         log::info!("New block received: {}", block.block_hash());
@@ -274,7 +324,8 @@ impl chain::Listen for Gatekeeper {
         }
     }
 
-    // FIXME: To be implemented
+    /// FIXME: To be implemented.
+    /// This will handle reorgs on the [Gatekeeper].
     #[allow(unused_variables)]
     fn block_disconnected(&self, header: &bitcoin::BlockHeader, height: u32) {
         todo!()

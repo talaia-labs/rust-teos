@@ -15,41 +15,54 @@ use bitcoincore_rpc::{
     Error::JsonRpc as JsonRpcError, RpcApi,
 };
 
+/// Contains data regarding an attempt of broadcasting a transaction.
 #[derive(Clone, Debug)]
-pub struct Receipt {
+pub struct DeliveryReceipt {
+    /// Whether the [Transaction] has been accepted by the network.
     delivered: bool,
+    /// Whether the [Transaction] was already confirmed.
     confirmations: Option<u32>,
+    /// Rejection reason. Only present if the [Transaction] is rejected.
     reason: Option<i32>,
 }
 
-impl Receipt {
+impl DeliveryReceipt {
+    /// Creates a new [DeliveryReceipt] instance.
     fn new(delivered: bool, confirmations: Option<u32>, reason: Option<i32>) -> Self {
-        Receipt {
+        DeliveryReceipt {
             delivered,
             confirmations,
             reason,
         }
     }
 
+    /// Getter for [self.delivered](Self::delivered).
     pub fn delivered(&self) -> bool {
         self.delivered
     }
 
+    /// Getter for [self.confirmations](Self::confirmations).
     pub fn confirmations(&self) -> &Option<u32> {
         &self.confirmations
     }
 
+    /// Getter for [self.reason](Self::reason).
     pub fn reason(&self) -> &Option<i32> {
         &self.reason
     }
 }
 
+/// Component in charge of the interaction with Bitcoind by sending / querying transactions via RPC.
 pub struct Carrier {
+    /// The underlying bitcoin client used by the [Carrier].
     bitcoin_cli: Arc<BitcoindClient>,
-    issued_receipts: HashMap<Txid, Receipt>,
+    /// A map of receipts already issued by the [Carrier].
+    /// Used to prevent potentially re-sending the same transaction over and over.
+    issued_receipts: HashMap<Txid, DeliveryReceipt>,
 }
 
 impl Carrier {
+    /// Creates a new [Carrier] instance.
     pub fn new(bitcoin_cli: Arc<BitcoindClient>) -> Self {
         Carrier {
             bitcoin_cli,
@@ -57,9 +70,13 @@ impl Carrier {
         }
     }
 
-    pub async fn send_transaction(&mut self, tx: &Transaction) -> Receipt {
+    /// Sends a [Transaction] to the Bitcoin network.
+    ///
+    /// Returns a [DeliveryReceipt] indicating whether the transaction could be delivered or not.
+    // FIXME: This needs finer catching of rejection reasons.
+    pub async fn send_transaction(&mut self, tx: &Transaction) -> DeliveryReceipt {
         log::info!("Pushing transaction to the network: {}", tx.txid());
-        let receipt: Receipt;
+        let receipt: DeliveryReceipt;
 
         // FIXME: Temporary hack until bitcoincore_rpc bumps it's version to match ldk's
         let rpc_tx =
@@ -69,17 +86,18 @@ impl Carrier {
         match self.bitcoin_cli.send_raw_transaction(&rpc_tx) {
             Ok(_) => {
                 log::info!("Transaction successfully delivered: {}", tx.txid());
-                receipt = Receipt::new(true, Some(0), None);
+                receipt = DeliveryReceipt::new(true, Some(0), None);
             }
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                 // Since we're pushing a raw transaction to the network we can face several rejections
                 rpc_errors::RPC_VERIFY_REJECTED => {
                     log::error!("Transaction couldn't be broadcast. {:?}", rpcerr);
-                    receipt = Receipt::new(false, None, Some(rpc_errors::RPC_VERIFY_REJECTED))
+                    receipt =
+                        DeliveryReceipt::new(false, None, Some(rpc_errors::RPC_VERIFY_REJECTED))
                 }
                 rpc_errors::RPC_VERIFY_ERROR => {
                     log::error!("Transaction couldn't be broadcast. {:?}", rpcerr);
-                    receipt = Receipt::new(false, None, Some(rpc_errors::RPC_VERIFY_ERROR))
+                    receipt = DeliveryReceipt::new(false, None, Some(rpc_errors::RPC_VERIFY_ERROR))
                 }
                 rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {
                     log::info!(
@@ -87,13 +105,18 @@ impl Carrier {
                         tx.txid()
                     );
 
-                    receipt = Receipt::new(true, self.get_confirmations(&tx.txid()).await, None)
+                    receipt =
+                        DeliveryReceipt::new(true, self.get_confirmations(&tx.txid()).await, None)
                 }
                 rpc_errors::RPC_DESERIALIZATION_ERROR => {
                     // Adding this here just for completeness. We should never end up here. The Carrier only sends txs handed by the Responder,
                     // who receives them from the Watcher, who checks that the tx can be properly deserialized.
                     log::info!("Transaction cannot be deserialized: {}", tx.txid());
-                    receipt = Receipt::new(false, None, Some(rpc_errors::RPC_DESERIALIZATION_ERROR))
+                    receipt = DeliveryReceipt::new(
+                        false,
+                        None,
+                        Some(rpc_errors::RPC_DESERIALIZATION_ERROR),
+                    )
                 }
                 _ => {
                     // If something else happens (unlikely but possible) log it so we can treat it in future releases
@@ -101,14 +124,15 @@ impl Carrier {
                         "Unexpected rpc error when calling sendrawtransaction: {:?}",
                         rpcerr
                     );
-                    receipt = Receipt::new(false, None, Some(errors::UNKNOWN_JSON_RPC_EXCEPTION))
+                    receipt =
+                        DeliveryReceipt::new(false, None, Some(errors::UNKNOWN_JSON_RPC_EXCEPTION))
                 }
             },
             Err(e) => {
                 {
                     // FIXME: Only logging for now. This needs finer catching. e.g. Connection errors need to be handled here
                     log::error!("Unexpected error when calling sendrawtransaction: {:?}", e);
-                    receipt = Receipt::new(false, None, None)
+                    receipt = DeliveryReceipt::new(false, None, None)
                 }
             }
         }
@@ -117,6 +141,8 @@ impl Carrier {
         receipt
     }
 
+    /// Queries a [Transaction] from our node. Returns it if found, [None] otherwise.
+    // FIXME: This needs finer catching of rejection reasons.
     pub async fn get_transaction(&self, txid: &Txid) -> Option<Transaction> {
         // FIXME: Temporary conversion between bitcoincore-rpc data and bitcoin data structures until both crates use the same
         // bitcoin version.
@@ -136,7 +162,7 @@ impl Carrier {
                     None
                 }
             },
-            // TODO: This needs finer catching. e.g. Connection errors need to be handled here
+            // FIXME: This needs finer catching. e.g. Connection errors need to be handled here
             Err(e) => {
                 log::error!(
                     "Unexpected JSONRPCError when calling getrawtransaction: {}",
@@ -147,6 +173,8 @@ impl Carrier {
         }
     }
 
+    /// Queries the confirmation count of a given [Transaction]. Returns it if the transaction can be found, [None] otherwise.
+    // FIXME: This needs finer catching. e.g. Connection errors need to be handled here
     pub async fn get_confirmations(&self, txid: &Txid) -> Option<u32> {
         // FIXME: Temporary conversion between bitcoincore-rpc data and bitcoin data structures until both crates use the same
         // bitcoin version.
@@ -166,7 +194,7 @@ impl Carrier {
                     None
                 }
             },
-            // TODO: This needs finer catching. e.g. Connection errors need to be handled here
+            // FIXME: This needs finer catching. e.g. Connection errors need to be handled here
             Err(e) => {
                 log::error!(
                     "Unexpected JSONRPCError when calling getrawtransaction: {}",

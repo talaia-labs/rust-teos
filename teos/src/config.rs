@@ -1,16 +1,21 @@
+use bitcoin::network::constants::Network;
 use serde::Deserialize;
 use std;
 use std::path::PathBuf;
+use std::str::FromStr;
 use structopt::StructOpt;
 
+/// Holds all the command line options.
 #[derive(StructOpt, Debug)]
 #[structopt(rename_all = "lowercase")]
-#[structopt(version = "version goes here", about = "Program help goes here")]
+#[structopt(version = "0.0.1", about = "The Eye of Satoshi - Lightning Watchtower")]
 pub struct Opt {
+    // FIXME: Not currently used
     /// Address teos HTTP(s) API will bind to [default: localhost]
     #[structopt(long)]
     pub api_bind: Option<String>,
 
+    // FIXME: Not currently used
     /// Port teos HTTP(s) API will bind to [default: 9814]
     #[structopt(long)]
     pub api_port: Option<u16>,
@@ -25,8 +30,7 @@ pub struct Opt {
     #[structopt(long)]
     pub rpc_port: Option<u16>,
 
-    /// Network bitcoind is connected to. Either mainnet, testnet or regtest [default: main]
-    // FIXME: Not currently used
+    /// Network bitcoind is connected to. Either bitcoin, testnet, signet or regtest [default: bitcoin]
     #[structopt(long)]
     pub btc_network: Option<String>,
 
@@ -65,6 +69,7 @@ pub struct Opt {
 }
 
 impl Opt {
+    /// Patches the data directory from relative to absolute if necessary.
     pub fn data_dir_absolute_path(&self) -> PathBuf {
         if self.data_dir.starts_with("~") {
             if self.data_dir.starts_with("~/") {
@@ -78,8 +83,9 @@ impl Opt {
     }
 }
 
+/// Error raised if something is wrong with the configuration.
 #[derive(PartialEq, Eq, Debug)]
-pub struct ConfigError(pub String);
+struct ConfigError(pub String);
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -89,6 +95,12 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+/// Holds all configuration options.
+///
+/// The overwrite policy goes, from less to more:
+/// - Defaults
+/// - Configuration file
+/// - Command line options
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -120,6 +132,7 @@ pub struct Config {
 }
 
 impl Config {
+    /// Loads the configuration options from a given TOML file.
     pub fn from_file(path: PathBuf) -> Config {
         match std::fs::read(&path) {
             Ok(file_content) => toml::from_slice::<Config>(&file_content).map_or_else(
@@ -141,6 +154,7 @@ impl Config {
         }
     }
 
+    /// Patches the configuration options with the command line options.
     pub fn patch_with_options(&mut self, options: Opt) {
         if options.api_bind.is_some() {
             self.api_bind = options.api_bind.unwrap();
@@ -178,45 +192,66 @@ impl Config {
         self.overwrite_key = options.overwrite_key;
     }
 
-    // FIXME: this may not be the best name given the btc_rpc_port default logic
+    /// Verifies that [Config] is properly built.
+    ///
+    /// This includes:
+    /// - `bitcoind` credentials have been set
+    /// - The Bitcoin network has been properly set (to either bitcoin, testnet, signet or regtest)
+    ///
+    /// This will also assign the default `btc_rpc_port` depending on the network if it has not
+    /// been overwritten at this point.
+    ///
+    /// # Exits
+    ///
+    /// If any of the checks does not pass.
     pub fn verify(&mut self) {
         if self.btc_rpc_user == String::new() {
             eprint!("btc_rpc_user must be set");
-            std::process::exit(-1);
+            std::process::exit(1);
         }
         if self.btc_rpc_password == String::new() {
             eprint!("btc_rpc_password must be set");
-            std::process::exit(-1);
+            std::process::exit(1);
         }
 
-        // TODO: check if we can simplify this
-        if !["main", "mainnet", "test", "testnet", "regtest"].contains(&self.btc_network.as_str()) {
-            eprint!(
-                "btc_network not recognized. Expected [mainnet, testnet, regtest], received {}",
-                self.btc_network
-            );
-            std::process::exit(-1);
-        } else if self.btc_rpc_port == 0 {
-            // btc_rpc_port is set to 0 by default so users do not have to set both btc_network and btc_rpc_port
-            // if they are using default values, but they are also able to specify a custom port if desired.
-            // If the value is still 0 at this point, set it up to the proper default.
-            self.btc_rpc_port = match self.btc_network.as_str() {
-                "test" | "testnet" => 18333,
-                "regtest" => 18443,
-                _ => 8442,
-            };
+        match Network::from_str(&self.btc_network) {
+            Ok(network) => {
+                // Set the port to it's default (depending on the network) if it has not been
+                // overwritten at this point.
+                if self.btc_rpc_port == 0 {
+                    self.btc_rpc_port = match network {
+                        Network::Testnet => 18333,
+                        Network::Signet => 38333,
+                        Network::Regtest => 18443,
+                        _ => 8442,
+                    }
+                }
+            }
+            Err(_) => {
+                eprint!(
+                    "btc_network not recognized. Expected {{bitcoin, testnet, signet, regtest}}, received {}",
+                    self.btc_network
+                );
+                std::process::exit(1);
+            }
         }
     }
 }
 
 impl Default for Config {
+    /// Sets the tower [Config] defaults.
+    ///
+    /// Notice the defaults are not enough, and the tower will refuse to run on them.
+    /// For instance, the defaults do set the `bitcoind` `rpu_user` and `rpc_password`
+    /// to empty strings so the user is forced the set them (and most importantly so the
+    /// user does not use any values provided here).
     fn default() -> Self {
         Self {
             api_bind: "localhost".to_owned(),
             api_port: 9814,
             rpc_bind: "localhost".to_owned(),
             rpc_port: 8814,
-            btc_network: "main".to_owned(),
+            btc_network: "bitcoin".to_owned(),
             btc_rpc_user: String::new(),
             btc_rpc_password: String::new(),
             btc_rpc_connect: "localhost".to_owned(),
