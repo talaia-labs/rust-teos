@@ -56,14 +56,17 @@ pub async fn main() {
 
     // Create data dir if it does not exist
     fs::create_dir_all(&path).unwrap_or_else(|e| {
-        eprint!("Cannot create data dir: {:?}", e);
+        eprint!("Cannot create data dir: {:?}\n", e);
         std::process::exit(1);
     });
 
     // Load conf (from file or defaults) and patch it with the command line parameters received (if any)
     let mut conf = Config::from_file(path.join("teos.toml"));
     conf.patch_with_options(opt);
-    conf.verify();
+    conf.verify().unwrap_or_else(|e| {
+        eprint!("{}\n", e);
+        std::process::exit(1);
+    });
 
     // Set log level
     if conf.debug {

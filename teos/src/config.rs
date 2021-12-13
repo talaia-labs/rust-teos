@@ -10,7 +10,7 @@ use structopt::StructOpt;
 /// Holds all the command line options.
 #[derive(StructOpt, Debug)]
 #[structopt(rename_all = "lowercase")]
-#[structopt(version = "0.0.1", about = "The Eye of Satoshi - Lightning Watchtower")]
+#[structopt(version = "0.0.1", about = "The Eye of Satoshi - Lightning watchtower")]
 pub struct Opt {
     // FIXME: Not currently used
     /// Address teos HTTP(s) API will bind to [default: localhost]
@@ -87,7 +87,7 @@ impl Opt {
 
 /// Error raised if something is wrong with the configuration.
 #[derive(PartialEq, Eq, Debug)]
-struct ConfigError(pub String);
+pub struct ConfigError(pub String);
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -103,7 +103,7 @@ impl std::error::Error for ConfigError {}
 /// - Defaults
 /// - Configuration file
 /// - Command line options
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
     // API
@@ -202,18 +202,12 @@ impl Config {
     ///
     /// This will also assign the default `btc_rpc_port` depending on the network if it has not
     /// been overwritten at this point.
-    ///
-    /// # Exits
-    ///
-    /// If any of the checks does not pass.
-    pub fn verify(&mut self) {
+    pub fn verify(&mut self) -> Result<(), ConfigError> {
         if self.btc_rpc_user == String::new() {
-            eprint!("btc_rpc_user must be set");
-            std::process::exit(1);
+            return Err(ConfigError("btc_rpc_user must be set".to_owned()));
         }
         if self.btc_rpc_password == String::new() {
-            eprint!("btc_rpc_password must be set");
-            std::process::exit(1);
+            return Err(ConfigError("btc_rpc_password must be set".to_owned()));
         }
 
         match Network::from_str(&self.btc_network) {
@@ -228,13 +222,11 @@ impl Config {
                         _ => 8442,
                     }
                 }
+                Ok(())
             }
             Err(_) => {
-                eprint!(
-                    "btc_network not recognized. Expected {{bitcoin, testnet, signet, regtest}}, received {}",
-                    self.btc_network
-                );
-                std::process::exit(1);
+                Err(ConfigError(format!("btc_network not recognized. Expected {{bitcoin, testnet, signet, regtest}}, received {}",
+                self.btc_network)))
             }
         }
     }
@@ -266,5 +258,76 @@ impl Default for Config {
             expiry_delta: 6,
             min_to_self_delay: 20,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl Default for Opt {
+        fn default() -> Self {
+            Self {
+                api_bind: None,
+                api_port: None,
+                rpc_bind: None,
+                rpc_port: None,
+                btc_network: None,
+                btc_rpc_user: None,
+                btc_rpc_password: None,
+                btc_rpc_connect: None,
+                btc_rpc_port: None,
+                data_dir: String::from("~/.teos"),
+                daemon: None,
+                debug: None,
+                overwrite_key: false,
+            }
+        }
+    }
+
+    #[test]
+    fn test_config_patch_with_options() {
+        // Tests that a given Config is overwritten with Opts if the options are present
+        let mut config = Config::default();
+        let config_clone = config.clone();
+        let mut opt = Opt::default();
+
+        let expected_value = String::from("test");
+        opt.api_bind = Some(expected_value.clone());
+        config.patch_with_options(opt);
+
+        // Check the field has been updated
+        assert_eq!(config.api_bind, expected_value);
+
+        // Check the rest of fields are equal. The easiest is to just the field back and compare with a clone
+        config.api_bind = config_clone.api_bind.clone();
+        assert_eq!(config, config_clone);
+    }
+
+    #[test]
+    fn test_config_default_not_verify() {
+        // Tests that the default configuration does not pass verification checks. This is on purpose so some fields are
+        // required to be updated by the user.
+        let mut config = Config::default();
+        assert!(matches!(config.verify(), Err(ConfigError { .. })));
+    }
+
+    #[test]
+    fn test_config_default_verify_overwrite_required() {
+        // Tests that setting a some btc_rpc_user and btc_rpc_password results in a Config object that verifies
+        let mut config = Config::default();
+        config.btc_rpc_user = "user".to_owned();
+        config.btc_rpc_password = "password".to_owned();
+        config.verify().unwrap();
+    }
+
+    #[test]
+    fn test_config_verify_wrong_network() {
+        // Tests that setting a wrong network will make verify fail
+        let mut config = Config::default();
+        config.btc_rpc_user = "user".to_owned();
+        config.btc_rpc_password = "password".to_owned();
+        config.btc_network = "wrong_network".to_owned();
+        assert!(matches!(config.verify(), Err(ConfigError { .. })));
     }
 }
