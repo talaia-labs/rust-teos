@@ -444,6 +444,13 @@ impl<'a> Listen for Responder<'a> {
 
             // Rebroadcast those transactions that need to
             block_on(self.rebroadcast());
+
+            // Remove all receipts created in this block
+            self.carrier.borrow_mut().clear_receipts();
+
+            if self.trackers.borrow().is_empty() {
+                log::info!("No more pending trackers");
+            }
         }
 
         *self.last_known_block_header.borrow_mut() = BlockHeaderData {
@@ -1099,6 +1106,7 @@ mod tests {
         // - Check if any tracker has been confirmed or add missing confirmations otherwise
         // - Rebroadcast all penalty transactions that need so
         // - Delete completed and outdated data (including data in the GK)
+        // - Clear the Carrier issued_receipts cache
 
         // Let's start by doing the data setup for each test (i.e. adding all the necessary data to the Responder and GK)
         let mut users = Vec::new();
@@ -1219,8 +1227,18 @@ mod tests {
             CONFIRMATIONS_BEFORE_RETRY,
         );
 
+        // CARRIER CACHE SETUP
+        // Add some dummy data in the cache to check that it gets cleared
+        responder.carrier.borrow_mut().issued_receipts.insert(
+            get_random_tx().txid(),
+            DeliveryReceipt::new(true, Some(0), None),
+        );
+
         // Connecting a block should trigger all the state transitions
         responder.block_connected(&chain.generate(None), chain.blocks.len() as u32);
+
+        // CARRIER CHECKS
+        assert!(responder.carrier.borrow().issued_receipts.is_empty());
 
         // COMPLETED TRACKERS CHECKS
         // Data should have been removed

@@ -18,7 +18,7 @@ use bitcoincore_rpc::{
 };
 
 /// Contains data regarding an attempt of broadcasting a transaction.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryReceipt {
     /// Whether the [Transaction] has been accepted by the network.
     delivered: bool,
@@ -30,7 +30,7 @@ pub struct DeliveryReceipt {
 
 impl DeliveryReceipt {
     /// Creates a new [DeliveryReceipt] instance.
-    fn new(delivered: bool, confirmations: Option<u32>, reason: Option<i32>) -> Self {
+    pub fn new(delivered: bool, confirmations: Option<u32>, reason: Option<i32>) -> Self {
         DeliveryReceipt {
             delivered,
             confirmations,
@@ -60,7 +60,7 @@ pub struct Carrier {
     bitcoin_cli: Arc<BitcoindClient>,
     /// A map of receipts already issued by the [Carrier].
     /// Used to prevent potentially re-sending the same transaction over and over.
-    issued_receipts: HashMap<Txid, DeliveryReceipt>,
+    pub(crate) issued_receipts: HashMap<Txid, DeliveryReceipt>,
 }
 
 impl Carrier {
@@ -72,11 +72,24 @@ impl Carrier {
         }
     }
 
+    /// Clears the receipts cached by the [Carrier]. Should be called periodically to prevent it from
+    /// growing unbounded.
+    pub fn clear_receipts(&mut self) {
+        if !self.issued_receipts.is_empty() {
+            self.issued_receipts = HashMap::new()
+        }
+    }
+
     /// Sends a [Transaction] to the Bitcoin network.
     ///
     /// Returns a [DeliveryReceipt] indicating whether the transaction could be delivered or not.
     // FIXME: This needs finer catching of rejection reasons.
     pub async fn send_transaction(&mut self, tx: &Transaction) -> DeliveryReceipt {
+        if let Some(receipt) = self.issued_receipts.get(&tx.txid()) {
+            log::info!("Transaction already sent: {}", tx.txid());
+            return receipt.clone();
+        }
+
         log::info!("Pushing transaction to the network: {}", tx.txid());
         let receipt: DeliveryReceipt;
 
@@ -213,11 +226,35 @@ mod tests {
     use super::*;
 
     use crate::rpc_errors::RPC_INVALID_ADDRESS_OR_KEY;
-    use crate::test_utils::{start_server, BitcoindMock, MockOptions, TXID_HEX, TX_HEX};
+    use crate::test_utils::{
+        get_random_tx, start_server, BitcoindMock, MockOptions, TXID_HEX, TX_HEX,
+    };
 
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::hashes::hex::FromHex;
     use bitcoincore_rpc::Auth;
+
+    #[tokio::test]
+    async fn test_clear_receipts() {
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock);
+
+        let mut carrier = Carrier::new(bitcoin_cli);
+
+        // Lets add some dummy data into the cache
+        for i in 0..10 {
+            carrier.issued_receipts.insert(
+                get_random_tx().txid(),
+                DeliveryReceipt::new(true, Some(i), None),
+            );
+        }
+
+        // Check it empties on request
+        assert!(!carrier.issued_receipts.is_empty());
+        carrier.clear_receipts();
+        assert!(carrier.issued_receipts.is_empty());
+    }
 
     #[tokio::test]
     async fn test_send_transaction_ok() {
@@ -232,6 +269,9 @@ mod tests {
         assert!(r.delivered);
         assert_eq!(r.confirmations, Some(0));
         assert_eq!(r.reason, None);
+
+        // Check the receipt is on the cache
+        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
     }
 
     #[tokio::test]
@@ -249,6 +289,9 @@ mod tests {
         assert!(!r.delivered);
         assert_eq!(r.confirmations, None);
         assert_eq!(r.reason, Some(rpc_errors::RPC_VERIFY_REJECTED));
+
+        // Check the receipt is on the cache
+        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
     }
 
     #[tokio::test]
@@ -265,6 +308,9 @@ mod tests {
         assert!(!r.delivered);
         assert_eq!(r.confirmations, None);
         assert_eq!(r.reason, Some(rpc_errors::RPC_VERIFY_ERROR));
+
+        // Check the receipt is on the cache
+        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
     }
 
     #[tokio::test]
@@ -284,6 +330,9 @@ mod tests {
         assert!(r.delivered);
         assert_eq!(r.confirmations, Some(expected_confirmations));
         assert_eq!(r.reason, None);
+
+        // Check the receipt is on the cache
+        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
     }
 
     #[tokio::test]
@@ -300,6 +349,9 @@ mod tests {
         assert!(!r.delivered);
         assert_eq!(r.confirmations, None);
         assert_eq!(r.reason, Some(errors::UNKNOWN_JSON_RPC_EXCEPTION));
+
+        // Check the receipt is on the cache
+        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
     }
 
     #[tokio::test]
@@ -314,6 +366,9 @@ mod tests {
         assert!(!r.delivered);
         assert_eq!(r.confirmations, None);
         assert_eq!(r.reason, None);
+
+        // Check the receipt is on the cache
+        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
     }
 
     #[tokio::test]
