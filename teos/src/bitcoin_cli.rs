@@ -1,3 +1,5 @@
+//! Logic related to the BitcoindClient, an simple bitcoind client implementation.
+
 // This is an adaptation of a bitcoind client with the minimal functionality required by the tower
 // The original piece of software can be found at https://github.com/lightningdevkit/ldk-sample/blob/main/src/bitcoind_client.rs
 

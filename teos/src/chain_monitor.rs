@@ -1,3 +1,6 @@
+//! Logic related to the ChainMonitor, the component in charge of querying block data from `bitcoind`.
+//!
+
 use std::ops::Deref;
 use std::{thread, time};
 

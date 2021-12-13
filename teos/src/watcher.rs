@@ -1,3 +1,5 @@
+//! Logic related to the Watcher, the components in charge of watching for breaches on chain.
+
 use futures::executor::block_on;
 use log;
 use std::cell::RefCell;

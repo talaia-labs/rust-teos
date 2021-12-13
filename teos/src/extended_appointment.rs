@@ -1,3 +1,5 @@
+//! Logic related to appointments handled by the tower.
+
 use std::fmt;
 
 use bitcoin::hashes::{ripemd160, Hash};

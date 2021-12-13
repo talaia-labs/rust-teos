@@ -1,3 +1,5 @@
+//! Logic related to the Responder, the components in charge of making sure breaches get properly punished.
+
 use futures::executor::block_on;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
