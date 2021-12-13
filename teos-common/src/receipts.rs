@@ -1,3 +1,5 @@
+//! Receipts issued  by towers and handed to users as commitment proof.
+
 use bitcoin::secp256k1::SecretKey;
 
 use crate::{cryptography, UserId};

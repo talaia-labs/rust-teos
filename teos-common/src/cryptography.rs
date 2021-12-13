@@ -1,3 +1,5 @@
+//! Cryptography module, used in the interction between users and towers.
+
 use rand::distributions::Uniform;
 use rand::Rng;
 
@@ -17,22 +19,28 @@ pub enum DecryptingError {
     Encode(bitcoin::consensus::encode::Error),
 }
 
-/// Shadows message_signing::sign.
+/// Shadows [message_signing::sign].
 pub fn sign(msg: &[u8], sk: &SecretKey) -> Result<String, Error> {
     message_signing::sign(msg, sk)
 }
 
-/// Shadows message_signing::verify.
+/// Shadows [message_signing::verify].
 pub fn verify(msg: &[u8], sig: &str, pk: &PublicKey) -> bool {
     message_signing::recover_pk(msg, sig).map_or_else(|_| false, |x| x == *pk)
 }
 
-/// Shadows message_signing::recover_pk.
+/// Shadows [message_signing::recover_pk].
 pub fn recover_pk(msg: &[u8], sig: &str) -> Result<PublicKey, Error> {
     message_signing::recover_pk(msg, sig)
 }
 
-/// Encrypts a given message (the penalty transaction) under a given secret (the dispute txid) using chacha20poly1305 with [0; 12] as IV.
+/// Encrypts a given message under a given secret using `chacha20poly1305`.
+///
+/// The key material used is:
+/// - The dispute txid as encryption key.
+/// - `[0; 12]` as IV.
+///
+/// The message to be encrypted is expected to be the penalty transaction.
 pub fn encrypt(
     message: &Transaction,
     secret: &Txid,
@@ -46,8 +54,13 @@ pub fn encrypt(
     cypher.encrypt(&nonce, message.serialize().as_ref())
 }
 
-/// Decrypts an encrypted blob of data using a given secret (the dispute txid) using chacha20poly1305 with [0; 12] as IV. The result is expected to
-/// be a penalty transaction.
+/// Decrypts an encrypted blob of data using `chacha20poly1305` and a given secret.
+///
+/// The key material used is:
+/// - The dispute txid as decryption key.
+/// - `[0; 12]` as IV.
+///
+///  The result is expected to be a penalty transaction.
 pub fn decrypt(encrypted_blob: &Vec<u8>, secret: &Txid) -> Result<Transaction, DecryptingError> {
     // Defaults is [0; 12]
     let nonce = Nonce::default();
@@ -64,6 +77,9 @@ pub fn decrypt(encrypted_blob: &Vec<u8>, secret: &Txid) -> Result<Transaction, D
     }
 }
 
+/// Utility function to create a vector of pseudo random bytes.
+///
+/// Mainly used for testing purposes.
 pub fn get_random_bytes(size: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
     let uniform_u8 = Uniform::new(u8::MIN, u8::MAX);
@@ -72,6 +88,7 @@ pub fn get_random_bytes(size: usize) -> Vec<u8> {
     v
 }
 
+/// Gets a key pair generated in a pseudorandom way.
 pub fn get_random_keypair() -> (SecretKey, PublicKey) {
     let raw_sk = get_random_bytes(32);
 

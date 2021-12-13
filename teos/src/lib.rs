@@ -1,6 +1,6 @@
-//! The Eye of Satoshi
+//! The Eye of Satoshi - Lightning watchtower.
 //!
-//! A lightning watchtower implementation written in Rust.
+//! A watchtower implementation written in Rust.
 
 pub mod bitcoin_cli;
 pub mod carrier;
