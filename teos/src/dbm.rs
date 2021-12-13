@@ -1,3 +1,6 @@
+//! Logic related to the database manager (DBM), component in charge of persisting data on disk.
+//!
+
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::PathBuf;

@@ -1,3 +1,5 @@
+//! Logic related to the Gatekeeper, the component in charge of managing access to the tower resources.
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;

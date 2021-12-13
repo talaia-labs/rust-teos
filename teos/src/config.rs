@@ -1,3 +1,5 @@
+//! Logic related to the tower configuration and command line parameter parsing.
+
 use bitcoin::network::constants::Network;
 use serde::Deserialize;
 use std;

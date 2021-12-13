@@ -1,3 +1,5 @@
+//! Logic related to the Carrier, the component in charge or sending/requesting transaction data from/to `bitcoind`.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
