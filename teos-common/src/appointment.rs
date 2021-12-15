@@ -1,6 +1,7 @@
 //! Logic related to appointments shared between users and the towers.
 
 use hex;
+use std::array::TryFromSliceError;
 use std::{convert::TryInto, fmt};
 
 use bitcoin::Txid;
@@ -21,13 +22,8 @@ impl Locator {
     }
 
     /// Builds a locator from its byte representation.
-    pub fn deserialize(data: Vec<u8>) -> Result<Self, ()> {
-        if data.len() == 16 {
-            data[..16].try_into().map(|x| Self(x)).map_err(|_| ())
-        } else {
-            // TODO: Maybe add a more expressive error?
-            Err(())
-        }
+    pub fn deserialize(data: &[u8]) -> Result<Self, TryFromSliceError> {
+        data.try_into().map(|x| Self(x))
     }
 }
 

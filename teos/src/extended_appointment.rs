@@ -1,5 +1,7 @@
 //! Logic related to appointments handled by the tower.
 
+use std::array::TryFromSliceError;
+use std::convert::TryInto;
 use std::fmt;
 
 use bitcoin::hashes::{ripemd160, Hash};
@@ -26,6 +28,11 @@ impl UUID {
     /// Serializes the [UUID] returning its byte representation.
     pub fn serialize(&self) -> Vec<u8> {
         self.0.to_vec()
+    }
+
+    /// Builds a [UUID] from its byte representation.
+    pub fn deserialize(data: &[u8]) -> Result<Self, TryFromSliceError> {
+        data.try_into().map(|x| Self(x))
     }
 }
 
