@@ -87,7 +87,7 @@ impl Opt {
 
 /// Error raised if something is wrong with the configuration.
 #[derive(PartialEq, Eq, Debug)]
-pub struct ConfigError(pub String);
+pub struct ConfigError(String);
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {

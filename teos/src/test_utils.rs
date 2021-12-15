@@ -295,7 +295,7 @@ impl BlockSource for Blockchain {
 pub(crate) fn generate_uuid() -> UUID {
     let mut rng = rand::thread_rng();
 
-    UUID(rng.gen())
+    UUID::deserialize(&rng.gen::<[u8; 20]>()).unwrap()
 }
 
 pub(crate) fn get_random_user_id() -> UserId {

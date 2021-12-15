@@ -75,7 +75,7 @@ impl TransactionTracker {
 pub struct Responder<'a> {
     /// A map holding a summary of every tracker ([TransactionTracker]) hold by the [Responder], identified by [UUID].
     /// The identifiers match those used by the [Watcher](crate::watcher::Watcher).
-    pub(crate) trackers: RefCell<HashMap<UUID, TrackerSummary>>,
+    trackers: RefCell<HashMap<UUID, TrackerSummary>>,
     /// A map between [Txid]s and [UUID]s.
     tx_tracker_map: RefCell<HashMap<Txid, HashSet<UUID>>>,
     /// A collection of transactions yet to get a single confirmation.
@@ -85,7 +85,7 @@ pub struct Responder<'a> {
     /// Only keeps track of penalty transactions being monitored by the [Responder].
     missed_confirmations: RefCell<HashMap<Txid, u8>>,
     /// A [Carrier] instance. Data is sent to the `bitcoind` trough it.
-    pub(crate) carrier: RefCell<Carrier>,
+    carrier: RefCell<Carrier>,
     /// A [Gatekeeper] instance. Data regarding users is requested to it.
     gatekeeper: &'a Gatekeeper,
     /// A [DBM] (database manager) instance. Used to persist tracker data into disk.
@@ -488,6 +488,16 @@ mod tests {
         SLOTS, START_HEIGHT,
     };
 
+    impl<'a> Responder<'a> {
+        pub fn get_trackers(&self) -> &RefCell<HashMap<UUID, TrackerSummary>> {
+            &self.trackers
+        }
+
+        pub fn get_carrier(&self) -> &RefCell<Carrier> {
+            &self.carrier
+        }
+    }
+
     fn create_responder<'a>(
         chain: &mut Blockchain,
         gatekeeper: &'a Gatekeeper,
@@ -847,7 +857,7 @@ mod tests {
         }
         let outdated_users: HashMap<UserId, Vec<UUID>> =
             [(user_id, uuids.clone())].iter().cloned().collect();
-        gk.outdated_users_cache
+        gk.get_outdated_users_cache()
             .borrow_mut()
             .insert(target_block_height, outdated_users);
 
@@ -1139,7 +1149,7 @@ mod tests {
                 user_id,
                 constants::IRREVOCABLY_RESOLVED + 1,
             );
-            gk.registered_users
+            gk.get_registered_users()
                 .borrow_mut()
                 .get_mut(&user_id)
                 .unwrap()
@@ -1176,7 +1186,7 @@ mod tests {
             uuids.extend(pair);
         }
 
-        gk.outdated_users_cache
+        gk.get_outdated_users_cache()
             .borrow_mut()
             .insert(target_block_height, outdated_users);
 
@@ -1229,7 +1239,7 @@ mod tests {
 
         // CARRIER CACHE SETUP
         // Add some dummy data in the cache to check that it gets cleared
-        responder.carrier.borrow_mut().issued_receipts.insert(
+        responder.carrier.borrow_mut().get_issued_receipts().insert(
             get_random_tx().txid(),
             DeliveryReceipt::new(true, Some(0), None),
         );
@@ -1238,7 +1248,11 @@ mod tests {
         responder.block_connected(&chain.generate(None), chain.blocks.len() as u32);
 
         // CARRIER CHECKS
-        assert!(responder.carrier.borrow().issued_receipts.is_empty());
+        assert!(responder
+            .carrier
+            .borrow_mut()
+            .get_issued_receipts()
+            .is_empty());
 
         // COMPLETED TRACKERS CHECKS
         // Data should have been removed
@@ -1248,7 +1262,7 @@ mod tests {
                 .tx_tracker_map
                 .borrow()
                 .contains_key(&breach.penalty_tx.txid()));
-            assert!(!gk.registered_users.borrow()[&user_id]
+            assert!(!gk.get_registered_users().borrow()[&user_id]
                 .appointments
                 .contains_key(&uuid));
         }

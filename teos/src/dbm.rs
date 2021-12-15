@@ -226,7 +226,7 @@ impl DBM {
         let mut appointments = HashMap::new();
         while let Ok(Some(inner_row)) = rows.next() {
             let raw_uuid: Vec<u8> = inner_row.get(0).unwrap();
-            let uuid = UUID(raw_uuid[0..20].try_into().unwrap());
+            let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
             let e_blob: Vec<u8> = inner_row.get(1).unwrap();
 
             appointments.insert(
@@ -363,7 +363,7 @@ impl DBM {
 
         while let Ok(Some(row)) = rows.next() {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
-            let uuid = UUID(raw_uuid[0..20].try_into().unwrap());
+            let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
             let raw_locator: Vec<u8> = row.get(1).unwrap();
             let locator: [u8; 16] = raw_locator[0..16].try_into().unwrap();
             let raw_userid: Vec<u8> = row.get(6).unwrap();
@@ -459,7 +459,7 @@ impl DBM {
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
             let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
             let raw_locator: Vec<u8> = row.get(3).unwrap();
-            let locator = Locator::deserialize(raw_locator).unwrap();
+            let locator = Locator::deserialize(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(4).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 
@@ -484,13 +484,13 @@ impl DBM {
 
         while let Ok(Some(row)) = rows.next() {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
-            let uuid = UUID(raw_uuid[0..20].try_into().unwrap());
+            let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
             let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
             let dispute_tx = deserialize::<Transaction>(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
             let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
             let raw_locator: Vec<u8> = row.get(3).unwrap();
-            let locator = Locator::deserialize(raw_locator).unwrap();
+            let locator = Locator::deserialize(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(4).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 

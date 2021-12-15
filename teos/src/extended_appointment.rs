@@ -11,7 +11,7 @@ use teos_common::UserId;
 
 /// Unique identifier used to identify appointments.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct UUID(pub [u8; 20]);
+pub struct UUID([u8; 20]);
 
 impl UUID {
     /// Creates a new [UUID].

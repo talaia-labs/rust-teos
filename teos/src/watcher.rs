@@ -94,17 +94,17 @@ impl LocatorCache {
     }
 
     /// Gets a transaction from the cache if present. [None] otherwise.
-    pub fn get_tx(&self, locator: Locator) -> Option<&Transaction> {
+    fn get_tx(&self, locator: Locator) -> Option<&Transaction> {
         self.cache.get(&locator)
     }
 
     /// Checks if the cache if full.
-    pub fn is_full(&self) -> bool {
+    fn is_full(&self) -> bool {
         self.blocks.len() > self.size
     }
 
     /// Updates the cache by adding data from a new block. Removes the oldest block if the cache is full afterwards.
-    pub fn update(
+    fn update(
         &mut self,
         block_header: BlockHeader,
         locator_tx_map: &HashMap<Locator, Transaction>,
@@ -129,7 +129,7 @@ impl LocatorCache {
     #[allow(dead_code)]
     /// FIXME: Currently dead code. Fixes the cache by removing reorged blocks and adding the new valid ones.
     /// This should be called within Watcher::block_disconnected).
-    pub async fn fix(&mut self, header: &BlockHeader) {
+    async fn fix(&mut self, header: &BlockHeader) {
         for locator in self.tx_in_block[&header.block_hash()].iter() {
             self.cache.remove(locator);
         }
@@ -149,7 +149,7 @@ impl LocatorCache {
 
     /// Removes the oldest block from the cache.
     /// This removes data from `self.blocks`, `self.tx_in_block` and `self.cache`.
-    pub fn remove_oldest_block(&mut self) {
+    fn remove_oldest_block(&mut self) {
         let oldest_hash = self.blocks.remove(0);
         for locator in self.tx_in_block.remove(&oldest_hash).unwrap() {
             self.cache.remove(&locator);
@@ -963,7 +963,7 @@ mod tests {
 
         // Transaction rejected
         // Update the Responder with a new Carrier
-        *watcher.responder.carrier.borrow_mut() = create_carrier(MockedServerQuery::Error(
+        *watcher.responder.get_carrier().borrow_mut() = create_carrier(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
         ));
 
@@ -1006,7 +1006,7 @@ mod tests {
         // already tested int he Gatekeeper. Testing that it is  rejected if the condition is met should suffice.
         watcher
             .gatekeeper
-            .registered_users
+            .get_registered_users()
             .borrow_mut()
             .get_mut(&user_id)
             .unwrap()
@@ -1029,7 +1029,7 @@ mod tests {
         // If the user subscription has expired, the appointment should be rejected.
         watcher
             .gatekeeper
-            .registered_users
+            .get_registered_users()
             .borrow_mut()
             .get_mut(&user2_id)
             .unwrap()
@@ -1133,7 +1133,7 @@ mod tests {
         // If the user subscription has expired, the request will fail
         watcher
             .gatekeeper
-            .registered_users
+            .get_registered_users()
             .borrow_mut()
             .get_mut(&user_id)
             .unwrap()
@@ -1422,7 +1422,7 @@ mod tests {
 
         watcher
             .gatekeeper
-            .registered_users
+            .get_registered_users()
             .borrow_mut()
             .get_mut(&user_id)
             .unwrap()
@@ -1433,18 +1433,20 @@ mod tests {
             assert!(watcher.appointments.borrow().contains_key(&uuid));
             assert!(watcher.locator_uuid_map.borrow()[&appointment.locator()].contains(&uuid));
         }
-        assert!(watcher.gatekeeper.registered_users.borrow()[&user_id]
+        assert!(watcher.gatekeeper.get_registered_users().borrow()[&user_id]
             .appointments
             .contains_key(&uuid1));
-        assert!(watcher.gatekeeper.registered_users.borrow()[&user2_id]
-            .appointments
-            .contains_key(&uuid2));
+        assert!(
+            watcher.gatekeeper.get_registered_users().borrow()[&user2_id]
+                .appointments
+                .contains_key(&uuid2)
+        );
 
         watcher.block_connected(&chain.generate(None), chain.blocks.len() as u32);
 
         assert!(!watcher.appointments.borrow().contains_key(&uuid1));
         assert!(!watcher.locator_uuid_map.borrow()[&appointment.locator()].contains(&uuid1));
-        assert!(watcher.gatekeeper.registered_users.borrow()[&user_id]
+        assert!(watcher.gatekeeper.get_registered_users().borrow()[&user_id]
             .appointments
             .contains_key(&uuid1));
         assert!(matches!(
@@ -1454,9 +1456,11 @@ mod tests {
 
         assert!(watcher.appointments.borrow().contains_key(&uuid2));
         assert!(watcher.locator_uuid_map.borrow()[&appointment.locator()].contains(&uuid2));
-        assert!(watcher.gatekeeper.registered_users.borrow()[&user2_id]
-            .appointments
-            .contains_key(&uuid2));
+        assert!(
+            watcher.gatekeeper.get_registered_users().borrow()[&user2_id]
+                .appointments
+                .contains_key(&uuid2)
+        );
         assert!(matches!(
             dbm.lock().unwrap().load_appointment(uuid2),
             Ok(ExtendedAppointment { .. })
@@ -1481,10 +1485,16 @@ mod tests {
 
         // Data should have been moved to the Responder and kept in the Gatekeeper, since it is still part of the system.
         assert!(!watcher.appointments.borrow().contains_key(&uuid));
-        assert!(watcher.responder.trackers.borrow().contains_key(&uuid));
-        assert!(watcher.gatekeeper.registered_users.borrow()[&user2_id]
-            .appointments
+        assert!(watcher
+            .responder
+            .get_trackers()
+            .borrow()
             .contains_key(&uuid));
+        assert!(
+            watcher.gatekeeper.get_registered_users().borrow()[&user2_id]
+                .appointments
+                .contains_key(&uuid)
+        );
 
         // Checks invalid triggers. Add a new appointment and trigger it with invalid data.
         let dispute_tx = get_random_tx();
@@ -1506,10 +1516,16 @@ mod tests {
 
         // Data has been wiped since it was invalid
         assert!(!watcher.appointments.borrow().contains_key(&uuid));
-        assert!(!watcher.responder.trackers.borrow().contains_key(&uuid));
-        assert!(!watcher.gatekeeper.registered_users.borrow()[&user2_id]
-            .appointments
+        assert!(!watcher
+            .responder
+            .get_trackers()
+            .borrow()
             .contains_key(&uuid));
+        assert!(
+            !watcher.gatekeeper.get_registered_users().borrow()[&user2_id]
+                .appointments
+                .contains_key(&uuid)
+        );
         assert!(matches!(
             dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)

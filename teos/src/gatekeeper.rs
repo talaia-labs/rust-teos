@@ -70,10 +70,10 @@ pub struct Gatekeeper {
     /// Grace period given to renew subscriptions, in blocks.
     expiry_delta: u32,
     /// Map of users registered within the tower.
-    pub(crate) registered_users: RefCell<HashMap<UserId, UserInfo>>,
+    registered_users: RefCell<HashMap<UserId, UserInfo>>,
     /// Map of users whose subscription has been outdated. Kept around so other components can perform the necessary
     /// cleanups when deleting data.
-    pub(crate) outdated_users_cache: RefCell<HashMap<u32, HashMap<UserId, Vec<UUID>>>>,
+    outdated_users_cache: RefCell<HashMap<u32, HashMap<UserId, Vec<UUID>>>>,
     /// A [DBM] (database manager) instance. Used to persist appointment data into disk.
     dbm: Arc<Mutex<DBM>>,
 }
@@ -248,7 +248,7 @@ impl Gatekeeper {
 
     /// Updates the outdated users cache by adding new outdated users (for a given height) and deleting old ones if the cache
     /// grows beyond it's maximum size.
-    pub fn update_outdated_users_cache(&self, block_height: u32) -> HashMap<UserId, Vec<UUID>> {
+    fn update_outdated_users_cache(&self, block_height: u32) -> HashMap<UserId, Vec<UUID>> {
         let mut outdated_users = HashMap::new();
 
         if !self
@@ -350,6 +350,18 @@ mod tests {
     const DURATION: u32 = 500;
     const EXPIRY_DELTA: u32 = 42;
     const START_HEIGHT: usize = 100;
+
+    impl Gatekeeper {
+        pub fn get_registered_users(&self) -> &RefCell<HashMap<UserId, UserInfo>> {
+            &self.registered_users
+        }
+
+        pub fn get_outdated_users_cache(
+            &self,
+        ) -> &RefCell<HashMap<u32, HashMap<UserId, Vec<UUID>>>> {
+            &self.outdated_users_cache
+        }
+    }
 
     #[test]
     fn test_authenticate_user() {

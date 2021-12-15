@@ -60,7 +60,7 @@ pub struct Carrier {
     bitcoin_cli: Arc<BitcoindClient>,
     /// A map of receipts already issued by the [Carrier].
     /// Used to prevent potentially re-sending the same transaction over and over.
-    pub(crate) issued_receipts: HashMap<Txid, DeliveryReceipt>,
+    issued_receipts: HashMap<Txid, DeliveryReceipt>,
 }
 
 impl Carrier {
@@ -233,6 +233,13 @@ mod tests {
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::hashes::hex::FromHex;
     use bitcoincore_rpc::Auth;
+
+    impl Carrier {
+        // Helper function to access issued_receipts in tests
+        pub(crate) fn get_issued_receipts(&mut self) -> &mut HashMap<Txid, DeliveryReceipt> {
+            &mut self.issued_receipts
+        }
+    }
 
     #[tokio::test]
     async fn test_clear_receipts() {
