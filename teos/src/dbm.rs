@@ -904,7 +904,7 @@ mod tests {
         tracker.locator = appointment.locator();
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
-        // Try to store it again, but it shouldn't go trough
+        // Try to store it again, but it shouldn't go through
         assert!(matches!(
             dbm.store_tracker(uuid, &tracker),
             Err(Error::AlreadyExists)

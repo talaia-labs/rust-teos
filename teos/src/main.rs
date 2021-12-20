@@ -133,26 +133,33 @@ pub async fn main() {
     let cache = &mut UnboundedCache::new();
     let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
 
-    let gatekeeper = Gatekeeper::new(
+    let gatekeeper = Arc::new(Gatekeeper::new(
         tip,
         conf.subscription_slots,
         conf.subscription_duration,
         conf.expiry_delta,
         dbm.clone(),
-    );
+    ));
     let carrier = Carrier::new(rpc.clone());
-    let responder = Responder::new(carrier, &gatekeeper, dbm.clone(), tip);
-    let watcher = Watcher::new(
-        &gatekeeper,
-        &responder,
-        last_n_blocks,
-        tip,
-        tower_sk,
+    let responder = Arc::new(Responder::new(
+        carrier,
+        gatekeeper.clone(),
         dbm.clone(),
-    )
-    .await;
+        tip,
+    ));
+    let watcher = Arc::new(
+        Watcher::new(
+            gatekeeper.clone(),
+            responder.clone(),
+            last_n_blocks,
+            tip,
+            tower_sk,
+            dbm.clone(),
+        )
+        .await,
+    );
 
-    let listener = &(&watcher, &(&responder, &gatekeeper));
+    let listener = &(watcher, &(responder, gatekeeper));
     let spv_client = SpvClient::new(tip, poller, cache, listener);
 
     // DISCUSS: the CM may not be necessary since it's only being used to log stuff. Doing spv_client.poll_best_tip().await will
