@@ -1,0 +1,82 @@
+syntax = "proto3";
+package teos.v1;
+
+message Appointment {
+  /*
+  Contains the basic information about an appointment (Watcher) and it's used for messages like
+  AddAppointmentRequest or encapsulated inside AppointmentData for GetAppointmentResponse
+  */
+
+  bytes locator = 1;
+  bytes encrypted_blob = 2;
+  uint32 to_self_delay = 3;
+
+}
+
+message Tracker {
+  // It's the equivalent of an appointment message from data held by the Responder.
+
+  bytes locator = 1;
+  bytes dispute_txid = 2;
+  bytes penalty_txid = 3;
+  bytes penalty_rawtx = 4;
+}
+
+message AppointmentData {
+  /*
+  Encapsulates the data for a GetAppointmentResponse, given it can be an appointment (data is on the Watcher) or a
+  tracker (data is on the Responder).
+  */
+
+  oneof appointment_data {
+    Appointment appointment = 1;
+    Tracker tracker = 2;
+  }
+}
+
+message AddAppointmentRequest {
+  // Request to add an appointment to the backend, contains the appointment data and the user signature.
+
+  Appointment appointment = 1;
+  string signature = 2;
+}
+
+message AddAppointmentResponse {
+  /*
+  Response to an AddAppointmentRequest, contains the locator to identify the added appointment, the tower signature,
+  the block at which the tower has started (or will start) watching for the appointment, and the updated subscription
+  information.
+   */
+
+  bytes locator = 1;
+  uint32 start_block = 2;
+  string signature = 3;
+  uint32 available_slots = 4;
+  uint32 subscription_expiry = 5;
+}
+
+message GetAppointmentRequest {
+  // Request to get information about an appointment. Contains the appointment locator and a signature by the user.
+
+  bytes locator = 1;
+  string signature = 2;
+}
+
+message GetAppointmentResponse {
+  // Response to a GetAppointmentRequest. Contains the appointment data encapsulated in an AppointmentData message.
+
+  AppointmentData appointment_data = 1;
+  enum AppointmentStatus {
+    NOT_FOUND = 0;
+    BEING_WATCHED = 1;
+    DISPUTE_RESPONDED = 2;
+
+  }
+  AppointmentStatus status = 2;
+}
+
+message GetAllAppointmentsResponse {
+  // Response with data about all the appointments in the tower. 
+  
+  repeated AppointmentData appointments = 1;
+}
