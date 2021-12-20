@@ -27,7 +27,19 @@ impl UserId {
     }
 }
 
-impl std::fmt::Display for UserId {
+impl std::str::FromStr for UserId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        PublicKey::from_str(s)
+            .map_err(|_| {
+                "Provided public key does not match expected format (33-byte hex string)".into()
+            })
+            .map(|pk| Self(pk))
+    }
+}
+
+impl fmt::Display for UserId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
     }

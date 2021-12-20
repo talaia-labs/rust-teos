@@ -3,6 +3,7 @@ use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
+use tonic::transport::Server;
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
@@ -11,15 +12,20 @@ use lightning_block_sync::init::validate_best_block_header;
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlock, ValidatedBlockHeader};
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
+use rusty_teos::api::InternalAPI;
 use rusty_teos::bitcoin_cli::BitcoindClient;
 use rusty_teos::carrier::Carrier;
 use rusty_teos::chain_monitor::ChainMonitor;
 use rusty_teos::config::{Config, Opt};
 use rusty_teos::dbm::DBM;
 use rusty_teos::gatekeeper::Gatekeeper;
+use rusty_teos::protos::private_tower_services_server::PrivateTowerServicesServer;
+use rusty_teos::protos::public_tower_services_server::PublicTowerServicesServer;
 use rusty_teos::responder::Responder;
 use rusty_teos::watcher::Watcher;
+
 use teos_common::cryptography::get_random_keypair;
+use teos_common::UserId;
 
 async fn get_last_n_blocks<B, T>(
     poller: &mut ChainPoller<B, T>,
@@ -154,10 +160,23 @@ pub async fn main() {
             last_n_blocks,
             tip,
             tower_sk,
+            UserId(tower_pk),
             dbm.clone(),
         )
         .await,
     );
+
+    let internal_api = Arc::new(InternalAPI::new(watcher.clone()));
+
+    let addr = format!("{}:{}", conf.internal_api_bind, conf.internal_api_port)
+        .parse()
+        .unwrap();
+    Server::builder()
+        .add_service(PrivateTowerServicesServer::new(internal_api.clone()))
+        .add_service(PublicTowerServicesServer::new(internal_api).clone())
+        .serve(addr)
+        .await
+        .unwrap();
 
     let listener = &(watcher, &(responder, gatekeeper));
     let spv_client = SpvClient::new(tip, poller, cache, listener);

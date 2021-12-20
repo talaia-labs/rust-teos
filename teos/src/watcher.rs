@@ -23,7 +23,7 @@ use teos_common::UserId;
 
 use crate::dbm::DBM;
 use crate::extended_appointment::{AppointmentSummary, ExtendedAppointment, UUID};
-use crate::gatekeeper::{Gatekeeper, MaxSlotsReached};
+use crate::gatekeeper::{Gatekeeper, MaxSlotsReached, UserInfo};
 use crate::responder::{Responder, TransactionTracker};
 
 /// Data structure used to cache locators computed from parsed blocks.
@@ -203,6 +203,13 @@ pub enum GetAppointmentFailure {
     NotFound,
 }
 
+/// Packs the reasons why trying to query a subscription info may fail.
+#[derive(Debug)]
+pub enum GetSubscriptionInfoFailure {
+    AuthenticationFailure,
+    SubscriptionExpired(u32),
+}
+
 /// Wraps the returning information regarding a queried appointment.
 ///
 /// Either an [Appointment] or a [TransactionTracker] can be
@@ -229,6 +236,8 @@ pub struct Watcher {
     last_known_block_header: Mutex<BlockHeaderData>,
     /// The tower signing key. Used to sign messages going to users.
     signing_key: SecretKey,
+    /// The tower identifier.
+    pub tower_id: UserId,
     /// A [DBM] (database manager) instance. Used to persist appointment data into disk.
     dbm: Arc<Mutex<DBM>>,
 }
@@ -241,6 +250,7 @@ impl Watcher {
         last_n_blocks: Vec<ValidatedBlock>,
         last_known_block_header: ValidatedBlockHeader,
         signing_key: SecretKey,
+        tower_id: UserId,
         dbm: Arc<Mutex<DBM>>,
     ) -> Self {
         let appointments = Mutex::new(HashMap::new());
@@ -255,6 +265,7 @@ impl Watcher {
             gatekeeper,
             last_known_block_header: Mutex::new(*last_known_block_header.deref()),
             signing_key,
+            tower_id,
             dbm,
         }
     }
@@ -589,6 +600,77 @@ impl Watcher {
         // Remove data from the database
         self.dbm.lock().unwrap().batch_remove_appointments(&uuids);
     }
+
+    /// Ges the number of users currently registered with the tower.
+    pub fn get_registered_users_count(&self) -> usize {
+        self.gatekeeper.get_registered_users_count()
+    }
+
+    /// Gets the total number of appointments stored in the [Watcher].
+    pub fn get_appointments_count(&self) -> usize {
+        self.appointments.lock().unwrap().len()
+    }
+
+    /// Gets the total number of trackers in the [Responder].
+    pub fn get_trackers_count(&self) -> usize {
+        self.responder.get_trackers_count()
+    }
+
+    /// Gets all the appointments stored in the [Watcher] (from the database).
+    pub fn get_all_watcher_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
+        self.dbm.lock().unwrap().load_all_appointments()
+    }
+
+    /// Gets all the trackers stored in the [Responder] (from the database).
+    pub fn get_all_responder_trackers(&self) -> HashMap<UUID, TransactionTracker> {
+        self.dbm.lock().unwrap().load_all_trackers()
+    }
+
+    /// Gets the list of all registered user ids.
+    pub fn get_user_ids(&self) -> Vec<UserId> {
+        self.gatekeeper.get_user_ids()
+    }
+
+    /// Gets the data held by the tower about a given user.
+    pub fn get_user_info(&self, user_id: UserId) -> Option<UserInfo> {
+        self.gatekeeper.get_user_info(user_id)
+    }
+
+    /// Gets information about a user's subscription.
+    pub fn get_subscription_info(
+        &self,
+        signature: &str,
+    ) -> Result<(UserInfo, Vec<Locator>), GetSubscriptionInfoFailure> {
+        let message = format!("get subscription info");
+
+        let user_id = self
+            .gatekeeper
+            .authenticate_user(message.as_bytes(), signature)
+            .map_err(|_| GetSubscriptionInfoFailure::AuthenticationFailure)?;
+
+        let (has_subscription_expired, expiry) =
+            self.gatekeeper.has_subscription_expired(user_id).unwrap();
+
+        if has_subscription_expired {
+            return Err(GetSubscriptionInfoFailure::SubscriptionExpired(expiry));
+        }
+
+        let subscription_info = self.gatekeeper.get_user_info(user_id).unwrap();
+        let mut locators = Vec::new();
+
+        let appointments = self.appointments.lock().unwrap();
+        for uuid in subscription_info.appointments.keys() {
+            match appointments.get(uuid) {
+                    Some(a) => locators.push(a.locator),
+                    None => match self.responder.get_tracker(*uuid) {
+                        Some(t) => locators.push(t.locator),
+                        None => log::debug!("The appointment was not found in the Watcher nor the Responder (uuid = {})", uuid)
+                    }
+                }
+        }
+
+        Ok((subscription_info, locators))
+    }
 }
 
 /// Listen implementation by the [Watcher]. Handles monitoring and reorgs.
@@ -708,14 +790,11 @@ mod tests {
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
     use bitcoin::network::constants::Network;
-    use bitcoin::secp256k1::key::ONE_KEY;
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use bitcoincore_rpc::{Auth, Client as BitcoindClient};
     use lightning::chain::Listen;
     use lightning_block_sync::poll::{ChainPoller, Poll};
     use std::sync::{Arc, Mutex};
-
-    const TOWER_SK: SecretKey = ONE_KEY;
 
     async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<ValidatedBlock> {
         let tip = chain.tip();
@@ -758,7 +837,18 @@ mod tests {
         let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
         start_server(bitcoind_mock);
-        Watcher::new(gatekeeper, responder, last_n_blocks, tip, TOWER_SK, dbm).await
+        let (tower_sk, tower_pk) = get_random_keypair();
+        let tower_id = UserId(tower_pk);
+        Watcher::new(
+            gatekeeper,
+            responder,
+            last_n_blocks,
+            tip,
+            tower_sk,
+            tower_id,
+            dbm,
+        )
+        .await
     }
 
     fn assert_appointment_added(
@@ -812,7 +902,7 @@ mod tests {
             dbm.clone(),
         )
         .await;
-        let tower_pk = PublicKey::from_secret_key(&Secp256k1::new(), &TOWER_SK);
+        let tower_pk = watcher.tower_id.0;
 
         let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);

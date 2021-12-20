@@ -2,6 +2,11 @@
 //!
 //! A watchtower implementation written in Rust.
 
+pub mod protos {
+    tonic::include_proto!("teos.v1");
+}
+
+pub mod api;
 pub mod bitcoin_cli;
 pub mod carrier;
 pub mod chain_monitor;

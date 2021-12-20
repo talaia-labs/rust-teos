@@ -6,6 +6,7 @@ use std::iter::FromIterator;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
+use bitcoin::util::psbt::serialize::Serialize;
 use bitcoin::{BlockHeader, Transaction, Txid};
 use lightning::chain::Listen;
 use lightning_block_sync::poll::ValidatedBlockHeader;
@@ -19,6 +20,7 @@ use crate::carrier::{Carrier, DeliveryReceipt};
 use crate::dbm::DBM;
 use crate::extended_appointment::UUID;
 use crate::gatekeeper::Gatekeeper;
+use crate::protos as msgs;
 use crate::watcher::Breach;
 
 /// Number of missed confirmations to wait before rebroadcasting a transaction.
@@ -66,6 +68,18 @@ impl TransactionTracker {
         }
     }
 }
+
+impl Into<msgs::Tracker> for TransactionTracker {
+    fn into(self) -> msgs::Tracker {
+        msgs::Tracker {
+            locator: self.locator.serialize(),
+            dispute_txid: self.dispute_tx.txid().to_vec(),
+            penalty_txid: self.penalty_tx.txid().to_vec(),
+            penalty_rawtx: self.penalty_tx.serialize(),
+        }
+    }
+}
+
 /// Component in charge of keeping track of triggered appointments.
 ///
 /// The [Responder] receives data from the [Watcher](crate::watcher::Watcher) in form of a [Breach].
@@ -116,6 +130,11 @@ impl Responder {
             gatekeeper,
             last_known_block_header: Mutex::new(*last_known_block_header.deref()),
         }
+    }
+
+    /// Gets the total number of trackers in the responder.
+    pub fn get_trackers_count(&self) -> usize {
+        self.trackers.lock().unwrap().len()
     }
 
     /// Data entry point for the [Responder]. Handles a [Breach] provided by the [Watcher](crate::watcher::Watcher).

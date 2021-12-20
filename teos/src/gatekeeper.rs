@@ -98,6 +98,30 @@ impl Gatekeeper {
         }
     }
 
+    /// Ges the number of users currently registered to the tower.
+    pub fn get_registered_users_count(&self) -> usize {
+        self.registered_users.lock().unwrap().len()
+    }
+
+    /// Gets the list of all registered user ids.
+    pub fn get_user_ids(&self) -> Vec<UserId> {
+        self.registered_users
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Gets the data held by the tower about a given user.
+    pub fn get_user_info(&self, user_id: UserId) -> Option<UserInfo> {
+        self.registered_users
+            .lock()
+            .unwrap()
+            .get(&user_id)
+            .map(|x| x.clone())
+    }
+
     /// Authenticates a user.
     ///
     /// User authentication is performed using ECRecover against fixed messages (one for each command).

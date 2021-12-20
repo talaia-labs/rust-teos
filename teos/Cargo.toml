@@ -4,8 +4,13 @@ version = "0.0.1"
 authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
 license = "MIT"
 edition = "2018"
+default-run="rusty-teos"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+
+[[bin]]
+name = "teos-cli"
+path = "src/cli.rs"
 
 [dependencies]
 home = "0.5.3"

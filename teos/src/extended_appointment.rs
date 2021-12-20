@@ -1,11 +1,13 @@
 //! Logic related to appointments handled by the tower.
 
+use hex;
 use std::array::TryFromSliceError;
 use std::convert::TryInto;
 use std::fmt;
 
 use bitcoin::hashes::{ripemd160, Hash};
 
+use crate::protos as msgs;
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::UserId;
 
@@ -106,6 +108,16 @@ impl ExtendedAppointment {
         AppointmentSummary {
             locator: self.locator(),
             user_id: self.user_id,
+        }
+    }
+}
+
+impl Into<msgs::Appointment> for Appointment {
+    fn into(self) -> msgs::Appointment {
+        msgs::Appointment {
+            locator: self.locator.serialize(),
+            encrypted_blob: self.encrypted_blob.clone(),
+            to_self_delay: self.to_self_delay,
         }
     }
 }
