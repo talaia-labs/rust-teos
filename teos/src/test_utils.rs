@@ -339,8 +339,9 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
     let tx_bytes = Vec::from_hex(TX_HEX).unwrap();
     let penalty_tx = Transaction::deserialize(&tx_bytes).unwrap();
 
-    let mut locator: [u8; 16] = get_random_bytes(16).try_into().unwrap();
-    locator.copy_from_slice(&dispute_txid[..16]);
+    let mut raw_locator: [u8; 16] = get_random_bytes(16).try_into().unwrap();
+    raw_locator.copy_from_slice(&dispute_txid[..16]);
+    let locator = Locator::deserialize(&raw_locator).unwrap();
 
     let encrypted_blob = encrypt(&penalty_tx, &dispute_txid).unwrap();
     let appointment = Appointment::new(locator, encrypted_blob, 21);

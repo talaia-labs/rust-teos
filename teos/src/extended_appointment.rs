@@ -120,7 +120,6 @@ pub fn compute_appointment_slots(blob_size: usize, blob_max_size: usize) -> u32 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::convert::TryInto;
 
     use crate::test_utils::get_random_user_id;
     use teos_common::appointment::Appointment;
@@ -128,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_get_summary() {
-        let locator = get_random_bytes(16).try_into().unwrap();
+        let locator = Locator::deserialize(&get_random_bytes(16)).unwrap();
         let user_id = get_random_user_id();
         let signature = String::new();
 

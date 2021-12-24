@@ -337,7 +337,7 @@ impl DBM {
 
         stmt.query_row([key], |row| {
             let raw_locator: Vec<u8> = row.get(1).unwrap();
-            let locator: [u8; 16] = raw_locator[0..16].try_into().unwrap();
+            let locator = Locator::deserialize(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(6).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 
@@ -365,7 +365,7 @@ impl DBM {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
             let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
             let raw_locator: Vec<u8> = row.get(1).unwrap();
-            let locator: [u8; 16] = raw_locator[0..16].try_into().unwrap();
+            let locator = Locator::deserialize(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(6).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 

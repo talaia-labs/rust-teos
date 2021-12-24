@@ -58,9 +58,9 @@ pub enum AppointmentStatus {
 
 impl Appointment {
     /// Creates a new [Appointment] instance.
-    pub fn new(locator: [u8; 16], encrypted_blob: Vec<u8>, to_self_delay: u32) -> Self {
+    pub fn new(locator: Locator, encrypted_blob: Vec<u8>, to_self_delay: u32) -> Self {
         Appointment {
-            locator: Locator(locator),
+            locator,
             encrypted_blob,
             to_self_delay,
         }
