@@ -2,6 +2,7 @@ use futures::executor::block_on;
 use std::convert::TryInto;
 use std::sync::Arc;
 use tonic::{Code, Request, Response, Status};
+use triggered::Trigger;
 
 use crate::protos as msgs;
 use crate::protos::private_tower_services_server::PrivateTowerServices;
@@ -22,12 +23,16 @@ use teos_common::UserId;
 pub struct InternalAPI {
     /// A [Watcher] instance.
     watcher: Arc<Watcher>,
+    shutdown_trigger: Trigger,
 }
 
 impl<'a> InternalAPI {
     /// Creates a new [InternalAPI] instance.
-    pub fn new(watcher: Arc<Watcher>) -> Self {
-        Self { watcher }
+    pub fn new(watcher: Arc<Watcher>, shutdown_trigger: Trigger) -> Self {
+        Self {
+            watcher,
+            shutdown_trigger,
+        }
     }
 }
 
@@ -274,8 +279,10 @@ impl<'a> PrivateTowerServices for Arc<InternalAPI> {
     }
 
     /// Stop endpoint. Stops the tower daemon. Part of the private API.
-    // FIXME: Not implemented yet. Needs to perform a gentle shutdown of the whole system.
     async fn stop(&self, _: Request<()>) -> Result<Response<()>, Status> {
+        self.shutdown_trigger.trigger();
+
+        log::debug!("Received shutting down signal, notifying components");
         Ok(Response::new(()))
     }
 }
