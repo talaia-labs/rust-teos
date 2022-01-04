@@ -512,6 +512,31 @@ mod tests {
         pub fn get_carrier(&self) -> &Mutex<Carrier> {
             &self.carrier
         }
+
+        pub fn add_random_tracker(&self, uuid: UUID) {
+            let user_id = get_random_user_id();
+            let tracker = get_random_tracker(user_id);
+
+            // Add data to memory
+            self.trackers
+                .lock()
+                .unwrap()
+                .insert(uuid, tracker.get_summary());
+            self.tx_tracker_map
+                .lock()
+                .unwrap()
+                .insert(tracker.penalty_tx.txid(), HashSet::from_iter([uuid]));
+
+            // Add data to the db
+            let (_, appointment) =
+                generate_dummy_appointment_with_user(user_id, Some(&tracker.dispute_tx.txid()));
+            store_appointment_and_fks_to_db(&self.dbm.lock().unwrap(), uuid, &appointment);
+            self.dbm
+                .lock()
+                .unwrap()
+                .store_tracker(uuid, &tracker)
+                .unwrap();
+        }
     }
 
     fn create_responder(

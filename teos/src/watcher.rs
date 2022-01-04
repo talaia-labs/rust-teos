@@ -775,80 +775,28 @@ impl chain::Listen for Watcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
-    use crate::carrier::Carrier;
     use crate::dbm::{Error as DBError, DBM};
     use crate::rpc_errors;
     use crate::test_utils::{
-        create_carrier, generate_dummy_appointment, generate_dummy_appointment_with_user,
-        generate_uuid, get_random_breach_from_locator, get_random_tx, start_server,
-        store_appointment_and_fks_to_db, BitcoindMock, Blockchain, MockOptions, MockedServerQuery,
-        DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        create_carrier, create_responder, create_watcher, generate_dummy_appointment,
+        generate_dummy_appointment_with_user, generate_uuid, get_last_n_blocks,
+        get_random_breach_from_locator, get_random_tx, store_appointment_and_fks_to_db,
+        BitcoindMock, Blockchain, MockOptions, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS,
+        START_HEIGHT,
     };
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
-    use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
-    use bitcoincore_rpc::{Auth, Client as BitcoindClient};
     use lightning::chain::Listen;
-    use lightning_block_sync::poll::{ChainPoller, Poll};
-    use std::sync::{Arc, Mutex};
 
-    async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<ValidatedBlock> {
-        let tip = chain.tip();
-        let mut poller = ChainPoller::new(chain, Network::Bitcoin);
-
-        let mut last_n_blocks = Vec::new();
-        let mut last_known_block = tip;
-        for _ in 0..n {
-            let block = poller.fetch_block(&last_known_block).await.unwrap();
-            last_known_block = poller
-                .look_up_previous_header(&last_known_block)
-                .await
-                .unwrap();
-            last_n_blocks.push(block);
+    impl Watcher {
+        pub fn add_random_tracker_to_responder(&self, uuid: UUID) {
+            self.responder.add_random_tracker(uuid);
         }
-
-        last_n_blocks
-    }
-
-    fn create_responder(
-        tip: ValidatedBlockHeader,
-        gatekeeper: Arc<Gatekeeper>,
-        dbm: Arc<Mutex<DBM>>,
-        server_url: String,
-    ) -> Responder {
-        let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
-        let carrier = Carrier::new(bitcoin_cli);
-
-        Responder::new(carrier, gatekeeper, dbm, tip)
-    }
-
-    async fn create_watcher(
-        chain: &mut Blockchain,
-        responder: Arc<Responder>,
-        gatekeeper: Arc<Gatekeeper>,
-        bitcoind_mock: BitcoindMock,
-        dbm: Arc<Mutex<DBM>>,
-    ) -> Watcher {
-        let tip = chain.tip();
-        let last_n_blocks = get_last_n_blocks(chain, 6).await;
-
-        start_server(bitcoind_mock);
-        let (tower_sk, tower_pk) = get_random_keypair();
-        let tower_id = UserId(tower_pk);
-        Watcher::new(
-            gatekeeper,
-            responder,
-            last_n_blocks,
-            tip,
-            tower_sk,
-            tower_id,
-            dbm,
-        )
-        .await
     }
 
     fn assert_appointment_added(

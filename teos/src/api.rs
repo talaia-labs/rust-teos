@@ -286,3 +286,694 @@ impl<'a> PrivateTowerServices for Arc<InternalAPI> {
         Ok(Response::new(()))
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    use crate::dbm::DBM;
+    use crate::gatekeeper::Gatekeeper;
+    use crate::test_utils::{
+        create_responder, create_watcher, BitcoindMock, Blockchain, MockOptions, EXPIRY_DELTA,
+        START_HEIGHT,
+    };
+
+    pub(super) async fn create_api(slots: u32, duration: u32) -> Arc<InternalAPI> {
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Arc::new(Gatekeeper::new(
+            chain.tip(),
+            slots,
+            duration,
+            EXPIRY_DELTA,
+            dbm.clone(),
+        ));
+        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+        let watcher = create_watcher(
+            &mut chain,
+            Arc::new(responder),
+            gk.clone(),
+            bitcoind_mock,
+            dbm.clone(),
+        )
+        .await;
+
+        let (shutdown_trigger, _) = triggered::trigger();
+        Arc::new(InternalAPI::new(Arc::new(watcher), shutdown_trigger))
+    }
+}
+#[cfg(test)]
+mod tests_private_api {
+    use super::tests::create_api;
+    use super::*;
+
+    use crate::extended_appointment::UUID;
+    use crate::test_utils::{generate_dummy_appointment, DURATION, SLOTS, START_HEIGHT};
+    use teos_common::cryptography::{self, get_random_keypair};
+
+    #[tokio::test]
+    async fn test_get_all_appointments() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        let response = internal_api
+            .get_all_appointments(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(matches!(response, msgs::GetAllAppointmentsResponse { .. }))
+    }
+
+    #[tokio::test]
+    async fn test_get_all_appointments_watcher() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // Add data to the Watcher so we can retrieve it later on
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        let appointment = generate_dummy_appointment(None).inner;
+        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        internal_api
+            .watcher
+            .add_appointment(appointment.clone(), user_signature)
+            .await
+            .unwrap();
+
+        let response = internal_api
+            .get_all_appointments(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.appointments.len(), 1);
+        assert!(matches!(
+            response.appointments[0].appointment_data,
+            Some(msgs::appointment_data::AppointmentData::Appointment { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_all_appointments_responder() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // Add data to the Responser so we can retrieve it later on
+        let (_, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        internal_api.watcher.register(user_id).unwrap();
+
+        let appointment = generate_dummy_appointment(None).inner;
+        internal_api
+            .watcher
+            .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
+
+        let response = internal_api
+            .get_all_appointments(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.appointments.len(), 1);
+        assert!(matches!(
+            response.appointments[0].appointment_data,
+            Some(msgs::appointment_data::AppointmentData::Tracker { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_tower_info_empty() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        let response = internal_api
+            .get_tower_info(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.tower_id, internal_api.watcher.tower_id.serialize());
+        assert_eq!(response.n_registered_users, 0);
+        assert_eq!(response.n_watcher_appointments, 0);
+        assert_eq!(response.n_responder_trackers, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_tower_info() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // Register a user
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        internal_api.watcher.register(user_id).unwrap();
+
+        // Add data to the Watcher
+        for _ in 0..2 {
+            let appointment = generate_dummy_appointment(None).inner;
+            let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+            internal_api
+                .watcher
+                .add_appointment(appointment.clone(), user_signature)
+                .await
+                .unwrap();
+        }
+
+        // And the Responder
+        for _ in 0..3 {
+            let appointment = generate_dummy_appointment(None).inner;
+            internal_api
+                .watcher
+                .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
+        }
+
+        let response = internal_api
+            .get_tower_info(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+
+        // Given get_tower_info checks data in memory, the data added to the Responder in the test won't be added to the Watcher too.
+        assert_eq!(response.tower_id, internal_api.watcher.tower_id.serialize());
+        assert_eq!(response.n_registered_users, 1);
+        assert_eq!(response.n_watcher_appointments, 2);
+        assert_eq!(response.n_responder_trackers, 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_users() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+        let mut users = Vec::new();
+
+        // Add a couple of users
+        for _ in 0..2 {
+            let (_, user_pk) = get_random_keypair();
+            let user_id = UserId(user_pk);
+            internal_api.watcher.register(user_id).unwrap();
+            users.push(user_id.serialize());
+        }
+
+        let mut response = internal_api
+            .get_users(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.user_ids.sort(), users.sort());
+    }
+
+    #[tokio::test]
+    async fn test_get_users_empty() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        let response = internal_api
+            .get_users(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(response.user_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_user() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // Register a user and get it back
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        internal_api.watcher.register(user_id).unwrap();
+
+        let response = internal_api
+            .get_user(Request::new(msgs::GetUserRequest {
+                user_id: user_id.serialize(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.available_slots, SLOTS);
+        assert_eq!(response.subscription_expiry, START_HEIGHT as u32 + DURATION);
+        assert!(response.appointments.is_empty());
+
+        // Add an appointment and check back
+        let appointment = generate_dummy_appointment(None).inner;
+        let uuid = UUID::new(appointment.locator, user_id);
+        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        internal_api
+            .watcher
+            .add_appointment(appointment.clone(), user_signature)
+            .await
+            .unwrap();
+
+        let response = internal_api
+            .get_user(Request::new(msgs::GetUserRequest {
+                user_id: user_id.serialize(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.available_slots, SLOTS - 1);
+        assert_eq!(response.subscription_expiry, START_HEIGHT as u32 + DURATION);
+        assert_eq!(response.appointments, Vec::from([uuid.serialize()]));
+    }
+
+    #[tokio::test]
+    async fn test_get_user_not_found() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // Non-registered user
+        let (_, user_pk) = get_random_keypair();
+
+        match internal_api
+            .get_user(Request::new(msgs::GetUserRequest {
+                user_id: UserId(user_pk).serialize(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::NotFound);
+                assert_eq!(status.message(), "User not found")
+            }
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stop() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        assert!(!internal_api.shutdown_trigger.is_triggered());
+        internal_api.stop(Request::new(())).await.unwrap();
+        assert!(internal_api.shutdown_trigger.is_triggered());
+    }
+}
+
+#[cfg(test)]
+mod tests_public_api {
+    use super::tests::create_api;
+    use super::*;
+
+    use crate::extended_appointment::UUID;
+    use crate::test_utils::{generate_dummy_appointment, DURATION, SLOTS};
+    use teos_common::cryptography::{self, get_random_keypair};
+
+    #[tokio::test]
+    async fn test_register() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        let (_, user_pk) = get_random_keypair();
+
+        // Registering (even multiple times) should work
+        for _ in 0..2 {
+            let response = internal_api
+                .register(Request::new(msgs::RegisterRequest {
+                    user_id: UserId(user_pk).serialize(),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+
+            assert!(matches!(response, msgs::RegisterResponse { .. }))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_wrong_user_id() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        let mut user_ids = Vec::new();
+
+        // Wrong user id size
+        let (_, user_pk) = get_random_keypair();
+        let mut user_id_vec = UserId(user_pk).serialize();
+        user_id_vec.pop();
+        user_ids.push(user_id_vec);
+
+        // Wrong format (does not start with 2 nor 3)
+        user_id_vec = UserId(user_pk).serialize();
+        user_id_vec[0] = 1;
+        user_ids.push(user_id_vec);
+
+        for user_id in user_ids {
+            match internal_api
+                .register(Request::new(msgs::RegisterRequest { user_id }))
+                .await
+            {
+                Err(status) => {
+                    assert_eq!(status.code(), Code::InvalidArgument);
+                    assert_eq!(status.message(), "Provided public key does not match expected format (33-byte compressed key)")
+                }
+                _ => panic!("Test should have returned Err"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_max_slots() {
+        let internal_api = create_api(u32::MAX, DURATION).await;
+
+        let (_, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk).serialize();
+
+        // First registration should go trough
+        internal_api
+            .register(Request::new(msgs::RegisterRequest {
+                user_id: user_id.clone(),
+            }))
+            .await
+            .unwrap();
+
+        // Trying to add more slots (re-register) must fail
+        match internal_api
+            .register(Request::new(msgs::RegisterRequest { user_id }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::ResourceExhausted);
+                assert_eq!(status.message(), "Subscription maximum slots count reached")
+            }
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // User must be registered
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        let appointment = generate_dummy_appointment(None).inner;
+        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+
+        let response = internal_api
+            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+                appointment: Some(appointment.clone().into()),
+                signature: user_signature.clone(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(matches!(response, msgs::AddAppointmentResponse { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_non_registered() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // User is not registered this time
+        let (user_sk, _) = get_random_keypair();
+
+        let appointment = generate_dummy_appointment(None).inner;
+        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+
+        match internal_api
+            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+                appointment: Some(appointment.clone().into()),
+                signature: user_signature.clone(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unauthenticated);
+                assert_eq!(
+                    status.message(),
+                    "Invalid signature or user does not have enough slots available"
+                )
+            }
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_not_enough_slots() {
+        let internal_api = create_api(0, DURATION).await;
+
+        // User is registered but has no slots
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        let appointment = generate_dummy_appointment(None).inner;
+        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+
+        match internal_api
+            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+                appointment: Some(appointment.clone().into()),
+                signature: user_signature.clone(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unauthenticated);
+                assert_eq!(
+                    status.message(),
+                    "Invalid signature or user does not have enough slots available"
+                )
+            }
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_subscription_expired() {
+        let internal_api = create_api(SLOTS, 0).await;
+
+        // User is registered but subscription is expired
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        let appointment = generate_dummy_appointment(None).inner;
+        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+
+        match internal_api
+            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+                appointment: Some(appointment.clone().into()),
+                signature: user_signature.clone(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unauthenticated);
+                assert!(status.message().starts_with("Your subscription expired at"),)
+            }
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_already_triggered() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // User is registered but subscription is expired
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        internal_api.watcher.register(user_id).unwrap();
+
+        let appointment = generate_dummy_appointment(None).inner;
+        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        internal_api
+            .watcher
+            .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
+
+        match internal_api
+            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+                appointment: Some(appointment.clone().into()),
+                signature: user_signature.clone(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::AlreadyExists);
+                assert!(status
+                    .message()
+                    .starts_with("The provided appointment has already been triggered"),)
+            }
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // The user must be registered
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        // Add the appointment
+        let appointment = generate_dummy_appointment(None).inner;
+        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        internal_api
+            .watcher
+            .add_appointment(appointment.clone(), user_signature)
+            .await
+            .unwrap();
+
+        // Get the appointment through the API
+        let message = format!("get appointment {}", appointment.locator);
+        let response = internal_api
+            .get_appointment(Request::new(msgs::GetAppointmentRequest {
+                locator: appointment.locator.serialize(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(matches!(response, msgs::GetAppointmentResponse { .. }))
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_non_registered() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // Add a first user to link the appointment to him
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        // There's no need to add the appointment given the subscription status is checked first
+        let appointment = generate_dummy_appointment(None).inner;
+
+        // Try to get the appointment through the API
+        let message = format!("get appointment {}", appointment.locator);
+        match internal_api
+            .get_appointment(Request::new(msgs::GetAppointmentRequest {
+                locator: appointment.locator.serialize(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::NotFound);
+                assert_eq!(status.message(), "Appointment not found");
+            }
+            _ => (),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_non_existent() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // The user is registered but the appointment does not exist
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        // Try to get the appointment through the API
+        let appointment = generate_dummy_appointment(None).inner;
+        let message = format!("get appointment {}", appointment.locator);
+
+        match internal_api
+            .get_appointment(Request::new(msgs::GetAppointmentRequest {
+                locator: appointment.locator.serialize(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::NotFound);
+                assert_eq!(status.message(), "Appointment not found");
+            }
+            _ => (),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_subscription_expired() {
+        let internal_api = create_api(SLOTS, 0).await;
+
+        // Register the user
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        // There s no need to add the appointment given the subscription status is checked first.
+        let appointment = generate_dummy_appointment(None).inner;
+
+        // Try to get the appointment through the API
+        let message = format!("get appointment {}", appointment.locator);
+        match internal_api
+            .get_appointment(Request::new(msgs::GetAppointmentRequest {
+                locator: appointment.locator.serialize(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unauthenticated);
+                assert!(status.message().starts_with("Your subscription expired at"));
+            }
+            _ => (),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info() {
+        let internal_api = create_api(SLOTS, DURATION).await;
+
+        // The user must be registered
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        // Get the subscription info though the API
+        let message = format!("get subscription info");
+        let response = internal_api
+            .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
+                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(matches!(response, msgs::GetSubscriptionInfoResponse { .. }))
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info_non_registered() {
+        let internal_api = create_api(SLOTS, 0).await;
+
+        // The user is not registered
+        let (user_sk, _) = get_random_keypair();
+
+        // Try to get the subscription info though the API
+        let message = format!("get subscription info");
+        match internal_api
+            .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
+                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::NotFound);
+                assert_eq!(status.message(), "User not found. Have you registered?");
+            }
+            _ => (),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info_expired() {
+        let internal_api = create_api(SLOTS, 0).await;
+
+        // The user is registered but the subscription has expired
+        let (user_sk, user_pk) = get_random_keypair();
+        internal_api.watcher.register(UserId(user_pk)).unwrap();
+
+        // Try to get the subscription info though the API
+        let message = format!("get subscription info");
+        match internal_api
+            .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
+                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unauthenticated);
+                assert!(status.message().starts_with("Your subscription expired at"));
+            }
+            _ => (),
+        }
+    }
+}
