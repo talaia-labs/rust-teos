@@ -2,7 +2,6 @@
 //!
 
 use std::collections::{HashMap, HashSet};
-use std::convert::TryInto;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -337,7 +336,7 @@ impl DBM {
 
         stmt.query_row([key], |row| {
             let raw_locator: Vec<u8> = row.get(1).unwrap();
-            let locator: [u8; 16] = raw_locator[0..16].try_into().unwrap();
+            let locator = Locator::deserialize(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(6).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 
@@ -365,7 +364,7 @@ impl DBM {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
             let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
             let raw_locator: Vec<u8> = row.get(1).unwrap();
-            let locator: [u8; 16] = raw_locator[0..16].try_into().unwrap();
+            let locator = Locator::deserialize(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(6).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 
@@ -904,7 +903,7 @@ mod tests {
         tracker.locator = appointment.locator();
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
-        // Try to store it again, but it shouldn't go trough
+        // Try to store it again, but it shouldn't go through
         assert!(matches!(
             dbm.store_tracker(uuid, &tracker),
             Err(Error::AlreadyExists)

@@ -1,11 +1,13 @@
 //! Logic related to appointments handled by the tower.
 
+use hex;
 use std::array::TryFromSliceError;
 use std::convert::TryInto;
 use std::fmt;
 
 use bitcoin::hashes::{ripemd160, Hash};
 
+use crate::protos as msgs;
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::UserId;
 
@@ -110,6 +112,16 @@ impl ExtendedAppointment {
     }
 }
 
+impl Into<msgs::Appointment> for Appointment {
+    fn into(self) -> msgs::Appointment {
+        msgs::Appointment {
+            locator: self.locator.serialize(),
+            encrypted_blob: self.encrypted_blob.clone(),
+            to_self_delay: self.to_self_delay,
+        }
+    }
+}
+
 /// Computes the number of slots an appointment takes from a user subscription.
 ///
 /// This is based on the [encrypted_blob](Appointment::encrypted_blob) size and the slot size that was defined by the [Gatekeeper](crate::gatekeeper::Gatekeeper).
@@ -120,7 +132,6 @@ pub fn compute_appointment_slots(blob_size: usize, blob_max_size: usize) -> u32 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::convert::TryInto;
 
     use crate::test_utils::get_random_user_id;
     use teos_common::appointment::Appointment;
@@ -128,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_get_summary() {
-        let locator = get_random_bytes(16).try_into().unwrap();
+        let locator = Locator::deserialize(&get_random_bytes(16)).unwrap();
         let user_id = get_random_user_id();
         let signature = String::new();
 

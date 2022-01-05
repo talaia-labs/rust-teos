@@ -1,0 +1,34 @@
+syntax = "proto3";
+package teos.v1;
+
+import "appointment.proto";
+import "user.proto";
+import "google/protobuf/empty.proto";
+
+message GetTowerInfoResponse {
+  // Response with information about the tower.
+
+  uint32 n_watcher_appointments = 1;
+  uint32 n_responder_trackers = 2;
+  uint32 n_registered_users = 3;
+  bytes tower_id = 4;
+}
+
+service PublicTowerServices {
+  // Public tower services, only reachable from the public API.
+
+  rpc register(RegisterRequest) returns (RegisterResponse) {}
+  rpc add_appointment(AddAppointmentRequest) returns (AddAppointmentResponse) {}
+  rpc get_appointment(GetAppointmentRequest) returns (GetAppointmentResponse) {}
+  rpc get_subscription_info(GetSubscriptionInfoRequest) returns (GetSubscriptionInfoResponse) {}
+}
+
+service PrivateTowerServices {
+  // Private tower services, only reachable from the private API.
+
+  rpc get_all_appointments(google.protobuf.Empty) returns (GetAllAppointmentsResponse) {}
+  rpc get_tower_info(google.protobuf.Empty) returns (GetTowerInfoResponse) {}
+  rpc get_users(google.protobuf.Empty) returns (GetUsersResponse) {}
+  rpc get_user(GetUserRequest) returns (GetUserResponse) {}
+  rpc stop(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+}

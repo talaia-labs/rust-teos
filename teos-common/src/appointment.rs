@@ -27,7 +27,17 @@ impl Locator {
     }
 }
 
-impl std::fmt::Display for Locator {
+impl std::str::FromStr for Locator {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let raw_locator: Vec<u8> = s.try_into().map_err(|_| "Cannot decode string")?;
+        Locator::deserialize(&raw_locator)
+            .map_err(|_| "Locator cannot be built from the given data".into())
+    }
+}
+
+impl fmt::Display for Locator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", hex::encode(self.serialize()))
     }
@@ -51,16 +61,41 @@ pub struct Appointment {
 
 /// Represents all the possible states of an appointment in the tower, or in a response to a client request.
 pub enum AppointmentStatus {
-    NotFound,
-    BeingWatched,
-    DisputeResponded,
+    // The ordering here MUST be provided since it matches the one for the protos.
+    NotFound = 0,
+    BeingWatched = 1,
+    DisputeResponded = 2,
+}
+
+impl std::str::FromStr for AppointmentStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "being_watched" => Ok(AppointmentStatus::BeingWatched),
+            "dispute_responded" => Ok(AppointmentStatus::DisputeResponded),
+            "not_found" => Ok(AppointmentStatus::NotFound),
+            _ => Err(format!("Unknown status: {}", s)),
+        }
+    }
+}
+
+impl fmt::Display for AppointmentStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            AppointmentStatus::BeingWatched => "being_watched",
+            AppointmentStatus::DisputeResponded => "dispute_responded",
+            AppointmentStatus::NotFound => "not_found",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 impl Appointment {
     /// Creates a new [Appointment] instance.
-    pub fn new(locator: [u8; 16], encrypted_blob: Vec<u8>, to_self_delay: u32) -> Self {
+    pub fn new(locator: Locator, encrypted_blob: Vec<u8>, to_self_delay: u32) -> Self {
         Appointment {
-            locator: Locator(locator),
+            locator,
             encrypted_blob,
             to_self_delay,
         }

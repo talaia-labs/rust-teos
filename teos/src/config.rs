@@ -131,6 +131,10 @@ pub struct Config {
     pub subscription_duration: u32,
     pub expiry_delta: u32,
     pub min_to_self_delay: u16,
+
+    // Internal API
+    pub internal_api_bind: String,
+    pub internal_api_port: u32,
 }
 
 impl Config {
@@ -241,14 +245,14 @@ impl Default for Config {
     /// user does not use any values provided here).
     fn default() -> Self {
         Self {
-            api_bind: "localhost".to_owned(),
+            api_bind: "localhost".into(),
             api_port: 9814,
-            rpc_bind: "localhost".to_owned(),
+            rpc_bind: "localhost".into(),
             rpc_port: 8814,
-            btc_network: "bitcoin".to_owned(),
+            btc_network: "bitcoin".into(),
             btc_rpc_user: String::new(),
             btc_rpc_password: String::new(),
-            btc_rpc_connect: "localhost".to_owned(),
+            btc_rpc_connect: "localhost".into(),
             btc_rpc_port: 0,
             daemon: false,
             debug: false,
@@ -257,6 +261,8 @@ impl Default for Config {
             subscription_duration: 4320,
             expiry_delta: 6,
             min_to_self_delay: 20,
+            internal_api_bind: "127.0.0.1".into(),
+            internal_api_port: 50051,
         }
     }
 }

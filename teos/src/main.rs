@@ -3,6 +3,9 @@ use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
+use tokio::task;
+use tonic::transport::Server;
+use triggered;
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
@@ -11,15 +14,20 @@ use lightning_block_sync::init::validate_best_block_header;
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlock, ValidatedBlockHeader};
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
+use rusty_teos::api::InternalAPI;
 use rusty_teos::bitcoin_cli::BitcoindClient;
 use rusty_teos::carrier::Carrier;
 use rusty_teos::chain_monitor::ChainMonitor;
 use rusty_teos::config::{Config, Opt};
 use rusty_teos::dbm::DBM;
 use rusty_teos::gatekeeper::Gatekeeper;
+use rusty_teos::protos::private_tower_services_server::PrivateTowerServicesServer;
+use rusty_teos::protos::public_tower_services_server::PublicTowerServicesServer;
 use rusty_teos::responder::Responder;
 use rusty_teos::watcher::Watcher;
+
 use teos_common::cryptography::get_random_keypair;
+use teos_common::UserId;
 
 async fn get_last_n_blocks<B, T>(
     poller: &mut ChainPoller<B, T>,
@@ -79,17 +87,19 @@ pub async fn main() {
 
     // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
     // key straightaway
-    let locked_db = dbm.lock().unwrap();
 
-    let (tower_sk, tower_pk) = if conf.overwrite_key {
-        log::info!("Overwriting tower keys");
-        create_new_tower_keypair(&locked_db)
-    } else {
-        match locked_db.load_tower_key() {
-            Ok(sk) => (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
-            Err(_) => {
-                log::info!("Tower keys not found. Creating a fresh set");
-                create_new_tower_keypair(&locked_db)
+    let (tower_sk, tower_pk) = {
+        let locked_db = dbm.lock().unwrap();
+        if conf.overwrite_key {
+            log::info!("Overwriting tower keys");
+            create_new_tower_keypair(&locked_db)
+        } else {
+            match locked_db.load_tower_key() {
+                Ok(sk) => (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
+                Err(_) => {
+                    log::info!("Tower keys not found. Creating a fresh set");
+                    create_new_tower_keypair(&locked_db)
+                }
             }
         }
     };
@@ -133,30 +143,57 @@ pub async fn main() {
     let cache = &mut UnboundedCache::new();
     let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
 
-    let gatekeeper = Gatekeeper::new(
+    let gatekeeper = Arc::new(Gatekeeper::new(
         tip,
         conf.subscription_slots,
         conf.subscription_duration,
         conf.expiry_delta,
         dbm.clone(),
-    );
-    let carrier = Carrier::new(rpc.clone());
-    let responder = Responder::new(carrier, &gatekeeper, dbm.clone(), tip);
-    let watcher = Watcher::new(
-        &gatekeeper,
-        &responder,
-        last_n_blocks,
-        tip,
-        tower_sk,
+    ));
+    let carrier = Carrier::new(rpc);
+    let responder = Arc::new(Responder::new(
+        carrier,
+        gatekeeper.clone(),
         dbm.clone(),
-    )
-    .await;
+        tip,
+    ));
+    let watcher = Arc::new(
+        Watcher::new(
+            gatekeeper.clone(),
+            responder.clone(),
+            last_n_blocks,
+            tip,
+            tower_sk,
+            UserId(tower_pk),
+            dbm,
+        )
+        .await,
+    );
 
-    let listener = &(&watcher, &(&responder, &gatekeeper));
+    let (shutdown_trigger, shutdown_signal_api) = triggered::trigger();
+    let shutdown_signal_cm = shutdown_signal_api.clone();
+    let internal_api = Arc::new(InternalAPI::new(watcher.clone(), shutdown_trigger));
+    let addr = format!("{}:{}", conf.internal_api_bind, conf.internal_api_port)
+        .parse()
+        .unwrap();
+
+    let api_task = task::spawn(async move {
+        Server::builder()
+            .add_service(PrivateTowerServicesServer::new(internal_api.clone()))
+            .add_service(PublicTowerServicesServer::new(internal_api))
+            .serve_with_shutdown(addr, shutdown_signal_api)
+            .await
+            .unwrap();
+    });
+
+    let listener = &(watcher, &(responder, gatekeeper));
     let spv_client = SpvClient::new(tip, poller, cache, listener);
 
     // DISCUSS: the CM may not be necessary since it's only being used to log stuff. Doing spv_client.poll_best_tip().await will
     // have the same functionality. Consider whether to get rid of it of to massively simplify it.
-    let mut chain_monitor = ChainMonitor::new(spv_client, tip, 60).await;
-    chain_monitor.monitor_chain().await.unwrap();
+    let mut chain_monitor = ChainMonitor::new(spv_client, tip, 60, shutdown_signal_cm).await;
+    chain_monitor.monitor_chain().await;
+
+    api_task.await.unwrap();
+    log::info!("Shutting down tower")
 }

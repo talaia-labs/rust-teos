@@ -1,12 +1,13 @@
 //! Logic related to the ChainMonitor, the component in charge of querying block data from `bitcoind`.
 //!
 
+use async_std::future;
 use std::ops::Deref;
-use std::{thread, time};
+use std::time;
+use triggered::Listener;
 
 use lightning::chain;
 use lightning_block_sync::poll::{ChainTip, Poll, ValidatedBlockHeader};
-use lightning_block_sync::BlockSourceError;
 use lightning_block_sync::{Cache, SpvClient};
 
 /// Component in charge of monitoring the chain for new blocks.
@@ -30,6 +31,8 @@ where
     last_known_block_header: ValidatedBlockHeader,
     /// The time between polls.
     polling_delta: time::Duration,
+    /// A signal from the main thread indicating the tower is shuting down.
+    shutdown_signal: Listener,
 }
 
 impl<'a, P, C, L> ChainMonitor<'a, P, C, L>
@@ -44,18 +47,20 @@ where
         spv_client: SpvClient<'a, P, C, L>,
         last_known_block_header: ValidatedBlockHeader,
         polling_delta_sec: u64,
+        shutdown_signal: Listener,
     ) -> ChainMonitor<'a, P, C, L> {
         ChainMonitor {
             spv_client,
             last_known_block_header,
             polling_delta: time::Duration::from_secs(polling_delta_sec),
+            shutdown_signal,
         }
     }
 
     /// Monitors `bitcoind` polling the best chain tip every [polling_delta](Self::polling_delta).
     ///
     /// Serves the data to its listeners (through [chain::Listen]) and logs data about the polled tips.
-    pub async fn monitor_chain(&mut self) -> Result<(), BlockSourceError> {
+    pub async fn monitor_chain(&mut self) {
         loop {
             match self.spv_client.poll_best_tip().await {
                 Ok((chain_tip, _)) => match chain_tip {
@@ -85,7 +90,14 @@ where
                 Err(_) => log::error!("Connection lost with bitcoind"),
             };
 
-            thread::sleep(self.polling_delta);
+            // Sleep for self.polling_delta seconds or shutdown if the signal is received.
+            if future::timeout(self.polling_delta, self.shutdown_signal.clone())
+                .await
+                .is_ok()
+            {
+                log::debug!("Received shutting down signal. Shutting down");
+                break;
+            }
         }
     }
 }
