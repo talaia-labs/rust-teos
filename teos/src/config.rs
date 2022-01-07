@@ -7,8 +7,53 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use structopt::StructOpt;
 
+pub fn data_dir_absolute_path(data_dir: String) -> PathBuf {
+    if data_dir.starts_with("~") {
+        if data_dir.starts_with("~/") {
+            home::home_dir().unwrap().join(&data_dir[2..])
+        } else {
+            home::home_dir().unwrap().join(&data_dir[1..])
+        }
+    } else {
+        PathBuf::from(&data_dir)
+    }
+}
+
+pub fn from_file<T: Default + serde::de::DeserializeOwned>(path: PathBuf) -> T {
+    match std::fs::read(&path) {
+        Ok(file_content) => toml::from_slice::<T>(&file_content).map_or_else(
+            |e| {
+                println!("Couldn't parse config file: {}", e);
+                println!("Loading default configuration");
+                T::default()
+            },
+            |config| {
+                println!("Loading configuration from file");
+                config
+            },
+        ),
+        Err(e) => {
+            println!("Couldn't read config file: {}", e);
+            println!("Loading default configuration");
+            T::default()
+        }
+    }
+}
+
+/// Error raised if something is wrong with the configuration.
+#[derive(PartialEq, Eq, Debug)]
+pub struct ConfigError(String);
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Configuration error: {}", self.0)
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
 /// Holds all the command line options.
-#[derive(StructOpt, Debug)]
+#[derive(StructOpt, Debug, Clone)]
 #[structopt(rename_all = "lowercase")]
 #[structopt(version = "0.0.1", about = "The Eye of Satoshi - Lightning watchtower")]
 pub struct Opt {
@@ -22,12 +67,10 @@ pub struct Opt {
     #[structopt(long)]
     pub api_port: Option<u16>,
 
-    // FIXME: Not currently used
     /// Address teos RPC server will bind to [default: localhost]
     #[structopt(long)]
     pub rpc_bind: Option<String>,
 
-    // FIXME: Not currently used
     /// Port teos RPC server will bind to [default: 8814]
     #[structopt(long)]
     pub rpc_port: Option<u16>,
@@ -57,45 +100,18 @@ pub struct Opt {
     pub data_dir: String,
 
     // FIXME: Not currently used
-    /// Run teos in background as a daemon [default: false]
+    /// Runs teos in background as a daemon
     #[structopt(short, long)]
-    pub daemon: Option<bool>,
+    pub daemon: bool,
 
-    /// Run teos in debug mode [default: false]
+    /// Runs teos in debug mode
     #[structopt(long)]
-    pub debug: Option<bool>,
+    pub debug: bool,
 
     /// Overwrites the tower secret key. THIS IS IRREVERSIBLE AND WILL CHANGE YOUR TOWER ID
     #[structopt(long)]
     pub overwrite_key: bool,
 }
-
-impl Opt {
-    /// Patches the data directory from relative to absolute if necessary.
-    pub fn data_dir_absolute_path(&self) -> PathBuf {
-        if self.data_dir.starts_with("~") {
-            if self.data_dir.starts_with("~/") {
-                home::home_dir().unwrap().join(&self.data_dir[2..])
-            } else {
-                home::home_dir().unwrap().join(&self.data_dir[1..])
-            }
-        } else {
-            PathBuf::from(&self.data_dir)
-        }
-    }
-}
-
-/// Error raised if something is wrong with the configuration.
-#[derive(PartialEq, Eq, Debug)]
-pub struct ConfigError(String);
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Configuration error: {}", self.0)
-    }
-}
-
-impl std::error::Error for ConfigError {}
 
 /// Holds all configuration options.
 ///
@@ -138,28 +154,6 @@ pub struct Config {
 }
 
 impl Config {
-    /// Loads the configuration options from a given TOML file.
-    pub fn from_file(path: PathBuf) -> Config {
-        match std::fs::read(&path) {
-            Ok(file_content) => toml::from_slice::<Config>(&file_content).map_or_else(
-                |e| {
-                    println!("Couldn't parse config file: {}", e);
-                    println!("Loading default configuration");
-                    Self::default()
-                },
-                |config| {
-                    println!("Loading configuration from file");
-                    config
-                },
-            ),
-            Err(e) => {
-                println!("Couldn't read config file: {}", e);
-                println!("Loading default configuration");
-                Self::default()
-            }
-        }
-    }
-
     /// Patches the configuration options with the command line options.
     pub fn patch_with_options(&mut self, options: Opt) {
         if options.api_bind.is_some() {
@@ -189,12 +183,9 @@ impl Config {
         if options.btc_rpc_port.is_some() {
             self.btc_rpc_port = options.btc_rpc_port.unwrap();
         }
-        if options.daemon.is_some() {
-            self.daemon = options.daemon.unwrap();
-        }
-        if options.debug.is_some() {
-            self.debug = options.debug.unwrap();
-        }
+
+        self.daemon = self.daemon | options.daemon;
+        self.debug = self.debug | options.debug;
         self.overwrite_key = options.overwrite_key;
     }
 
@@ -247,7 +238,7 @@ impl Default for Config {
         Self {
             api_bind: "localhost".into(),
             api_port: 9814,
-            rpc_bind: "localhost".into(),
+            rpc_bind: "127.0.0.1".into(),
             rpc_port: 8814,
             btc_network: "bitcoin".into(),
             btc_rpc_user: String::new(),
@@ -284,8 +275,8 @@ mod tests {
                 btc_rpc_connect: None,
                 btc_rpc_port: None,
                 data_dir: String::from("~/.teos"),
-                daemon: None,
-                debug: None,
+                daemon: false,
+                debug: false,
                 overwrite_key: false,
             }
         }
