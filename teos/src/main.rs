@@ -18,7 +18,7 @@ use rusty_teos::api::InternalAPI;
 use rusty_teos::bitcoin_cli::BitcoindClient;
 use rusty_teos::carrier::Carrier;
 use rusty_teos::chain_monitor::ChainMonitor;
-use rusty_teos::config::{Config, Opt};
+use rusty_teos::config::{self, Config, Opt};
 use rusty_teos::dbm::DBM;
 use rusty_teos::gatekeeper::Gatekeeper;
 use rusty_teos::protos::private_tower_services_server::PrivateTowerServicesServer;
@@ -60,7 +60,7 @@ fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
 #[tokio::main]
 pub async fn main() {
     let opt = Opt::from_args();
-    let path = opt.data_dir_absolute_path();
+    let path = config::data_dir_absolute_path(opt.data_dir.clone());
 
     // Create data dir if it does not exist
     fs::create_dir_all(&path).unwrap_or_else(|e| {
@@ -69,7 +69,7 @@ pub async fn main() {
     });
 
     // Load conf (from file or defaults) and patch it with the command line parameters received (if any)
-    let mut conf = Config::from_file(path.join("teos.toml"));
+    let mut conf = config::from_file::<Config>(path.join("teos.toml"));
     conf.patch_with_options(opt);
     conf.verify().unwrap_or_else(|e| {
         eprint!("{}\n", e);
@@ -170,18 +170,31 @@ pub async fn main() {
         .await,
     );
 
-    let (shutdown_trigger, shutdown_signal_api) = triggered::trigger();
-    let shutdown_signal_cm = shutdown_signal_api.clone();
-    let internal_api = Arc::new(InternalAPI::new(watcher.clone(), shutdown_trigger));
-    let addr = format!("{}:{}", conf.internal_api_bind, conf.internal_api_port)
+    let (shutdown_trigger, shutdown_signal_rpc_api) = triggered::trigger();
+    let shutdown_signal_internal_rpc_api = shutdown_signal_rpc_api.clone();
+    let shutdown_signal_cm = shutdown_signal_rpc_api.clone();
+    let rpc_api = Arc::new(InternalAPI::new(watcher.clone(), shutdown_trigger));
+    let internal_rpc_api = rpc_api.clone();
+
+    let rpc_api_addr = format!("{}:{}", conf.rpc_bind, conf.rpc_port)
+        .parse()
+        .unwrap();
+    let internal_rpc_api_addr = format!("{}:{}", conf.internal_api_bind, conf.internal_api_port)
         .parse()
         .unwrap();
 
-    let api_task = task::spawn(async move {
+    let private_api_task = task::spawn(async move {
         Server::builder()
-            .add_service(PrivateTowerServicesServer::new(internal_api.clone()))
-            .add_service(PublicTowerServicesServer::new(internal_api))
-            .serve_with_shutdown(addr, shutdown_signal_api)
+            .add_service(PrivateTowerServicesServer::new(rpc_api))
+            .serve_with_shutdown(rpc_api_addr, shutdown_signal_rpc_api)
+            .await
+            .unwrap();
+    });
+
+    let public_api_task = task::spawn(async move {
+        Server::builder()
+            .add_service(PublicTowerServicesServer::new(internal_rpc_api))
+            .serve_with_shutdown(internal_rpc_api_addr, shutdown_signal_internal_rpc_api)
             .await
             .unwrap();
     });
@@ -194,6 +207,7 @@ pub async fn main() {
     let mut chain_monitor = ChainMonitor::new(spv_client, tip, 60, shutdown_signal_cm).await;
     chain_monitor.monitor_chain().await;
 
-    api_task.await.unwrap();
+    private_api_task.await.unwrap();
+    public_api_task.await.unwrap();
     log::info!("Shutting down tower")
 }

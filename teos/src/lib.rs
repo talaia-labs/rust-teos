@@ -5,17 +5,19 @@
 pub mod protos {
     tonic::include_proto!("teos.v1");
 }
-
 pub mod api;
 pub mod bitcoin_cli;
 pub mod carrier;
 pub mod chain_monitor;
+pub mod cli_config;
 pub mod config;
 pub mod dbm;
 #[doc(hidden)]
 mod errors;
 mod extended_appointment;
 pub mod gatekeeper;
+#[doc(hidden)]
+mod proto_fmt;
 pub mod responder;
 #[doc(hidden)]
 mod rpc_errors;
