@@ -1,9 +1,9 @@
 //! Logic related to the ChainMonitor, the component in charge of querying block data from `bitcoind`.
 //!
 
-use async_std::future;
 use std::ops::Deref;
 use std::time;
+use tokio::time::timeout;
 use triggered::Listener;
 
 use lightning::chain;
@@ -91,7 +91,7 @@ where
             };
 
             // Sleep for self.polling_delta seconds or shutdown if the signal is received.
-            if future::timeout(self.polling_delta, self.shutdown_signal.clone())
+            if timeout(self.polling_delta, self.shutdown_signal.clone())
                 .await
                 .is_ok()
             {
