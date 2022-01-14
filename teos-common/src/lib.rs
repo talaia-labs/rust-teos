@@ -5,11 +5,14 @@
 pub mod appointment;
 pub mod constants;
 pub mod cryptography;
+pub mod errors;
 pub mod receipts;
 
 use std::fmt;
 
 use bitcoin::secp256k1::{Error, PublicKey};
+
+pub const USER_ID_LEN: usize = 33;
 
 /// User identifier. A wrapper around a [PublicKey].
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]

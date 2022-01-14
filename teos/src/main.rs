@@ -14,7 +14,8 @@ use lightning_block_sync::init::validate_best_block_header;
 use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlock, ValidatedBlockHeader};
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
-use rusty_teos::api::InternalAPI;
+use rusty_teos::api::http;
+use rusty_teos::api::internal::InternalAPI;
 use rusty_teos::bitcoin_cli::BitcoindClient;
 use rusty_teos::carrier::Carrier;
 use rusty_teos::chain_monitor::ChainMonitor;
@@ -172,7 +173,9 @@ pub async fn main() {
 
     let (shutdown_trigger, shutdown_signal_rpc_api) = triggered::trigger();
     let shutdown_signal_internal_rpc_api = shutdown_signal_rpc_api.clone();
+    let shutdown_signal_http = shutdown_signal_rpc_api.clone();
     let shutdown_signal_cm = shutdown_signal_rpc_api.clone();
+
     let rpc_api = Arc::new(InternalAPI::new(watcher.clone(), shutdown_trigger));
     let internal_rpc_api = rpc_api.clone();
 
@@ -180,6 +183,13 @@ pub async fn main() {
         .parse()
         .unwrap();
     let internal_rpc_api_addr = format!("{}:{}", conf.internal_api_bind, conf.internal_api_port)
+        .parse()
+        .unwrap();
+    let internal_rpc_api_uri = format!(
+        "http://{}:{}",
+        conf.internal_api_bind, conf.internal_api_port
+    );
+    let http_api_addr = format!("{}:{}", conf.api_bind, conf.api_port)
         .parse()
         .unwrap();
 
@@ -199,6 +209,12 @@ pub async fn main() {
             .unwrap();
     });
 
+    let http_api_task = task::spawn(http::serve(
+        http_api_addr,
+        internal_rpc_api_uri,
+        shutdown_signal_http,
+    ));
+
     let listener = &(watcher, &(responder, gatekeeper));
     let spv_client = SpvClient::new(tip, poller, cache, listener);
 
@@ -207,6 +223,7 @@ pub async fn main() {
     let mut chain_monitor = ChainMonitor::new(spv_client, tip, 60, shutdown_signal_cm).await;
     chain_monitor.monitor_chain().await;
 
+    http_api_task.await.unwrap();
     private_api_task.await.unwrap();
     public_api_task.await.unwrap();
     log::info!("Shutting down tower")

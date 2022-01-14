@@ -173,9 +173,10 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
             .watcher
             .get_subscription_info(&request.into_inner().signature)
             .map_err(|e| match e {
-                GetSubscriptionInfoFailure::AuthenticationFailure => {
-                    Status::new(Code::NotFound, "User not found. Have you registered?")
-                }
+                GetSubscriptionInfoFailure::AuthenticationFailure => Status::new(
+                    Code::Unauthenticated,
+                    "User not found. Have you registered?",
+                ),
                 GetSubscriptionInfoFailure::SubscriptionExpired(x) => Status::new(
                     Code::Unauthenticated,
                     format!("Your subscription expired at {}", x),
@@ -946,7 +947,7 @@ mod tests_public_api {
             .await
         {
             Err(status) => {
-                assert_eq!(status.code(), Code::NotFound);
+                assert_eq!(status.code(), Code::Unauthenticated);
                 assert_eq!(status.message(), "User not found. Have you registered?");
             }
             _ => (),
