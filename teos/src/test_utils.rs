@@ -41,6 +41,7 @@ use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography::{encrypt, get_random_bytes, get_random_keypair};
 use teos_common::UserId;
 
+use crate::api::internal::InternalAPI;
 use crate::carrier::Carrier;
 use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
@@ -465,6 +466,56 @@ pub(crate) async fn create_watcher(
         dbm,
     )
     .await
+}
+
+pub struct ApiConfig {
+    slots: u32,
+    duration: u32,
+}
+
+impl ApiConfig {
+    pub fn new(slots: u32, duration: u32) -> Self {
+        Self { slots, duration }
+    }
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            slots: SLOTS,
+            duration: DURATION,
+        }
+    }
+}
+
+pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<InternalAPI> {
+    let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+    let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+
+    let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+    let gk = Arc::new(Gatekeeper::new(
+        chain.tip(),
+        api_config.slots,
+        api_config.duration,
+        EXPIRY_DELTA,
+        dbm.clone(),
+    ));
+    let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+    let watcher = create_watcher(
+        &mut chain,
+        Arc::new(responder),
+        gk.clone(),
+        bitcoind_mock,
+        dbm.clone(),
+    )
+    .await;
+
+    let (shutdown_trigger, _) = triggered::trigger();
+    Arc::new(InternalAPI::new(Arc::new(watcher), shutdown_trigger))
+}
+
+pub(crate) async fn create_api() -> Arc<InternalAPI> {
+    create_api_with_config(ApiConfig::default()).await
 }
 pub struct BitcoindMock {
     pub url: String,
