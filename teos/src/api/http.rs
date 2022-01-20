@@ -483,3 +483,686 @@ pub async fn serve(http_bind: SocketAddr, grpc_bind: String, shutdown_signal: Li
         .bind_with_graceful_shutdown(http_bind, async { shutdown_signal.await });
     server.await
 }
+
+#[cfg(test)]
+mod test_helpers {
+    use super::*;
+
+    use serde::de::DeserializeOwned;
+    use serde_json::Value;
+    use std::sync::Arc;
+    use tokio::net::TcpListener;
+    use tonic::transport::Server;
+
+    use crate::api::internal::InternalAPI;
+    use crate::protos::public_tower_services_server::PublicTowerServicesServer;
+    use crate::test_utils::{create_api_with_config, ApiConfig};
+
+    pub enum RequestBody<'a> {
+        Jsonify(&'a str),
+        DoNotJsonify(&'a str),
+        Json(Value),
+        Body(&'a str),
+    }
+
+    pub(crate) async fn run_tower_in_background_with_config(
+        api_config: ApiConfig,
+    ) -> (SocketAddr, Arc<InternalAPI>) {
+        let internal_rpc_api = create_api_with_config(api_config).await;
+        let cloned = internal_rpc_api.clone();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(PublicTowerServicesServer::new(internal_rpc_api))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        (addr, cloned)
+    }
+
+    pub(crate) async fn run_tower_in_background() -> SocketAddr {
+        run_tower_in_background_with_config(ApiConfig::default())
+            .await
+            .0
+    }
+
+    pub(crate) async fn check_api_error<'a>(
+        endpoint: &str,
+        body: Option<RequestBody<'a>>,
+        server_addr: SocketAddr,
+    ) -> (ApiError, StatusCode) {
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
+
+        let req = if let Some(b) = body {
+            match b {
+                RequestBody::Json(j) => {
+                    warp::test::request().method("POST").path(endpoint).json(&j)
+                }
+                RequestBody::DoNotJsonify(j) => {
+                    warp::test::request().method("POST").path(endpoint).json(&j)
+                }
+                RequestBody::Jsonify(j) => warp::test::request()
+                    .method("POST")
+                    .path(endpoint)
+                    .json(&serde_json::from_str::<Value>(j).unwrap()),
+                RequestBody::Body(b) => warp::test::request().method("POST").path(endpoint).body(b),
+            }
+        } else {
+            warp::test::request().method("POST").path(endpoint)
+        };
+
+        let res = req.reply(&router(grpc_conn)).await;
+
+        (
+            serde_json::from_slice::<ApiError>(res.body()).unwrap(),
+            res.status(),
+        )
+    }
+
+    pub(crate) async fn request_to_api<B, T>(
+        endpoint: &str,
+        body: B,
+        server_addr: SocketAddr,
+    ) -> Result<T, serde_json::Error>
+    where
+        B: Serialize,
+        T: DeserializeOwned,
+    {
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
+
+        let res = warp::test::request()
+            .method("POST")
+            .path(endpoint)
+            .json(&serde_json::json!(body))
+            .reply(&router(grpc_conn))
+            .await;
+
+        serde_json::from_slice::<T>(res.body())
+    }
+}
+
+#[cfg(test)]
+mod tests_failures {
+    use super::*;
+
+    use super::test_helpers::{check_api_error, run_tower_in_background, RequestBody};
+    use crate::test_utils::get_random_user_id;
+
+    #[tokio::test]
+    async fn test_empty_request_body() {
+        let server_addr = run_tower_in_background().await;
+        // We use register here as an example, but error test apply every valid endpoint
+        assert_eq!(
+            check_api_error("/register", None, server_addr).await,
+            (
+                ApiError::new("Empty request body".into(), errors::INVALID_REQUEST_FORMAT),
+                StatusCode::LENGTH_REQUIRED
+            )
+        )
+    }
+
+    #[tokio::test]
+    async fn test_no_json_request_body() {
+        let server_addr = run_tower_in_background().await;
+        let (api_error, status) =
+            check_api_error("/register", Some(RequestBody::Body("")), server_addr).await;
+        assert!(api_error.error.contains("EOF while parsing"));
+        assert_eq!(api_error.error_code, errors::INVALID_REQUEST_FORMAT);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_wrong_json_request_body() {
+        let server_addr = run_tower_in_background().await;
+        let (api_error, status) = check_api_error(
+            "/register",
+            Some(RequestBody::DoNotJsonify("")),
+            server_addr,
+        )
+        .await;
+        assert!(api_error.error.contains("expected struct"));
+        // FIXME: This may need finer catching since it's the same error as if a field cannot be deserialized from being of the wrong type.
+        // May not be worth the hassle though.
+        assert_eq!(api_error.error_code, errors::WRONG_FIELD_TYPE);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_empty_json_request_body() {
+        let server_addr = run_tower_in_background().await;
+        let (api_error, status) = check_api_error(
+            "/register",
+            Some(RequestBody::Jsonify(r#"{}"#)),
+            server_addr,
+        )
+        .await;
+        assert!(api_error.error.contains("missing field"));
+        assert_eq!(api_error.error_code, errors::MISSING_FIELD);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_empty_field() {
+        let server_addr = run_tower_in_background().await;
+        let (api_error, status) = check_api_error(
+            "/register",
+            Some(RequestBody::Jsonify(r#"{"user_id": ""}"#)),
+            server_addr,
+        )
+        .await;
+        assert!(api_error.error.contains("field is empty"));
+        assert_eq!(api_error.error_code, errors::EMPTY_FIELD);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_wrong_field_hex_encoding_odd() {
+        let server_addr = run_tower_in_background().await;
+        let (api_error, status) = check_api_error(
+            "/register",
+            Some(RequestBody::Jsonify(r#"{"user_id": "a"}"#)),
+            server_addr,
+        )
+        .await;
+        assert!(api_error.error.contains("Odd number of digits"));
+        assert_eq!(api_error.error_code, errors::WRONG_FIELD_FORMAT);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_wrong_hex_encoding_character() {
+        let server_addr = run_tower_in_background().await;
+        let (api_error, status) =
+        check_api_error("/register",  
+        Some(RequestBody::Jsonify(r#"{"user_id": "022fa2900ed7fc07b4e8ca3ea081e846245b0497944644aa78ea0b994ac22074dZ"}"#)), 
+        server_addr
+    ).await;
+
+        assert!(api_error.error.contains("Invalid character"));
+        assert_eq!(api_error.error_code, errors::WRONG_FIELD_FORMAT);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_wrong_field_size() {
+        let server_addr = run_tower_in_background().await;
+        let (api_error, status) = check_api_error(
+            "/register",
+            Some(RequestBody::Jsonify(r#"{"user_id": "aa"}"#)),
+            server_addr,
+        )
+        .await;
+
+        assert!(api_error.error.contains("Wrong user_id field size"));
+        assert_eq!(api_error.error_code, errors::WRONG_FIELD_SIZE);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_wrong_field_type() {
+        let server_addr = run_tower_in_background().await;
+        let (api_error, status) = check_api_error(
+            "/register",
+            Some(RequestBody::DoNotJsonify(r#"{"user_id": 1}"#)),
+            server_addr,
+        )
+        .await;
+        assert!(api_error.error.contains("invalid type"));
+        assert_eq!(api_error.error_code, errors::WRONG_FIELD_TYPE);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_payload_too_large() {
+        let server_addr = run_tower_in_background().await;
+        let (_, status) = check_api_error(
+            "/register",
+            Some(RequestBody::Body(&format!(
+                "{}{}",
+                get_random_user_id(),
+                get_random_user_id()
+            ))),
+            server_addr,
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE)
+    }
+
+    #[tokio::test]
+    async fn test_request_missing_field() {
+        // We'll use a different endpoint here since we need a json object with more than one field
+        let server_addr = run_tower_in_background().await;
+        let (api_error, status) = check_api_error(
+            "/add_appointment",
+            Some(RequestBody::Jsonify(r#"{"signature": "aa"}"#)),
+            server_addr,
+        )
+        .await;
+        assert!(api_error.error.contains("missing field"));
+        assert_eq!(api_error.error_code, errors::MISSING_FIELD);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_wrong_endpoint() {
+        let server_addr = run_tower_in_background().await;
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
+
+        let res = warp::test::request()
+            .method("POST")
+            .path("/")
+            .json(&"")
+            .reply(&router(grpc_conn))
+            .await;
+
+        assert_eq!(res.status(), StatusCode::NOT_FOUND)
+    }
+
+    #[tokio::test]
+    async fn test_wrong_method() {
+        let server_addr = run_tower_in_background().await;
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
+
+        let res = warp::test::request()
+            .path("/")
+            .json(&"")
+            .reply(&router(grpc_conn))
+            .await;
+
+        assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED)
+    }
+}
+
+#[cfg(test)]
+mod tests_methods {
+    use super::*;
+
+    use super::test_helpers::{
+        check_api_error, request_to_api, run_tower_in_background,
+        run_tower_in_background_with_config, RequestBody,
+    };
+    use crate::extended_appointment::UUID;
+    use crate::test_utils::{generate_dummy_appointment, get_random_user_id, ApiConfig, DURATION};
+    use teos_common::{cryptography, UserId};
+
+    impl std::convert::From<teos_common::appointment::Appointment> for Appointment {
+        fn from(a: teos_common::appointment::Appointment) -> Self {
+            Appointment {
+                locator: a.locator.serialize(),
+                encrypted_blob: a.encrypted_blob,
+                to_self_delay: a.to_self_delay,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register() {
+        let server_addr = run_tower_in_background().await;
+        let response = request_to_api::<RegisterData, RegisterResponse>(
+            "/register",
+            RegisterData {
+                user_id: get_random_user_id().serialize(),
+            },
+            server_addr,
+        )
+        .await;
+        assert!(matches!(response, Ok(RegisterResponse { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_register_max_slots() {
+        let (server_addr, _) =
+            run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
+        let user_id = get_random_user_id();
+
+        // Register once, this should go trough and set slots to the limit
+        request_to_api::<RegisterData, RegisterResponse>(
+            "/register",
+            RegisterData {
+                user_id: user_id.serialize(),
+            },
+            server_addr,
+        )
+        .await
+        .unwrap();
+
+        // Register again to get additional slots, this should fail
+        assert_eq!(
+            check_api_error(
+                "/register",
+                Some(RequestBody::Json(serde_json::json!(RegisterData {
+                    user_id: user_id.serialize(),
+                }))),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "Subscription maximum slots count reached".into(),
+                    errors::REGISTRATION_RESOURCE_EXHAUSTED
+                ),
+                StatusCode::BAD_REQUEST
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment() {
+        let server_addr = run_tower_in_background().await;
+
+        // Register first
+        let (user_sk, user_pk) = cryptography::get_random_keypair();
+        request_to_api::<RegisterData, RegisterResponse>(
+            "/register",
+            RegisterData {
+                user_id: user_pk.serialize().to_vec(),
+            },
+            server_addr,
+        )
+        .await
+        .unwrap();
+
+        // Then try to add an appointment
+        let appointment = generate_dummy_appointment(None).inner;
+        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+
+        let response = request_to_api::<AddAppointmentData, AddAppointmentResponse>(
+            "/add_appointment",
+            AddAppointmentData {
+                appointment: appointment.into(),
+                signature,
+            },
+            server_addr,
+        )
+        .await;
+
+        assert!(matches!(response, Ok(AddAppointmentResponse { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_non_registered() {
+        let server_addr = run_tower_in_background().await;
+        let (user_sk, _) = cryptography::get_random_keypair();
+        let appointment = generate_dummy_appointment(None).inner;
+        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+
+        assert_eq!(
+            check_api_error(
+                "/add_appointment",
+                Some(RequestBody::Json(serde_json::json!(AddAppointmentData {
+                    appointment: appointment.into(),
+                    signature,
+                }))),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "Invalid signature or user does not have enough slots available".into(),
+                    errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
+                ),
+                StatusCode::BAD_REQUEST
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_already_triggered() {
+        // Get the InternalAPI so we can mess with the inner state
+        let (server_addr, internal_api) =
+            run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
+
+        // Register
+        let (user_sk, user_pk) = cryptography::get_random_keypair();
+        request_to_api::<RegisterData, RegisterResponse>(
+            "/register",
+            RegisterData {
+                user_id: user_pk.serialize().to_vec(),
+            },
+            server_addr,
+        )
+        .await
+        .unwrap();
+
+        // Add the appointment to the Responder so it counts as triggered
+        let appointment = generate_dummy_appointment(None).inner;
+        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        internal_api
+            .get_watcher()
+            .add_random_tracker_to_responder(UUID::new(appointment.locator, UserId(user_pk)));
+
+        // Try to add it via the http API
+        assert_eq!(
+            check_api_error(
+                "/add_appointment",
+                Some(RequestBody::Json(serde_json::json!(AddAppointmentData {
+                    appointment: appointment.into(),
+                    signature,
+                }))),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "The provided appointment has already been triggered".into(),
+                    errors::APPOINTMENT_ALREADY_TRIGGERED
+                ),
+                StatusCode::BAD_REQUEST
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment() {
+        let server_addr = run_tower_in_background().await;
+
+        // Register first
+        let (user_sk, user_pk) = cryptography::get_random_keypair();
+        request_to_api::<RegisterData, RegisterResponse>(
+            "/register",
+            RegisterData {
+                user_id: user_pk.serialize().to_vec(),
+            },
+            server_addr,
+        )
+        .await
+        .unwrap();
+
+        // Add an appointment
+        let appointment = generate_dummy_appointment(None).inner;
+        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+
+        request_to_api::<AddAppointmentData, AddAppointmentResponse>(
+            "/add_appointment",
+            AddAppointmentData {
+                appointment: appointment.clone().into(),
+                signature,
+            },
+            server_addr,
+        )
+        .await
+        .unwrap();
+
+        // Get it back
+        let response = request_to_api::<GetAppointmentData, GetAppointmentResponse>(
+            "/get_appointment",
+            GetAppointmentData {
+                locator: appointment.locator.serialize(),
+                signature: cryptography::sign(
+                    format!("get appointment {}", appointment.locator).as_bytes(),
+                    &user_sk,
+                )
+                .unwrap(),
+            },
+            server_addr,
+        )
+        .await;
+
+        assert!(matches!(response, Ok(GetAppointmentResponse { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_non_registered() {
+        let server_addr = run_tower_in_background().await;
+
+        // User is not registered
+        let (user_sk, _) = cryptography::get_random_keypair();
+        // Appointment hasn't been added either, but the user check comes first
+        let appointment = generate_dummy_appointment(None).inner;
+
+        assert_eq!(
+            check_api_error(
+                "/get_appointment",
+                Some(RequestBody::Json(serde_json::json!(GetAppointmentData {
+                    locator: appointment.locator.serialize(),
+                    signature: cryptography::sign(
+                        format!("get appointment {}", appointment.locator).as_bytes(),
+                        &user_sk,
+                    )
+                    .unwrap()
+                }))),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "Appointment not found".into(),
+                    errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
+                ),
+                StatusCode::NOT_FOUND
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_not_found() {
+        let server_addr = run_tower_in_background().await;
+
+        // Register first
+        let (user_sk, user_pk) = cryptography::get_random_keypair();
+        request_to_api::<RegisterData, RegisterResponse>(
+            "/register",
+            RegisterData {
+                user_id: user_pk.serialize().to_vec(),
+            },
+            server_addr,
+        )
+        .await
+        .unwrap();
+
+        // Appointment hasn't been added
+        let appointment = generate_dummy_appointment(None).inner;
+
+        assert_eq!(
+            check_api_error(
+                "/get_appointment",
+                Some(RequestBody::Json(serde_json::json!(GetAppointmentData {
+                    locator: appointment.locator.serialize(),
+                    signature: cryptography::sign(
+                        format!("get appointment {}", appointment.locator).as_bytes(),
+                        &user_sk,
+                    )
+                    .unwrap()
+                }))),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "Appointment not found".into(),
+                    errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
+                ),
+                StatusCode::NOT_FOUND
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info() {
+        let server_addr = run_tower_in_background().await;
+
+        // Register first
+        let (user_sk, user_pk) = cryptography::get_random_keypair();
+        request_to_api::<RegisterData, RegisterResponse>(
+            "/register",
+            RegisterData {
+                user_id: user_pk.serialize().to_vec(),
+            },
+            server_addr,
+        )
+        .await
+        .unwrap();
+
+        // Get the subscription info
+        let response = request_to_api::<GetSubscriptionInfoData, SubscriptionInfoResponse>(
+            "/get_subscription_info",
+            GetSubscriptionInfoData {
+                signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
+                    .unwrap(),
+            },
+            server_addr,
+        )
+        .await;
+
+        assert!(matches!(response, Ok(SubscriptionInfoResponse { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info_non_registered() {
+        let server_addr = run_tower_in_background().await;
+
+        // User is not registered
+        let (user_sk, _) = cryptography::get_random_keypair();
+
+        assert_eq!(
+            check_api_error(
+                "/get_subscription_info",
+                Some(RequestBody::Json(serde_json::json!(
+                    GetSubscriptionInfoData {
+                        signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
+                            .unwrap(),
+                    }
+                ))),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "User not found. Have you registered?".into(),
+                    errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
+                ),
+                StatusCode::NOT_FOUND
+            )
+        );
+    }
+}

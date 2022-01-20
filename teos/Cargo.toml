@@ -47,3 +47,4 @@ tonic-build = "0.6"
 rand = "0.8.4"
 chunked_transfer = "1.4"
 jsonrpc-http-server = "17.1.0"
+tokio-stream = {version = "0.1.5", features = ["net"]}
