@@ -379,7 +379,7 @@ async fn get_subscription_info(
 
 fn router(
     grpc_conn: PublicTowerServicesClient<Channel>,
-) -> impl Filter<Extract = impl Reply, Error = Infallible> + Clone {
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let register = warp::post()
         .and(warp::path("register"))
         .and(warp::body::content_length_limit(128).and(warp::body::json()))
@@ -413,68 +413,30 @@ fn router(
     routes
 }
 
-async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
-    if err.is_not_found() {
-        return Ok(reply::with_status(
-            warp::reply::json(&"Not found"),
-            StatusCode::NOT_FOUND,
-        ));
+async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
+    match err.find::<warp::body::BodyDeserializeError>() {
+        Some(e) => {
+            let error = e
+                .source()
+                .map(|cause| cause.to_string())
+                .unwrap_or_else(|| "Invalid Body".to_string());
+
+            let error_code = if error.contains("invalid type") {
+                errors::WRONG_FIELD_TYPE
+            } else if error.contains("missing field") {
+                errors::MISSING_FIELD
+            } else if error.contains("Odd number of digits") | error.contains("Invalid character") {
+                errors::WRONG_FIELD_FORMAT
+            } else {
+                errors::INVALID_REQUEST_FORMAT
+            };
+            Ok(reply::with_status(
+                warp::reply::json(&ApiError { error, error_code }),
+                StatusCode::BAD_REQUEST,
+            ))
+        }
+        None => Err(err),
     }
-
-    let (body, status) = if let Some(e) = err.find::<warp::body::BodyDeserializeError>() {
-        let error = e
-            .source()
-            .map(|cause| cause.to_string())
-            .unwrap_or_else(|| "Invalid Body".to_string());
-
-        let error_code = if error.contains("invalid type") {
-            errors::WRONG_FIELD_TYPE
-        } else if error.contains("missing field") {
-            errors::MISSING_FIELD
-        } else if error.contains("Odd number of digits") | error.contains("Invalid character") {
-            errors::WRONG_FIELD_FORMAT
-        } else {
-            errors::INVALID_REQUEST_FORMAT
-        };
-        (
-            warp::reply::json(&ApiError { error, error_code }),
-            StatusCode::BAD_REQUEST,
-        )
-    } else if let Some(_) = err.find::<warp::reject::PayloadTooLarge>() {
-        (
-            warp::reply::json(&ApiError::new(
-                "Payload too large".into(),
-                errors::INVALID_REQUEST_FORMAT,
-            )),
-            StatusCode::PAYLOAD_TOO_LARGE,
-        )
-    } else if let Some(_) = err.find::<warp::reject::LengthRequired>() {
-        (
-            warp::reply::json(&ApiError::new(
-                "Empty request body".into(),
-                errors::INVALID_REQUEST_FORMAT,
-            )),
-            StatusCode::LENGTH_REQUIRED,
-        )
-    } else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
-        (
-            warp::reply::json(&ApiError::new(
-                "Method not allowed".into(),
-                errors::INVALID_REQUEST_FORMAT,
-            )),
-            StatusCode::METHOD_NOT_ALLOWED,
-        )
-    } else {
-        (
-            warp::reply::json(&ApiError::new(
-                format!("Unexpected error: {:?}", err),
-                errors::INVALID_REQUEST_FORMAT,
-            )),
-            StatusCode::BAD_REQUEST,
-        )
-    };
-
-    Ok(reply::with_status(body, status))
 }
 
 pub async fn serve(http_bind: SocketAddr, grpc_bind: String, shutdown_signal: Listener) {
@@ -533,7 +495,7 @@ mod test_helpers {
 
     pub(crate) async fn check_api_error<'a>(
         endpoint: &str,
-        body: Option<RequestBody<'a>>,
+        body: RequestBody<'a>,
         server_addr: SocketAddr,
     ) -> (ApiError, StatusCode) {
         let grpc_conn = PublicTowerServicesClient::connect(format!(
@@ -544,22 +506,16 @@ mod test_helpers {
         .await
         .unwrap();
 
-        let req = if let Some(b) = body {
-            match b {
-                RequestBody::Json(j) => {
-                    warp::test::request().method("POST").path(endpoint).json(&j)
-                }
-                RequestBody::DoNotJsonify(j) => {
-                    warp::test::request().method("POST").path(endpoint).json(&j)
-                }
-                RequestBody::Jsonify(j) => warp::test::request()
-                    .method("POST")
-                    .path(endpoint)
-                    .json(&serde_json::from_str::<Value>(j).unwrap()),
-                RequestBody::Body(b) => warp::test::request().method("POST").path(endpoint).body(b),
+        let req = match body {
+            RequestBody::Json(j) => warp::test::request().method("POST").path(endpoint).json(&j),
+            RequestBody::DoNotJsonify(j) => {
+                warp::test::request().method("POST").path(endpoint).json(&j)
             }
-        } else {
-            warp::test::request().method("POST").path(endpoint)
+            RequestBody::Jsonify(j) => warp::test::request()
+                .method("POST")
+                .path(endpoint)
+                .json(&serde_json::from_str::<Value>(j).unwrap()),
+            RequestBody::Body(b) => warp::test::request().method("POST").path(endpoint).body(b),
         };
 
         let res = req.reply(&router(grpc_conn)).await;
@@ -606,23 +562,10 @@ mod tests_failures {
     use crate::test_utils::get_random_user_id;
 
     #[tokio::test]
-    async fn test_empty_request_body() {
-        let server_addr = run_tower_in_background().await;
-        // We use register here as an example, but error test apply every valid endpoint
-        assert_eq!(
-            check_api_error("/register", None, server_addr).await,
-            (
-                ApiError::new("Empty request body".into(), errors::INVALID_REQUEST_FORMAT),
-                StatusCode::LENGTH_REQUIRED
-            )
-        )
-    }
-
-    #[tokio::test]
     async fn test_no_json_request_body() {
         let server_addr = run_tower_in_background().await;
         let (api_error, status) =
-            check_api_error("/register", Some(RequestBody::Body("")), server_addr).await;
+            check_api_error("/register", RequestBody::Body(""), server_addr).await;
         assert!(api_error.error.contains("EOF while parsing"));
         assert_eq!(api_error.error_code, errors::INVALID_REQUEST_FORMAT);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -631,12 +574,8 @@ mod tests_failures {
     #[tokio::test]
     async fn test_wrong_json_request_body() {
         let server_addr = run_tower_in_background().await;
-        let (api_error, status) = check_api_error(
-            "/register",
-            Some(RequestBody::DoNotJsonify("")),
-            server_addr,
-        )
-        .await;
+        let (api_error, status) =
+            check_api_error("/register", RequestBody::DoNotJsonify(""), server_addr).await;
         assert!(api_error.error.contains("expected struct"));
         // FIXME: This may need finer catching since it's the same error as if a field cannot be deserialized from being of the wrong type.
         // May not be worth the hassle though.
@@ -647,12 +586,8 @@ mod tests_failures {
     #[tokio::test]
     async fn test_empty_json_request_body() {
         let server_addr = run_tower_in_background().await;
-        let (api_error, status) = check_api_error(
-            "/register",
-            Some(RequestBody::Jsonify(r#"{}"#)),
-            server_addr,
-        )
-        .await;
+        let (api_error, status) =
+            check_api_error("/register", RequestBody::Jsonify(r#"{}"#), server_addr).await;
         assert!(api_error.error.contains("missing field"));
         assert_eq!(api_error.error_code, errors::MISSING_FIELD);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -663,7 +598,7 @@ mod tests_failures {
         let server_addr = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/register",
-            Some(RequestBody::Jsonify(r#"{"user_id": ""}"#)),
+            RequestBody::Jsonify(r#"{"user_id": ""}"#),
             server_addr,
         )
         .await;
@@ -677,7 +612,7 @@ mod tests_failures {
         let server_addr = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/register",
-            Some(RequestBody::Jsonify(r#"{"user_id": "a"}"#)),
+            RequestBody::Jsonify(r#"{"user_id": "a"}"#),
             server_addr,
         )
         .await;
@@ -691,7 +626,7 @@ mod tests_failures {
         let server_addr = run_tower_in_background().await;
         let (api_error, status) =
         check_api_error("/register",  
-        Some(RequestBody::Jsonify(r#"{"user_id": "022fa2900ed7fc07b4e8ca3ea081e846245b0497944644aa78ea0b994ac22074dZ"}"#)), 
+        RequestBody::Jsonify(r#"{"user_id": "022fa2900ed7fc07b4e8ca3ea081e846245b0497944644aa78ea0b994ac22074dZ"}"#),
         server_addr
     ).await;
 
@@ -705,7 +640,7 @@ mod tests_failures {
         let server_addr = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/register",
-            Some(RequestBody::Jsonify(r#"{"user_id": "aa"}"#)),
+            RequestBody::Jsonify(r#"{"user_id": "aa"}"#),
             server_addr,
         )
         .await;
@@ -720,7 +655,7 @@ mod tests_failures {
         let server_addr = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/register",
-            Some(RequestBody::DoNotJsonify(r#"{"user_id": 1}"#)),
+            RequestBody::DoNotJsonify(r#"{"user_id": 1}"#),
             server_addr,
         )
         .await;
@@ -730,35 +665,61 @@ mod tests_failures {
     }
 
     #[tokio::test]
-    async fn test_payload_too_large() {
-        let server_addr = run_tower_in_background().await;
-        let (_, status) = check_api_error(
-            "/register",
-            Some(RequestBody::Body(&format!(
-                "{}{}",
-                get_random_user_id(),
-                get_random_user_id()
-            ))),
-            server_addr,
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE)
-    }
-
-    #[tokio::test]
     async fn test_request_missing_field() {
         // We'll use a different endpoint here since we need a json object with more than one field
         let server_addr = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/add_appointment",
-            Some(RequestBody::Jsonify(r#"{"signature": "aa"}"#)),
+            RequestBody::Jsonify(r#"{"signature": "aa"}"#),
             server_addr,
         )
         .await;
         assert!(api_error.error.contains("missing field"));
         assert_eq!(api_error.error_code, errors::MISSING_FIELD);
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    // Tests with no json body return (passed trough handle_rejection)
+
+    #[tokio::test]
+    async fn test_empty_request_body() {
+        let server_addr = run_tower_in_background().await;
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
+
+        let res = warp::test::request()
+            .method("POST")
+            .path("/register")
+            .reply(&router(grpc_conn))
+            .await;
+
+        assert_eq!(res.status(), StatusCode::LENGTH_REQUIRED)
+    }
+
+    #[tokio::test]
+    async fn test_payload_too_large() {
+        let server_addr = run_tower_in_background().await;
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
+
+        let res = warp::test::request()
+            .method("POST")
+            .path("/register")
+            .json(&format!("{}{}", get_random_user_id(), get_random_user_id()))
+            .reply(&router(grpc_conn))
+            .await;
+
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE)
     }
 
     #[tokio::test]
@@ -860,9 +821,9 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/register",
-                Some(RequestBody::Json(serde_json::json!(RegisterData {
+                RequestBody::Json(serde_json::json!(RegisterData {
                     user_id: user_id.serialize(),
-                }))),
+                })),
                 server_addr,
             )
             .await,
@@ -919,10 +880,10 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/add_appointment",
-                Some(RequestBody::Json(serde_json::json!(AddAppointmentData {
+                RequestBody::Json(serde_json::json!(AddAppointmentData {
                     appointment: appointment.into(),
                     signature,
-                }))),
+                })),
                 server_addr,
             )
             .await,
@@ -965,10 +926,10 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/add_appointment",
-                Some(RequestBody::Json(serde_json::json!(AddAppointmentData {
+                RequestBody::Json(serde_json::json!(AddAppointmentData {
                     appointment: appointment.into(),
                     signature,
-                }))),
+                })),
                 server_addr,
             )
             .await,
@@ -1043,14 +1004,14 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_appointment",
-                Some(RequestBody::Json(serde_json::json!(GetAppointmentData {
+                RequestBody::Json(serde_json::json!(GetAppointmentData {
                     locator: appointment.locator.serialize(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
                         &user_sk,
                     )
                     .unwrap()
-                }))),
+                })),
                 server_addr,
             )
             .await,
@@ -1086,14 +1047,14 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_appointment",
-                Some(RequestBody::Json(serde_json::json!(GetAppointmentData {
+                RequestBody::Json(serde_json::json!(GetAppointmentData {
                     locator: appointment.locator.serialize(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
                         &user_sk,
                     )
                     .unwrap()
-                }))),
+                })),
                 server_addr,
             )
             .await,
@@ -1147,12 +1108,10 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_subscription_info",
-                Some(RequestBody::Json(serde_json::json!(
-                    GetSubscriptionInfoData {
-                        signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
-                            .unwrap(),
-                    }
-                ))),
+                RequestBody::Json(serde_json::json!(GetSubscriptionInfoData {
+                    signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
+                        .unwrap(),
+                })),
                 server_addr,
             )
             .await,
