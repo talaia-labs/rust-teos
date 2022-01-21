@@ -1,105 +1,23 @@
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 use std::convert::Infallible;
 use std::error::Error;
 use std::net::SocketAddr;
 use tonic::{transport::Channel, Code};
 use triggered::Listener;
-use warp::{http::StatusCode, reply, Filter, Rejection, Reply};
+use warp::{http::StatusCode, reject, reply, Filter, Rejection, Reply};
 
-use teos_common::appointment::{AppointmentStatus, LOCATOR_LEN};
-use teos_common::errors;
-use teos_common::USER_ID_LEN;
+use teos_common::appointment::LOCATOR_LEN;
+use teos_common::{errors, USER_ID_LEN};
 
 use crate::protos as msgs;
 use crate::protos::public_tower_services_client::PublicTowerServicesClient;
 
-// REQUEST TYPES
-#[derive(Serialize, Deserialize, Debug)]
-struct RegisterData {
-    #[serde(with = "hex::serde")]
-    user_id: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct AddAppointmentData {
-    appointment: Appointment,
-    signature: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Appointment {
-    #[serde(with = "hex::serde")]
-    locator: Vec<u8>,
-    #[serde(with = "hex::serde")]
-    encrypted_blob: Vec<u8>,
-    to_self_delay: u32,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct GetAppointmentData {
-    #[serde(with = "hex::serde")]
-    locator: Vec<u8>,
-    signature: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct GetSubscriptionInfoData {
-    signature: String,
-}
-
-// RESPONSE TYPES
-#[derive(Serialize, Deserialize, Debug)]
-struct RegisterResponse {
-    #[serde(with = "hex::serde")]
-    user_id: Vec<u8>,
-    available_slots: u32,
-    subscription_expiry: u32,
-    subscription_signature: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct AddAppointmentResponse {
-    #[serde(with = "hex::serde")]
-    locator: Vec<u8>,
-    start_block: u32,
-    signature: String,
-    available_slots: u32,
-    subscription_expiry: u32,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct GetAppointmentResponse {
-    #[serde(flatten)]
-    appointment: AppointmentOrTracker,
-    status: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-enum AppointmentOrTracker {
-    #[serde(rename = "appointment")]
-    Appointment(Appointment),
-    #[serde(rename = "appointment")]
-    Tracker(Tracker),
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Tracker {
-    #[serde(with = "hex::serde")]
-    locator: Vec<u8>,
-    #[serde(with = "hex::serde")]
-    dispute_txid: Vec<u8>,
-    #[serde(with = "hex::serde")]
-    penalty_txid: Vec<u8>,
-    #[serde(with = "hex::serde")]
-    penalty_rawtx: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct SubscriptionInfoResponse {
-    available_slots: u32,
-    subscription_expiry: u32,
-    locators: Vec<String>,
-}
+// TODO: Limit the body length for /add_appointment should not be needed, since slots are consumed proportionally to it.
+// Setting a limit for now just to prevent spam to some extend, but this is likely to be lifted.
+const REGISTER_BODY_LEN: u64 = 87;
+const ADD_APPOINTMENT_BODY_LEN: u64 = 2048;
+const GET_APPOINTMENT_BODY_LEN: u64 = 178;
+const GET_SUBSCRIPTION_INFO_BODY_LEN: u64 = 127;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub(crate) struct ApiError {
@@ -107,10 +25,47 @@ pub(crate) struct ApiError {
     error_code: u8,
 }
 
+impl reject::Reject for ApiError {}
+
 impl ApiError {
     fn new(error: String, error_code: u8) -> Self {
         ApiError { error, error_code }
     }
+
+    fn missing_field(field_name: &str) -> Rejection {
+        reject::custom(Self::new(
+            format!("missing field `{}`", field_name),
+            errors::MISSING_FIELD,
+        ))
+    }
+
+    fn empty_field(field_name: &str) -> Rejection {
+        reject::custom(Self::new(
+            format!("`{}` field is empty", field_name),
+            errors::EMPTY_FIELD,
+        ))
+    }
+
+    fn wrong_field_length(field_name: &str, field_size: usize, expected_size: usize) -> Rejection {
+        reject::custom(Self::new(
+            format!(
+                "Wrong `{}` field size. Expected {}, received {}",
+                field_name, expected_size, field_size
+            ),
+            errors::WRONG_FIELD_SIZE,
+        ))
+    }
+}
+
+pub fn serialize_locators<S>(locators: &Vec<Vec<u8>>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut seq = s.serialize_seq(Some(locators.len()))?;
+    for element in locators.iter() {
+        seq.serialize_element(&hex::encode(element))?;
+    }
+    seq.end()
 }
 
 fn with_grpc(
@@ -119,63 +74,24 @@ fn with_grpc(
     warp::any().map(move || grpc_endpoint.clone())
 }
 
-fn empty_field(field_name: &str) -> reply::WithStatus<reply::Json> {
-    reply::with_status(
-        reply::json(&ApiError::new(
-            format!("{} field is empty", field_name),
-            errors::EMPTY_FIELD,
-        )),
-        StatusCode::BAD_REQUEST,
-    )
-}
-
-fn wrong_field_length(
-    field_name: &str,
-    field_size: usize,
-    expected_size: usize,
-) -> reply::WithStatus<reply::Json> {
-    reply::with_status(
-        warp::reply::json(&ApiError::new(
-            format!(
-                "Wrong {} field size. Expected {}, received {}",
-                field_name, expected_size, field_size
-            ),
-            errors::WRONG_FIELD_SIZE,
-        )),
-        StatusCode::BAD_REQUEST,
-    )
-}
-
 async fn register(
-    data: RegisterData,
+    req: msgs::RegisterRequest,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
-    let user_id = data.user_id;
+    let user_id = req.user_id.clone();
     if user_id.is_empty() {
-        return Ok(empty_field("user_id"));
+        return Err(ApiError::empty_field("user_id"));
     }
     if user_id.len() != USER_ID_LEN {
-        return Ok(wrong_field_length("user_id", user_id.len(), USER_ID_LEN));
+        return Err(ApiError::wrong_field_length(
+            "user_id",
+            user_id.len(),
+            USER_ID_LEN,
+        ));
     }
 
-    let (body, status) = match grpc_conn
-        .register(msgs::RegisterRequest {
-            user_id: user_id.to_vec(),
-        })
-        .await
-    {
-        Ok(r) => {
-            let body = r.into_inner();
-            (
-                warp::reply::json(&RegisterResponse {
-                    user_id: body.user_id,
-                    available_slots: body.available_slots,
-                    subscription_expiry: body.subscription_expiry,
-                    subscription_signature: body.subscription_signature,
-                }),
-                StatusCode::OK,
-            )
-        }
+    let (body, status) = match grpc_conn.register(req).await {
+        Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
         Err(s) => {
             let error_code = match s.code() {
                 Code::InvalidArgument => errors::WRONG_FIELD_FORMAT,
@@ -186,7 +102,7 @@ async fn register(
                 }
             };
             (
-                warp::reply::json(&ApiError::new(s.message().into(), error_code)),
+                reply::json(&ApiError::new(s.message().into(), error_code)),
                 StatusCode::BAD_REQUEST,
             )
         }
@@ -196,44 +112,29 @@ async fn register(
 }
 
 async fn add_appointment(
-    data: AddAppointmentData,
+    req: msgs::AddAppointmentRequest,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
-    let locator = data.appointment.locator;
-    if locator.is_empty() {
-        return Ok(empty_field("locator"));
+    if let Some(a) = &req.appointment {
+        if a.locator.is_empty() {
+            return Err(ApiError::empty_field("locator"));
+        }
+        if a.locator.len() != LOCATOR_LEN {
+            return Err(ApiError::wrong_field_length(
+                "locator",
+                a.locator.len(),
+                LOCATOR_LEN,
+            ));
+        }
+    } else {
+        return Err(ApiError::missing_field("appointment"));
     }
-    if locator.len() != LOCATOR_LEN {
-        return Ok(wrong_field_length("locator", locator.len(), LOCATOR_LEN));
-    }
-    if data.signature.is_empty() {
-        return Ok(empty_field("signature"));
+    if req.signature.is_empty() {
+        return Err(ApiError::empty_field("signature"));
     }
 
-    let (body, status) = match grpc_conn
-        .add_appointment(msgs::AddAppointmentRequest {
-            appointment: Some(msgs::Appointment {
-                locator: locator.to_vec(),
-                encrypted_blob: data.appointment.encrypted_blob,
-                to_self_delay: data.appointment.to_self_delay,
-            }),
-            signature: data.signature,
-        })
-        .await
-    {
-        Ok(r) => {
-            let body = r.into_inner();
-            (
-                warp::reply::json(&AddAppointmentResponse {
-                    locator: body.locator,
-                    start_block: body.start_block,
-                    signature: body.signature,
-                    available_slots: body.available_slots,
-                    subscription_expiry: body.subscription_expiry,
-                }),
-                StatusCode::OK,
-            )
-        }
+    let (body, status) = match grpc_conn.add_appointment(req).await {
+        Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
         Err(s) => {
             let error_code = match s.code() {
                 Code::Unauthenticated => errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR,
@@ -244,7 +145,7 @@ async fn add_appointment(
                 }
             };
             (
-                warp::reply::json(&ApiError::new(s.message().into(), error_code)),
+                reply::json(&ApiError::new(s.message().into(), error_code)),
                 StatusCode::BAD_REQUEST,
             )
         }
@@ -254,57 +155,25 @@ async fn add_appointment(
 }
 
 async fn get_appointment(
-    data: GetAppointmentData,
+    req: msgs::GetAppointmentRequest,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
-    let locator = data.locator;
-    if locator.is_empty() {
-        return Ok(empty_field("locator"));
+    if req.locator.is_empty() {
+        return Err(ApiError::empty_field("locator"));
     }
-    if locator.len() != LOCATOR_LEN {
-        return Ok(wrong_field_length("locator", locator.len(), LOCATOR_LEN));
+    if req.locator.len() != LOCATOR_LEN {
+        return Err(ApiError::wrong_field_length(
+            "locator",
+            req.locator.len(),
+            LOCATOR_LEN,
+        ));
     }
-    if data.signature.is_empty() {
-        return Ok(empty_field("signature"));
+    if req.signature.is_empty() {
+        return Err(ApiError::empty_field("signature"));
     }
 
-    let (body, status) = match grpc_conn
-        .get_appointment(msgs::GetAppointmentRequest {
-            locator: locator.to_vec(),
-            signature: data.signature,
-        })
-        .await
-    {
-        Ok(r) => {
-            // This is a bit cumbersome but data is layered by gRPC due to it being either an Appointment or a Tracker
-            let body = r.into_inner();
-            let data = body.appointment_data.unwrap().appointment_data.unwrap();
-
-            let appointment_or_tracker = match data {
-                msgs::appointment_data::AppointmentData::Appointment(a) => {
-                    AppointmentOrTracker::Appointment(Appointment {
-                        locator,
-                        encrypted_blob: a.encrypted_blob,
-                        to_self_delay: a.to_self_delay,
-                    })
-                }
-                msgs::appointment_data::AppointmentData::Tracker(t) => {
-                    AppointmentOrTracker::Tracker(Tracker {
-                        locator: t.locator,
-                        dispute_txid: t.dispute_txid,
-                        penalty_txid: t.penalty_txid,
-                        penalty_rawtx: t.penalty_rawtx,
-                    })
-                }
-            };
-            (
-                warp::reply::json(&GetAppointmentResponse {
-                    appointment: appointment_or_tracker,
-                    status: AppointmentStatus::from(body.status).to_string(),
-                }),
-                StatusCode::OK,
-            )
-        }
+    let (body, status) = match grpc_conn.get_appointment(req).await {
+        Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
         Err(s) => {
             let (error_code, status_code) = match s.code() {
                 Code::Unauthenticated | Code::NotFound => (
@@ -317,7 +186,7 @@ async fn get_appointment(
                 }
             };
             (
-                warp::reply::json(&ApiError::new(s.message().into(), error_code)),
+                reply::json(&ApiError::new(s.message().into(), error_code)),
                 status_code,
             )
         }
@@ -327,35 +196,15 @@ async fn get_appointment(
 }
 
 async fn get_subscription_info(
-    data: GetSubscriptionInfoData,
+    req: msgs::GetSubscriptionInfoRequest,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
-    if data.signature.is_empty() {
-        return Ok(empty_field("signature"));
+    if req.signature.is_empty() {
+        return Err(ApiError::empty_field("signature"));
     }
 
-    let (body, status) = match grpc_conn
-        .get_subscription_info(msgs::GetSubscriptionInfoRequest {
-            signature: data.signature,
-        })
-        .await
-    {
-        Ok(r) => {
-            let body = r.into_inner();
-            let locators = body
-                .locators
-                .iter()
-                .map(|locator| hex::encode(locator))
-                .collect();
-            (
-                warp::reply::json(&SubscriptionInfoResponse {
-                    available_slots: body.available_slots,
-                    subscription_expiry: body.subscription_expiry,
-                    locators: locators,
-                }),
-                StatusCode::OK,
-            )
-        }
+    let (body, status) = match grpc_conn.get_subscription_info(req).await {
+        Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
         Err(s) => {
             let (error_code, status_code) = match s.code() {
                 Code::Unauthenticated => (
@@ -368,7 +217,7 @@ async fn get_subscription_info(
                 }
             };
             (
-                warp::reply::json(&ApiError::new(s.message().into(), error_code)),
+                reply::json(&ApiError::new(s.message().into(), error_code)),
                 status_code,
             )
         }
@@ -382,25 +231,28 @@ fn router(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let register = warp::post()
         .and(warp::path("register"))
-        .and(warp::body::content_length_limit(128).and(warp::body::json()))
+        .and(warp::body::content_length_limit(REGISTER_BODY_LEN).and(warp::body::json()))
         .and(with_grpc(grpc_conn.clone()))
         .and_then(register);
 
     let add_appointment = warp::post()
         .and(warp::path("add_appointment"))
-        .and(warp::body::content_length_limit(1024).and(warp::body::json()))
+        .and(warp::body::content_length_limit(ADD_APPOINTMENT_BODY_LEN).and(warp::body::json()))
         .and(with_grpc(grpc_conn.clone()))
         .and_then(add_appointment);
 
     let get_appointment = warp::post()
         .and(warp::path("get_appointment"))
-        .and(warp::body::content_length_limit(192).and(warp::body::json()))
+        .and(warp::body::content_length_limit(GET_APPOINTMENT_BODY_LEN).and(warp::body::json()))
         .and(with_grpc(grpc_conn.clone()))
         .and_then(get_appointment);
 
     let get_subscription_info = warp::post()
         .and(warp::path("get_subscription_info"))
-        .and(warp::body::content_length_limit(128).and(warp::body::json()))
+        .and(
+            warp::body::content_length_limit(GET_SUBSCRIPTION_INFO_BODY_LEN)
+                .and(warp::body::json()),
+        )
         .and(with_grpc(grpc_conn))
         .and_then(get_subscription_info);
 
@@ -416,7 +268,7 @@ fn router(
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
     match err.find::<warp::body::BodyDeserializeError>() {
         Some(e) => {
-            let error = e
+            let mut error = e
                 .source()
                 .map(|cause| cause.to_string())
                 .unwrap_or_else(|| "Invalid Body".to_string());
@@ -424,6 +276,7 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
             let error_code = if error.contains("invalid type") {
                 errors::WRONG_FIELD_TYPE
             } else if error.contains("missing field") {
+                error = error.split(" at").take(1).next().unwrap_or(&error).into();
                 errors::MISSING_FIELD
             } else if error.contains("Odd number of digits") | error.contains("Invalid character") {
                 errors::WRONG_FIELD_FORMAT
@@ -431,11 +284,14 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
                 errors::INVALID_REQUEST_FORMAT
             };
             Ok(reply::with_status(
-                warp::reply::json(&ApiError { error, error_code }),
+                reply::json(&ApiError { error, error_code }),
                 StatusCode::BAD_REQUEST,
             ))
         }
-        None => Err(err),
+        None => match err.find::<ApiError>() {
+            Some(x) => Ok(reply::with_status(reply::json(x), StatusCode::BAD_REQUEST)),
+            None => Err(err),
+        },
     }
 }
 
@@ -645,7 +501,7 @@ mod tests_failures {
         )
         .await;
 
-        assert!(api_error.error.contains("Wrong user_id field size"));
+        assert!(api_error.error.contains("Wrong `user_id` field size"));
         assert_eq!(api_error.error_code, errors::WRONG_FIELD_SIZE);
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
@@ -776,28 +632,18 @@ mod tests_methods {
     use crate::test_utils::{generate_dummy_appointment, get_random_user_id, ApiConfig, DURATION};
     use teos_common::{cryptography, UserId};
 
-    impl std::convert::From<teos_common::appointment::Appointment> for Appointment {
-        fn from(a: teos_common::appointment::Appointment) -> Self {
-            Appointment {
-                locator: a.locator.serialize(),
-                encrypted_blob: a.encrypted_blob,
-                to_self_delay: a.to_self_delay,
-            }
-        }
-    }
-
     #[tokio::test]
     async fn test_register() {
         let server_addr = run_tower_in_background().await;
-        let response = request_to_api::<RegisterData, RegisterResponse>(
+        let response = request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
             "/register",
-            RegisterData {
+            msgs::RegisterRequest {
                 user_id: get_random_user_id().serialize(),
             },
             server_addr,
         )
         .await;
-        assert!(matches!(response, Ok(RegisterResponse { .. })));
+        assert!(matches!(response, Ok(msgs::RegisterResponse { .. })));
     }
 
     #[tokio::test]
@@ -807,9 +653,9 @@ mod tests_methods {
         let user_id = get_random_user_id();
 
         // Register once, this should go trough and set slots to the limit
-        request_to_api::<RegisterData, RegisterResponse>(
+        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
             "/register",
-            RegisterData {
+            msgs::RegisterRequest {
                 user_id: user_id.serialize(),
             },
             server_addr,
@@ -821,7 +667,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/register",
-                RequestBody::Json(serde_json::json!(RegisterData {
+                RequestBody::Json(serde_json::json!(msgs::RegisterRequest {
                     user_id: user_id.serialize(),
                 })),
                 server_addr,
@@ -843,9 +689,9 @@ mod tests_methods {
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<RegisterData, RegisterResponse>(
+        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
             "/register",
-            RegisterData {
+            msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -857,17 +703,17 @@ mod tests_methods {
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
 
-        let response = request_to_api::<AddAppointmentData, AddAppointmentResponse>(
+        let response = request_to_api::<msgs::AddAppointmentRequest, msgs::AddAppointmentResponse>(
             "/add_appointment",
-            AddAppointmentData {
-                appointment: appointment.into(),
+            msgs::AddAppointmentRequest {
+                appointment: Some(appointment.into()),
                 signature,
             },
             server_addr,
         )
         .await;
 
-        assert!(matches!(response, Ok(AddAppointmentResponse { .. })));
+        assert!(matches!(response, Ok(msgs::AddAppointmentResponse { .. })));
     }
 
     #[tokio::test]
@@ -880,8 +726,8 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/add_appointment",
-                RequestBody::Json(serde_json::json!(AddAppointmentData {
-                    appointment: appointment.into(),
+                RequestBody::Json(serde_json::json!(msgs::AddAppointmentRequest {
+                    appointment: Some(appointment.into()),
                     signature,
                 })),
                 server_addr,
@@ -905,9 +751,9 @@ mod tests_methods {
 
         // Register
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<RegisterData, RegisterResponse>(
+        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
             "/register",
-            RegisterData {
+            msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -926,8 +772,8 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/add_appointment",
-                RequestBody::Json(serde_json::json!(AddAppointmentData {
-                    appointment: appointment.into(),
+                RequestBody::Json(serde_json::json!(msgs::AddAppointmentRequest {
+                    appointment: Some(appointment.into()),
                     signature,
                 })),
                 server_addr,
@@ -949,9 +795,9 @@ mod tests_methods {
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<RegisterData, RegisterResponse>(
+        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
             "/register",
-            RegisterData {
+            msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -963,10 +809,10 @@ mod tests_methods {
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
 
-        request_to_api::<AddAppointmentData, AddAppointmentResponse>(
+        request_to_api::<msgs::AddAppointmentRequest, msgs::AddAppointmentResponse>(
             "/add_appointment",
-            AddAppointmentData {
-                appointment: appointment.clone().into(),
+            msgs::AddAppointmentRequest {
+                appointment: Some(appointment.clone().into()),
                 signature,
             },
             server_addr,
@@ -975,9 +821,9 @@ mod tests_methods {
         .unwrap();
 
         // Get it back
-        let response = request_to_api::<GetAppointmentData, GetAppointmentResponse>(
+        let response = request_to_api::<msgs::GetAppointmentRequest, msgs::GetAppointmentResponse>(
             "/get_appointment",
-            GetAppointmentData {
+            msgs::GetAppointmentRequest {
                 locator: appointment.locator.serialize(),
                 signature: cryptography::sign(
                     format!("get appointment {}", appointment.locator).as_bytes(),
@@ -989,7 +835,7 @@ mod tests_methods {
         )
         .await;
 
-        assert!(matches!(response, Ok(GetAppointmentResponse { .. })));
+        assert!(matches!(response, Ok(msgs::GetAppointmentResponse { .. })));
     }
 
     #[tokio::test]
@@ -1004,7 +850,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_appointment",
-                RequestBody::Json(serde_json::json!(GetAppointmentData {
+                RequestBody::Json(serde_json::json!(msgs::GetAppointmentRequest {
                     locator: appointment.locator.serialize(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
@@ -1031,9 +877,9 @@ mod tests_methods {
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<RegisterData, RegisterResponse>(
+        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
             "/register",
-            RegisterData {
+            msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -1047,7 +893,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_appointment",
-                RequestBody::Json(serde_json::json!(GetAppointmentData {
+                RequestBody::Json(serde_json::json!(msgs::GetAppointmentRequest {
                     locator: appointment.locator.serialize(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
@@ -1074,9 +920,9 @@ mod tests_methods {
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<RegisterData, RegisterResponse>(
+        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
             "/register",
-            RegisterData {
+            msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -1085,17 +931,21 @@ mod tests_methods {
         .unwrap();
 
         // Get the subscription info
-        let response = request_to_api::<GetSubscriptionInfoData, SubscriptionInfoResponse>(
-            "/get_subscription_info",
-            GetSubscriptionInfoData {
-                signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
-                    .unwrap(),
-            },
-            server_addr,
-        )
-        .await;
+        let response =
+            request_to_api::<msgs::GetSubscriptionInfoRequest, msgs::GetSubscriptionInfoResponse>(
+                "/get_subscription_info",
+                msgs::GetSubscriptionInfoRequest {
+                    signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
+                        .unwrap(),
+                },
+                server_addr,
+            )
+            .await;
 
-        assert!(matches!(response, Ok(SubscriptionInfoResponse { .. })));
+        assert!(matches!(
+            response,
+            Ok(msgs::GetSubscriptionInfoResponse { .. })
+        ));
     }
 
     #[tokio::test]
@@ -1108,7 +958,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_subscription_info",
-                RequestBody::Json(serde_json::json!(GetSubscriptionInfoData {
+                RequestBody::Json(serde_json::json!(msgs::GetSubscriptionInfoRequest {
                     signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
                         .unwrap(),
                 })),
