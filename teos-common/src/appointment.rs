@@ -6,14 +6,16 @@ use std::{convert::TryInto, fmt};
 
 use bitcoin::Txid;
 
+pub const LOCATOR_LEN: usize = 16;
+
 /// User identifier for appointments.
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Hash)]
-pub struct Locator([u8; 16]);
+pub struct Locator([u8; LOCATOR_LEN]);
 
 impl Locator {
     /// Creates a new [Locator].
     pub fn new(txid: Txid) -> Self {
-        Locator(txid[..16].try_into().unwrap())
+        Locator(txid[..LOCATOR_LEN].try_into().unwrap())
     }
 
     /// Encodes a locator into its byte representation.
@@ -31,7 +33,7 @@ impl std::str::FromStr for Locator {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let raw_locator: Vec<u8> = s.try_into().map_err(|_| "Cannot decode string")?;
+        let raw_locator = hex::decode(s).map_err(|_| "Locator is not hex encoded")?;
         Locator::deserialize(&raw_locator)
             .map_err(|_| "Locator cannot be built from the given data".into())
     }
@@ -61,10 +63,19 @@ pub struct Appointment {
 
 /// Represents all the possible states of an appointment in the tower, or in a response to a client request.
 pub enum AppointmentStatus {
-    // The ordering here MUST be provided since it matches the one for the protos.
     NotFound = 0,
     BeingWatched = 1,
     DisputeResponded = 2,
+}
+
+impl From<i32> for AppointmentStatus {
+    fn from(x: i32) -> Self {
+        match x {
+            1 => AppointmentStatus::BeingWatched,
+            2 => AppointmentStatus::DisputeResponded,
+            _ => AppointmentStatus::NotFound,
+        }
+    }
 }
 
 impl std::str::FromStr for AppointmentStatus {

@@ -236,7 +236,7 @@ impl Default for Config {
     /// user does not use any values provided here).
     fn default() -> Self {
         Self {
-            api_bind: "localhost".into(),
+            api_bind: "127.0.0.1".into(),
             api_port: 9814,
             rpc_bind: "127.0.0.1".into(),
             rpc_port: 8814,
