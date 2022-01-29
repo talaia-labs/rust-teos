@@ -893,22 +893,17 @@ mod tests {
 
         // Outdated trackers are those whose associated subscription is outdated and have not been confirmed yet (they don't have
         // a single confirmation).
-        let target_block_height = 100;
-        let user_id = get_random_user_id();
 
         // Mock data into the GK
-        let mut uuids = Vec::new();
-        for _ in 0..10 {
-            uuids.push(generate_uuid());
-        }
-        let outdated_users: HashMap<UserId, Vec<UUID>> =
-            [(user_id, uuids.clone())].iter().cloned().collect();
+        let target_block_height = 100;
+        let user_id = get_random_user_id();
+        let uuids = (0..10)
+            .into_iter()
+            .map(|_| generate_uuid())
+            .collect::<Vec<UUID>>();
         responder
             .gatekeeper
-            .get_outdated_users_cache()
-            .lock()
-            .unwrap()
-            .insert(target_block_height, outdated_users);
+            .add_outdated_user(user_id, target_block_height, Some(uuids.clone()));
 
         // If data is not in the unconfirmed_transaction it won't be returned
         assert_eq!(
@@ -1216,7 +1211,6 @@ mod tests {
         // OUTDATED TRACKER SETUP
         let mut penalties = Vec::new();
         let mut uuids = Vec::new();
-        let mut outdated_users = HashMap::new();
         let target_block_height = (chain.blocks.len() + 1) as u32;
         for i in 11..21 {
             let pair = [generate_uuid(), generate_uuid()].to_vec();
@@ -1236,16 +1230,11 @@ mod tests {
                 responder.add_tracker(*uuid, breach, user_id, 0);
             }
 
-            outdated_users.insert(user_id, pair.clone());
-            uuids.extend(pair);
+            uuids.extend(pair.clone());
+            responder
+                .gatekeeper
+                .add_outdated_user(user_id, target_block_height, Some(pair));
         }
-
-        responder
-            .gatekeeper
-            .get_outdated_users_cache()
-            .lock()
-            .unwrap()
-            .insert(target_block_height, outdated_users);
 
         // CONFIRMATIONS SETUP
         let standalone_user_id = get_random_user_id();

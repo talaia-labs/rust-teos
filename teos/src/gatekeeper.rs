@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use lightning::chain;
 use lightning_block_sync::poll::ValidatedBlockHeader;
 
-use teos_common::constants::{ENCRYPTED_BLOB_MAX_SIZE, OUTDATED_USERS_CACHE_SIZE_BLOCKS};
+use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
 use teos_common::cryptography;
 use teos_common::receipts::RegistrationReceipt;
 use teos_common::UserId;
@@ -70,9 +70,6 @@ pub struct Gatekeeper {
     expiry_delta: u32,
     /// Map of users registered within the tower.
     registered_users: Mutex<HashMap<UserId, UserInfo>>,
-    /// Map of users whose subscription has been outdated. Kept around so other components can perform the necessary
-    /// cleanups when deleting data.
-    outdated_users_cache: Mutex<HashMap<u32, HashMap<UserId, Vec<UUID>>>>,
     /// A [DBM] (database manager) instance. Used to persist appointment data into disk.
     dbm: Arc<Mutex<DBM>>,
 }
@@ -88,12 +85,10 @@ impl Gatekeeper {
     ) -> Self {
         Gatekeeper {
             last_known_block_header,
-
             subscription_slots,
             subscription_duration,
             expiry_delta,
             registered_users: Mutex::new(HashMap::new()),
-            outdated_users_cache: Mutex::new(HashMap::new()),
             dbm,
         }
     }
@@ -233,24 +228,13 @@ impl Gatekeeper {
 
     /// Gets a map of outdated users. Outdated users are those whose subscription has expired and the renewal grace period
     /// has already passed ([expiry_delta](Self::expiry_delta)).
-    ///
-    /// The data is pulled from the cache if present, otherwise it is computed on the fly.
     pub fn get_outdated_users(&self, block_height: u32) -> HashMap<UserId, Vec<UUID>> {
-        let outdated_users_cache = self.outdated_users_cache.lock().unwrap();
-        let registered_users = self.registered_users.lock().unwrap();
-        match outdated_users_cache.get(&block_height) {
-            Some(users) => users.clone(),
-            None => {
-                let mut users = HashMap::new();
-                for (user_id, user_info) in registered_users.iter() {
-                    if block_height == user_info.subscription_expiry + self.expiry_delta {
-                        users.insert(*user_id, user_info.appointments.keys().cloned().collect());
-                    }
-                }
-
-                users
-            }
-        }
+        let registered_users = self.registered_users.lock().unwrap().clone();
+        registered_users
+            .into_iter()
+            .filter(|(_, info)| block_height == info.subscription_expiry + self.expiry_delta)
+            .map(|(id, info)| (id, info.appointments.keys().cloned().collect()))
+            .collect()
     }
 
     /// Gets a list of outdated user ids.
@@ -268,45 +252,6 @@ impl Gatekeeper {
                 .into_values()
                 .flatten(),
         )
-    }
-
-    /// Updates the outdated users cache by adding new outdated users (for a given height) and deleting old ones if the cache
-    /// grows beyond it's maximum size.
-    fn update_outdated_users_cache(&self, block_height: u32) -> HashMap<UserId, Vec<UUID>> {
-        let mut outdated_users = HashMap::new();
-
-        if !self
-            .outdated_users_cache
-            .lock()
-            .unwrap()
-            .contains_key(&block_height)
-        {
-            outdated_users = self.get_outdated_users(block_height);
-            let mut outdated_users_cache = self.outdated_users_cache.lock().unwrap();
-            outdated_users_cache.insert(block_height.clone(), outdated_users.clone());
-
-            // Remove the first entry from the cache if it grows beyond the limit size
-            if outdated_users_cache.len() > OUTDATED_USERS_CACHE_SIZE_BLOCKS {
-                // TODO: This may be simpler using BTreeMaps once first_entry is not nightly anymore
-                let mut keys = outdated_users_cache
-                    .keys()
-                    .to_owned()
-                    .collect::<Vec<&u32>>();
-                keys.sort();
-                let first = keys[0].clone();
-
-                // Remove data from the cache and from the database
-                // TODO: This can be implemented as a batch delete
-                let dbm = self.dbm.lock().unwrap();
-                outdated_users_cache.remove(&first).map(|users| {
-                    for user_id in users.keys() {
-                        dbm.remove_user(*user_id);
-                    }
-                });
-            }
-        }
-
-        outdated_users
     }
 
     /// Deletes a collection of appointments from the users' subscriptions (both from memory and from the database).
@@ -342,14 +287,15 @@ impl chain::Listen for Gatekeeper {
     ///
     /// This is mainly used to keep track of time and expire / outdate subscriptions when needed.
     fn block_connected(&self, block: &bitcoin::Block, height: u32) {
-        // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
         log::info!("New block received: {}", block.block_hash());
-        let outdated_users = self.update_outdated_users_cache(height);
 
-        // Notice users are not deleted from the database at this point, they will be once removed from the cache.
+        // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
+        let outdated_users = self.get_outdated_user_ids(height);
         let mut registered_users = self.registered_users.lock().unwrap();
-        for user_id in outdated_users.keys() {
+        let dbm = self.dbm.lock().unwrap();
+        for user_id in outdated_users.iter() {
             registered_users.remove(user_id);
+            dbm.remove_user(*user_id);
         }
     }
 
@@ -383,8 +329,21 @@ mod tests {
             &self.registered_users
         }
 
-        pub fn get_outdated_users_cache(&self) -> &Mutex<HashMap<u32, HashMap<UserId, Vec<UUID>>>> {
-            &self.outdated_users_cache
+        pub fn add_outdated_user(
+            &self,
+            user_id: UserId,
+            outdates_at: u32,
+            appointments: Option<Vec<UUID>>,
+        ) {
+            self.add_update_user(user_id).unwrap();
+            let mut registered_users = self.registered_users.lock().unwrap();
+            let mut user = registered_users.get_mut(&user_id).unwrap();
+            user.subscription_expiry = outdates_at - self.expiry_delta;
+            if appointments.is_some() {
+                for uuid in appointments.unwrap().iter() {
+                    user.appointments.insert(*uuid, 1);
+                }
+            }
         }
     }
 
@@ -625,7 +584,7 @@ mod tests {
         let start_height = START_HEIGHT as u32 + EXPIRY_DELTA;
         let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(start_height as usize));
 
-        // Initially, the outdated_users_cache is empty, so querying any block height should return an empty map
+        // Initially, there are not outdated users, so querying any block height should return an empty map
         for i in 0..start_height {
             assert_eq!(gatekeeper.get_outdated_users(i).len(), 0);
         }
@@ -641,42 +600,14 @@ mod tests {
             .add_update_appointment(user_id, uuid, &appointment)
             .unwrap();
 
-        // Check that data is not in the cache before querying
-        assert_eq!(gatekeeper.outdated_users_cache.lock().unwrap().len(), 0);
+        // Check that data is not yet outdated
+        assert_eq!(gatekeeper.get_outdated_users(start_height).len(), 0);
 
-        gatekeeper
-            .registered_users
-            .lock()
-            .unwrap()
-            .get_mut(&user_id)
-            .unwrap()
-            .subscription_expiry = START_HEIGHT as u32;
-
+        // Add an outdated user and check again
+        gatekeeper.add_outdated_user(user_id, start_height, None);
         let outdated_users = gatekeeper.get_outdated_users(start_height);
         assert_eq!(outdated_users.len(), 1);
         assert_eq!(outdated_users[&user_id], Vec::from([uuid]));
-
-        // If the outdated_users_cache has an entry, the data will be returned straightaway instead of computed
-        // on the fly
-        let target_height = 2;
-        assert_eq!(
-            gatekeeper
-                .outdated_users_cache
-                .lock()
-                .unwrap()
-                .get(&target_height),
-            None
-        );
-        assert_eq!(gatekeeper.get_outdated_users(target_height), HashMap::new());
-
-        let mut hm = HashMap::new();
-        hm.insert(user_id, Vec::from([uuid]));
-        gatekeeper
-            .outdated_users_cache
-            .lock()
-            .unwrap()
-            .insert(target_height, hm.clone());
-        assert_eq!(gatekeeper.get_outdated_users(start_height), hm);
     }
 
     #[test]
@@ -694,111 +625,18 @@ mod tests {
         // Adding data about different users and appointments should return a flattened list of appointments
         let user1_id = get_random_user_id();
         let user2_id = get_random_user_id();
-        gatekeeper.add_update_user(user1_id).unwrap();
-        gatekeeper.add_update_user(user2_id).unwrap();
-
-        // Manually set the user expiry for the test
-        gatekeeper
-            .registered_users
-            .lock()
-            .unwrap()
-            .get_mut(&user1_id)
-            .unwrap()
-            .subscription_expiry = START_HEIGHT as u32;
-
-        gatekeeper
-            .registered_users
-            .lock()
-            .unwrap()
-            .get_mut(&user2_id)
-            .unwrap()
-            .subscription_expiry = START_HEIGHT as u32;
-
         let uuid1 = generate_uuid();
         let uuid2 = generate_uuid();
-        let appointment = generate_dummy_appointment(None);
 
-        gatekeeper
-            .add_update_appointment(user1_id, uuid1, &appointment)
-            .unwrap();
-        gatekeeper
-            .add_update_appointment(user2_id, uuid2, &appointment)
-            .unwrap();
+        // Manually set the user expiry for the test
+        for (user_id, uuid) in [(user1_id, uuid1), (user2_id, uuid2)] {
+            gatekeeper.add_outdated_user(user_id, start_height, Some(Vec::from_iter([uuid])));
+        }
 
         let outdated_appointments = gatekeeper.get_outdated_appointments(start_height);
         assert_eq!(outdated_appointments.len(), 2);
         assert!(outdated_appointments.contains(&uuid1));
         assert!(outdated_appointments.contains(&uuid2));
-    }
-
-    #[test]
-    fn test_update_outdated_users_cache() {
-        let start_height = START_HEIGHT as u32 + EXPIRY_DELTA;
-        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(start_height as usize));
-
-        // update_outdated_users_cache adds the users that get outdated at a given block height to the cache and removes the oldest
-        // entry once the cache has reached it's maximum size.
-
-        // If there's outdated data to be added and there's room in the cache, the data will be added
-        let user_id = get_random_user_id();
-        gatekeeper.add_update_user(user_id).unwrap();
-        gatekeeper
-            .registered_users
-            .lock()
-            .unwrap()
-            .get_mut(&user_id)
-            .unwrap()
-            .subscription_expiry = start_height - EXPIRY_DELTA - 1;
-
-        assert_eq!(gatekeeper.outdated_users_cache.lock().unwrap().len(), 0);
-        gatekeeper.update_outdated_users_cache(start_height - 1);
-        assert_eq!(gatekeeper.outdated_users_cache.lock().unwrap().len(), 1);
-
-        // If the cache has room and there's no data to add, an empty entry will be added
-        gatekeeper.update_outdated_users_cache(start_height);
-        assert_eq!(gatekeeper.outdated_users_cache.lock().unwrap().len(), 2);
-        assert_eq!(
-            gatekeeper.outdated_users_cache.lock().unwrap()[&(start_height)],
-            HashMap::new()
-        );
-
-        // Adding data (even empty) to the cache up to it's limit should remove the first element
-        for i in start_height + 1..start_height + OUTDATED_USERS_CACHE_SIZE_BLOCKS as u32 - 1 {
-            gatekeeper.update_outdated_users_cache(i);
-        }
-
-        // Check the first key is still there and that the user can still be found in the database
-        assert_eq!(
-            gatekeeper.outdated_users_cache.lock().unwrap().len(),
-            OUTDATED_USERS_CACHE_SIZE_BLOCKS
-        );
-        assert!(gatekeeper
-            .outdated_users_cache
-            .lock()
-            .unwrap()
-            .contains_key(&(start_height - 1)));
-        assert!(matches!(
-            gatekeeper.dbm.lock().unwrap().load_user(user_id),
-            Ok(UserInfo { .. })
-        ));
-
-        // Add one more block and check again. Data should have been removed from the cache and the database
-        gatekeeper.update_outdated_users_cache(
-            start_height + OUTDATED_USERS_CACHE_SIZE_BLOCKS as u32 - 1,
-        );
-        assert_eq!(
-            gatekeeper.outdated_users_cache.lock().unwrap().len(),
-            OUTDATED_USERS_CACHE_SIZE_BLOCKS
-        );
-        assert!(!gatekeeper
-            .outdated_users_cache
-            .lock()
-            .unwrap()
-            .contains_key(&(start_height - 1)));
-        assert!(matches!(
-            gatekeeper.dbm.lock().unwrap().load_user(user_id),
-            Err(..)
-        ));
     }
 
     #[test]
@@ -900,71 +738,29 @@ mod tests {
     #[test]
     fn test_block_connected() {
         // block_connected in the Gatekeeper is used to keep track of time in order to manage the users' subscription expiry.
-        // When a new block is received, the outdated_users_cache is updated and the users outdated in the given height are
-        // deleted from registered_users.
+        // Remove users that get outdated at the new block's height from registered_users and the database.
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let gatekeeper = init_gatekeeper(&chain);
-        let mut last_height = chain.tip().height;
-
-        // Check that the cache is being updated when blocks are being received (even with empty data) and it's max size is not exceeded
-        for i in 0..OUTDATED_USERS_CACHE_SIZE_BLOCKS * 2 {
-            last_height += 1;
-            gatekeeper.block_connected(chain.blocks.last().unwrap(), last_height);
-            if i < OUTDATED_USERS_CACHE_SIZE_BLOCKS {
-                assert_eq!(gatekeeper.outdated_users_cache.lock().unwrap().len(), i + 1)
-            } else {
-                assert_eq!(
-                    gatekeeper.outdated_users_cache.lock().unwrap().len(),
-                    OUTDATED_USERS_CACHE_SIZE_BLOCKS
-                )
-            }
-        }
 
         // Check that users are outdated when the expected height if hit
         let user1_id = get_random_user_id();
         let user2_id = get_random_user_id();
         let user3_id = get_random_user_id();
 
-        last_height += 1;
-        for user in vec![user1_id, user2_id, user3_id] {
-            gatekeeper.add_update_user(user).unwrap();
-            gatekeeper
-                .registered_users
-                .lock()
-                .unwrap()
-                .get_mut(&user)
-                .unwrap()
-                .subscription_expiry = last_height as u32 - EXPIRY_DELTA;
+        for user_id in vec![user1_id, user2_id, user3_id] {
+            gatekeeper.add_outdated_user(user_id, chain.tip().height + 1, None)
         }
 
-        // Connect a new block so users are included in the cache
-        gatekeeper.block_connected(chain.blocks.last().unwrap(), last_height as u32);
+        // Connect a new block. Outdated users are deleted
+        gatekeeper.block_connected(chain.blocks.last().unwrap(), chain.tip().height + 1);
 
-        // Check that users have been added to the cache and removed from registered_users
+        // Check that users have been removed from registered_users and the database
         for user in vec![user1_id, user2_id, user3_id] {
-            assert!(
-                gatekeeper.outdated_users_cache.lock().unwrap()[&last_height].contains_key(&user)
-            );
             assert!(!gatekeeper
                 .registered_users
                 .lock()
                 .unwrap()
                 .contains_key(&user));
-
-            // Data is still in the database since the user is in the cache
-            assert!(matches!(
-                gatekeeper.dbm.lock().unwrap().load_user(user),
-                Ok(UserInfo { .. })
-            ));
-        }
-
-        // Perform a full cache rotation and check that the data is not there anymore
-        for _ in 0..OUTDATED_USERS_CACHE_SIZE_BLOCKS {
-            last_height += 1;
-            gatekeeper.block_connected(chain.blocks.last().unwrap(), last_height);
-        }
-
-        for user in vec![user1_id, user2_id, user3_id] {
             assert!(matches!(
                 gatekeeper.dbm.lock().unwrap().load_user(user),
                 Err(DBError::NotFound)
