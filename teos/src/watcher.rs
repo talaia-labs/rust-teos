@@ -813,6 +813,28 @@ mod tests {
         }
     }
 
+    async fn init_watcher(chain: &mut Blockchain) -> Watcher {
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Arc::new(Gatekeeper::new(
+            chain.tip(),
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+            dbm.clone(),
+        ));
+        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+        create_watcher(
+            chain,
+            Arc::new(responder),
+            gk.clone(),
+            bitcoind_mock,
+            dbm.clone(),
+        )
+        .await
+    }
+
     fn assert_appointment_added(
         slots: u32,
         expected_slots: u32,
@@ -844,26 +866,8 @@ mod tests {
         // register calls Gatekeeper::add_update_user and signs the UserInfo returned by it.
         // Not testing the update / rejection logic, since that's already covered in the Gatekeeper, just that the data makes
         // sense and the signature verifies.
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
-        ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-        let watcher = create_watcher(
-            &mut chain,
-            Arc::new(responder),
-            gk.clone(),
-            bitcoind_mock,
-            dbm.clone(),
-        )
-        .await;
+        let watcher = init_watcher(&mut chain).await;
         let tower_pk = watcher.tower_id.0;
 
         let (_, user_pk) = get_random_keypair();
@@ -886,27 +890,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_appointment() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let tip_txs = chain.blocks.last().unwrap().txdata.clone();
-
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
-        ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-        let watcher = create_watcher(
-            &mut chain,
-            Arc::new(responder),
-            gk.clone(),
-            bitcoind_mock,
-            dbm.clone(),
-        )
-        .await;
+        let watcher = init_watcher(&mut chain).await;
 
         // add_appointment should add a given appointment to the Watcher given the following logic:
         //      - if the appointment does not exist for a given user, add the appointment
@@ -961,7 +947,7 @@ mod tests {
         // Check data was added to the database
         for uuid in watcher.appointments.lock().unwrap().keys() {
             assert!(matches!(
-                dbm.lock().unwrap().load_appointment(*uuid),
+                watcher.dbm.lock().unwrap().load_appointment(*uuid),
                 Ok(ExtendedAppointment { .. })
             ));
         }
@@ -1009,11 +995,11 @@ mod tests {
 
         // Check data was added to the database
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
             Ok(ExtendedAppointment { .. })
         ));
         assert!(matches!(
-            dbm.lock().unwrap().load_tracker(uuid),
+            watcher.dbm.lock().unwrap().load_tracker(uuid),
             Ok(TransactionTracker { .. })
         ));
 
@@ -1035,11 +1021,11 @@ mod tests {
 
         // Data should not be in the database
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)
         ));
         assert!(matches!(
-            dbm.lock().unwrap().load_tracker(uuid),
+            watcher.dbm.lock().unwrap().load_tracker(uuid),
             Err(DBError::NotFound)
         ));
 
@@ -1062,7 +1048,7 @@ mod tests {
 
         // Data should not be in the database
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)
         ));
 
@@ -1080,7 +1066,7 @@ mod tests {
         ));
         // Data should not be in the database
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)
         ));
 
@@ -1105,7 +1091,7 @@ mod tests {
         ));
         // Data should not be in the database
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)
         ));
 
@@ -1127,33 +1113,15 @@ mod tests {
         ));
         // Data should not be in the database
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)
         ));
     }
 
     #[tokio::test]
     async fn test_get_appointment() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
-        ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-        let watcher = create_watcher(
-            &mut chain,
-            Arc::new(responder),
-            gk.clone(),
-            bitcoind_mock,
-            dbm.clone(),
-        )
-        .await;
+        let watcher = init_watcher(&mut chain).await;
 
         let appointment = generate_dummy_appointment(None).inner;
 
@@ -1245,27 +1213,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_breaches() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(12, None);
         let txs = chain.blocks.last().unwrap().txdata.clone();
-
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
-        ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-        let watcher = create_watcher(
-            &mut chain,
-            Arc::new(responder),
-            gk.clone(),
-            bitcoind_mock,
-            dbm.clone(),
-        )
-        .await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -1295,27 +1245,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_breaches() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
         let txs = chain.blocks.last().unwrap().txdata.clone();
-
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
-        ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-        let watcher = create_watcher(
-            &mut chain,
-            Arc::new(responder),
-            gk.clone(),
-            bitcoind_mock,
-            dbm.clone(),
-        )
-        .await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Let's create some locators based on the transactions in the last block
         let mut locator_tx_map = HashMap::new();
@@ -1356,7 +1288,7 @@ mod tests {
                     .insert(*locator, HashSet::from_iter(vec![uuid]));
 
                 // Store data in the database (the user needs to be there as well since it is a FK for appointments)
-                store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
+                store_appointment_and_fks_to_db(&watcher.dbm.lock().unwrap(), uuid, &appointment);
             }
         }
 
@@ -1383,26 +1315,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_appointment_from_memory() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
-
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
-        ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-        let watcher = create_watcher(
-            &mut chain,
-            Arc::new(responder),
-            gk.clone(),
-            bitcoind_mock,
-            dbm.clone(),
-        )
-        .await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Add an appointment both to memory and to the database
         let uuid = generate_uuid();
@@ -1418,7 +1332,7 @@ mod tests {
             .unwrap()
             .insert(appointment.locator(), HashSet::from_iter([uuid]));
 
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&watcher.dbm.lock().unwrap(), uuid, &appointment);
 
         // Delete and check data is not in memory
         watcher.delete_appointment_from_memory(uuid);
@@ -1431,7 +1345,7 @@ mod tests {
 
         // Data should be in the database too
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
             Ok(ExtendedAppointment { .. })
         ));
     }
@@ -1440,26 +1354,8 @@ mod tests {
     async fn test_delete_appointments() {
         // TODO: This is an adaptation of Responder::test_delete_trackers, merge together once the method
         // is implemented using generics.
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
-        ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-        let watcher = create_watcher(
-            &mut chain,
-            Arc::new(responder),
-            gk.clone(),
-            bitcoind_mock,
-            dbm.clone(),
-        )
-        .await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Delete appointments removes data from the appointments and locator_uuid_map
         // Add data to the map first
@@ -1483,7 +1379,7 @@ mod tests {
                 .insert(appointment.locator(), HashSet::from_iter([uuid]));
 
             // Add data to the database to check data deletion
-            store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
+            store_appointment_and_fks_to_db(&watcher.dbm.lock().unwrap(), uuid, &appointment);
 
             // Make it so some of the locators have multiple associated uuids
             if i % 3 == 0 {
@@ -1516,7 +1412,7 @@ mod tests {
             if target_appointments.contains(&uuid) {
                 assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
                 assert!(matches!(
-                    dbm.lock().unwrap().load_appointment(uuid),
+                    watcher.dbm.lock().unwrap().load_appointment(uuid),
                     Err(DBError::NotFound)
                 ));
 
@@ -1550,7 +1446,7 @@ mod tests {
                     .unwrap()
                     .contains_key(&uuid_locator_map[&uuid]));
                 assert!(matches!(
-                    dbm.lock().unwrap().load_appointment(uuid),
+                    watcher.dbm.lock().unwrap().load_appointment(uuid),
                     Ok(ExtendedAppointment { .. })
                 ));
             }
@@ -1559,26 +1455,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_connected() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
-        ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-        let watcher = create_watcher(
-            &mut chain,
-            Arc::new(responder),
-            gk.clone(),
-            bitcoind_mock,
-            dbm.clone(),
-        )
-        .await;
+        let watcher = init_watcher(&mut chain).await;
 
         // block_connected for the Watcher is used to keep track of what new transactions has been mined whose may be potential
         // channel breaches.
@@ -1672,7 +1550,7 @@ mod tests {
                 .contains_key(&uuid1)
         );
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid1),
+            watcher.dbm.lock().unwrap().load_appointment(uuid1),
             Err(DBError::NotFound)
         ));
 
@@ -1684,7 +1562,7 @@ mod tests {
                 .contains_key(&uuid2)
         );
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid2),
+            watcher.dbm.lock().unwrap().load_appointment(uuid2),
             Ok(ExtendedAppointment { .. })
         ));
 
@@ -1761,7 +1639,7 @@ mod tests {
                 .contains_key(&uuid)
         );
         assert!(matches!(
-            dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)
         ));
     }
