@@ -554,21 +554,23 @@ mod tests {
         Responder::new(carrier, gatekeeper, dbm, tip)
     }
 
-    #[tokio::test]
-    async fn test_handle_breach_delivered() {
+    fn init_responder(mocked_query: MockedServerQuery) -> (Responder, Blockchain) {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Regular,
-        );
+        (
+            create_responder(&mut chain, Arc::new(gk), dbm.clone(), mocked_query),
+            chain,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_handle_breach_delivered() {
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
         let breach = get_random_breach_from_locator(appointment.locator());
         let penalty_txid = breach.penalty_tx.txid();
@@ -591,15 +593,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_breach_not_delivered() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
-        );
+        let (responder, _) = init_responder(MockedServerQuery::Error(
+            rpc_errors::RPC_VERIFY_ERROR as i64,
+        ));
 
         let user_id = get_random_user_id();
         let uuid = generate_uuid();
@@ -624,20 +620,12 @@ mod tests {
 
     #[test]
     fn test_add_tracker() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Regular,
-        );
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         // Add the necessary FKs in the database
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
         let mut breach = get_random_breach_from_locator(appointment.locator());
         responder.add_tracker(uuid, breach.clone(), user_id, 0);
@@ -657,7 +645,7 @@ mod tests {
             .contains(&breach.penalty_tx.txid()));
         // Check that the data is also in the database
         assert_eq!(
-            dbm.lock().unwrap().load_tracker(uuid).unwrap(),
+            responder.dbm.lock().unwrap().load_tracker(uuid).unwrap(),
             TransactionTracker::new(breach, user_id)
         );
 
@@ -691,7 +679,7 @@ mod tests {
             .unwrap()
             .contains(&breach.penalty_tx.txid()));
         assert_eq!(
-            dbm.lock().unwrap().load_tracker(uuid).unwrap(),
+            responder.dbm.lock().unwrap().load_tracker(uuid).unwrap(),
             TransactionTracker::new(breach.clone(), user_id)
         );
 
@@ -717,7 +705,7 @@ mod tests {
             2
         );
         assert_eq!(
-            dbm.lock().unwrap().load_tracker(uuid).unwrap(),
+            responder.dbm.lock().unwrap().load_tracker(uuid).unwrap(),
             TransactionTracker::new(breach, user_id)
         );
     }
@@ -727,21 +715,12 @@ mod tests {
         // Has tracker should return true as long as the given tracker is held by the Responder.
         // As long as the tracker is in Responder.trackers and Responder.tx_tracker_map, the return
         // must be true.
-
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Regular,
-        );
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         // Add a new tracker
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
         let breach = get_random_breach_from_locator(appointment.locator());
         responder.add_tracker(uuid, breach.clone(), user_id, 0);
@@ -756,20 +735,12 @@ mod tests {
     #[test]
     fn test_get_tracker() {
         // Should return a tracker as long as it exists
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Regular,
-        );
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         // Store the user and the appointment in the database so we can add the tracker later on (due to FK restrictions)
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
         // Data should not be there before adding it
         assert_eq!(responder.get_tracker(uuid), None);
@@ -787,15 +758,7 @@ mod tests {
 
     #[test]
     fn test_check_confirmations() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Regular,
-        );
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         // If a transaction is in the unconfirmed_transactions map it will be removed
         let mut txs = Vec::new();
@@ -851,15 +814,7 @@ mod tests {
 
     #[test]
     fn test_get_txs_to_rebroadcast() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Regular,
-        );
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         let user_id = get_random_user_id();
         responder
@@ -904,19 +859,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_completed_trackers() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Confirmations(1),
-        );
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
         // Let's add a tracker first
         let breach = get_random_breach_from_locator(appointment.locator());
@@ -942,21 +889,7 @@ mod tests {
 
     #[test]
     fn test_get_outdated_trackers() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
-        ));
-        let responder = create_responder(
-            &mut chain,
-            gk.clone(),
-            dbm.clone(),
-            MockedServerQuery::Regular,
-        );
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         // Outdated trackers are those whose associated subscription is outdated and have not been confirmed yet (they don't have
         // a single confirmation).
@@ -970,7 +903,9 @@ mod tests {
         }
         let outdated_users: HashMap<UserId, Vec<UUID>> =
             [(user_id, uuids.clone())].iter().cloned().collect();
-        gk.get_outdated_users_cache()
+        responder
+            .gatekeeper
+            .get_outdated_users_cache()
             .lock()
             .unwrap()
             .insert(target_block_height, outdated_users);
@@ -1012,18 +947,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_rebroadcast() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Regular,
-        );
-        let user_id = get_random_user_id();
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         // Add user to the database
+        let user_id = get_random_user_id();
         responder
             .dbm
             .lock()
@@ -1097,18 +1024,10 @@ mod tests {
 
     #[test]
     fn test_delete_trackers() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        let responder = create_responder(
-            &mut chain,
-            Arc::new(gk),
-            dbm.clone(),
-            MockedServerQuery::Regular,
-        );
-        let user_id = get_random_user_id();
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
 
         // Add user to the database
+        let user_id = get_random_user_id();
         responder
             .dbm
             .lock()
@@ -1167,7 +1086,7 @@ mod tests {
             if target_trackers.contains(&uuid) {
                 assert!(!responder.trackers.lock().unwrap().contains_key(&uuid));
                 assert!(matches!(
-                    dbm.lock().unwrap().load_tracker(uuid),
+                    responder.dbm.lock().unwrap().load_tracker(uuid),
                     Err(DBError::NotFound)
                 ));
                 let penalty_txid = &uuid_txid_map[&uuid];
@@ -1200,7 +1119,7 @@ mod tests {
                     .unwrap()
                     .contains_key(&uuid_txid_map[&uuid]));
                 assert!(matches!(
-                    dbm.lock().unwrap().load_tracker(uuid),
+                    responder.dbm.lock().unwrap().load_tracker(uuid),
                     Ok(TransactionTracker { .. })
                 ));
             }
@@ -1209,21 +1128,9 @@ mod tests {
 
     #[test]
     fn test_block_connected() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
-            SLOTS,
-            DURATION,
-            EXPIRY_DELTA,
-            dbm.clone(),
+        let (responder, mut chain) = init_responder(MockedServerQuery::Confirmations(
+            constants::IRREVOCABLY_RESOLVED + 1,
         ));
-        let responder = create_responder(
-            &mut chain,
-            gk.clone(),
-            dbm.clone(),
-            MockedServerQuery::Confirmations(constants::IRREVOCABLY_RESOLVED + 1),
-        );
 
         // block_connected is used to keep track of the confirmation received (or missed) by the trackers the Responder
         // is keeping track of.
@@ -1267,7 +1174,7 @@ mod tests {
         for _ in 2..23 {
             let user_id = get_random_user_id();
 
-            gk.add_update_user(user_id).unwrap();
+            responder.gatekeeper.add_update_user(user_id).unwrap();
             users.push(user_id);
         }
 
@@ -1293,7 +1200,9 @@ mod tests {
                 user_id,
                 constants::IRREVOCABLY_RESOLVED + 1,
             );
-            gk.get_registered_users()
+            responder
+                .gatekeeper
+                .get_registered_users()
                 .lock()
                 .unwrap()
                 .get_mut(&user_id)
@@ -1331,14 +1240,19 @@ mod tests {
             uuids.extend(pair);
         }
 
-        gk.get_outdated_users_cache()
+        responder
+            .gatekeeper
+            .get_outdated_users_cache()
             .lock()
             .unwrap()
             .insert(target_block_height, outdated_users);
 
         // CONFIRMATIONS SETUP
         let standalone_user_id = get_random_user_id();
-        gk.add_update_user(standalone_user_id).unwrap();
+        responder
+            .gatekeeper
+            .add_update_user(standalone_user_id)
+            .unwrap();
 
         let mut transactions = Vec::new();
         let mut confirmed_txs = Vec::new();
@@ -1415,9 +1329,11 @@ mod tests {
                 .lock()
                 .unwrap()
                 .contains_key(&breach.penalty_tx.txid()));
-            assert!(!gk.get_registered_users().lock().unwrap()[&user_id]
-                .appointments
-                .contains_key(&uuid));
+            assert!(
+                !responder.gatekeeper.get_registered_users().lock().unwrap()[&user_id]
+                    .appointments
+                    .contains_key(&uuid)
+            );
         }
 
         // OUTDATED TRACKERS CHECKS
