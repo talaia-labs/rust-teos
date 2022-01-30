@@ -381,7 +381,11 @@ impl Responder {
     }
 
     // DISCUSS: Check comment regarding callbacks in watcher.rs
-    // TODO: Document once modified given the above comment
+
+    /// Deletes trackers from memory and the database.
+    ///
+    /// Logs a different message depending on whether the trackers have been outdated or completed.
+    /// Removes all data related to the appointment from the database in cascade.
     fn delete_trackers(&self, uuids: HashSet<UUID>, outdated: bool) {
         let mut trackers = self.trackers.lock().unwrap();
         let mut tx_tracker_map = self.tx_tracker_map.lock().unwrap();

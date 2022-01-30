@@ -554,17 +554,45 @@ impl Watcher {
         (valid_breaches, invalid_breaches)
     }
 
+    /// Deletes an appointment from memory.
+    ///
+    /// The appointment is deleted from the appointments and locator_uuid_map maps.
+    fn delete_appointment_from_memory(&self, uuid: UUID) {
+        let mut appointments = self.appointments.lock().unwrap();
+        let mut locator_uuid_map = self.locator_uuid_map.lock().unwrap();
+
+        match appointments.remove(&uuid) {
+            Some(appointment) => {
+                let appointments = locator_uuid_map.get_mut(&appointment.locator).unwrap();
+
+                if appointments.len() == 1 {
+                    locator_uuid_map.remove(&appointment.locator);
+
+                    log::info!("No more appointments for locator: {}", appointment.locator);
+                } else {
+                    appointments.remove(&uuid);
+                }
+            }
+            None => {
+                // This should never happen. Logging just in case so we can fix it if so
+                log::error!("Appointment not found when cleaning: {}", uuid);
+            }
+        }
+    }
+
     // DISCUSS:: For outdated data this may be nicer if implemented with a callback from the GK given that:
     // - The GK is queried for the data to be deleted
     // - Appointment and tracker data can be deleted in cascade when a user is deleted
     // If done, the GK can notify the Watcher and Responder to delete data in memory and
     // take care of the database itself.
 
-    // TODO: Document once modified given the above comment
+    /// Deletes appointments from memory and the database.
+    ///
+    /// Logs a different message depending on whether the appointments have been outdated or they are invalid.
+    /// Valid appointment deletion is only performed from memory (through [delete_appointments_from_memory](Self::delete_appointment_from_memory)),
+    /// since the data is kept in the database since it's deletion is delegated to the Responder.
     fn delete_appointments(&self, uuids: HashSet<UUID>, outdated: bool) {
         // FIXME: This is identical to Responder::delete_trackers. It can be implemented using generics.
-        let mut appointments = self.appointments.lock().unwrap();
-        let mut locator_uuid_map = self.locator_uuid_map.lock().unwrap();
         for uuid in uuids.iter() {
             if outdated {
                 log::info!(
@@ -577,24 +605,7 @@ impl Watcher {
                     uuid
                 );
             }
-
-            match appointments.remove(uuid) {
-                Some(appointment) => {
-                    let appointments = locator_uuid_map.get_mut(&appointment.locator).unwrap();
-
-                    if appointments.len() == 1 {
-                        locator_uuid_map.remove(&appointment.locator);
-
-                        log::info!("No more appointments for locator: {}", appointment.locator);
-                    } else {
-                        appointments.remove(uuid);
-                    }
-                }
-                None => {
-                    // This should never happen. Logging just in case so we can fix it if so
-                    log::error!("Appointment not found when cleaning: {}", uuid);
-                }
-            }
+            self.delete_appointment_from_memory(*uuid);
         }
 
         // Remove data from the database
@@ -722,7 +733,6 @@ impl chain::Listen for Watcher {
 
             // Send data to the Responder and remove it from the Watcher
             {
-                let appointments = self.appointments.lock().unwrap();
                 for (uuid, breach) in valid_breaches {
                     log::info!(
                         "Notifying Responder and deleting appointment (uuid: {})",
@@ -731,13 +741,17 @@ impl chain::Listen for Watcher {
 
                     //DISCUSS: This cannot be async given block_connected is not.
                     // Is there any alternative? Remove async from here altogether?
-                    block_on(self.responder.handle_breach(
+                    let receipt = block_on(self.responder.handle_breach(
                         uuid,
                         breach,
-                        appointments[&uuid].user_id,
+                        self.appointments.lock().unwrap()[&uuid].user_id,
                     ));
 
-                    appointments_to_delete.insert(uuid);
+                    if receipt.delivered() {
+                        self.delete_appointment_from_memory(uuid);
+                    } else {
+                        appointments_to_delete.insert(uuid);
+                    }
                 }
             }
 
@@ -1368,6 +1382,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_appointment_from_memory() {
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
+
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gk = Arc::new(Gatekeeper::new(
+            chain.tip(),
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+            dbm.clone(),
+        ));
+        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+        let watcher = create_watcher(
+            &mut chain,
+            Arc::new(responder),
+            gk.clone(),
+            bitcoind_mock,
+            dbm.clone(),
+        )
+        .await;
+
+        // Add an appointment both to memory and to the database
+        let uuid = generate_uuid();
+        let appointment = generate_dummy_appointment(None);
+        watcher
+            .appointments
+            .lock()
+            .unwrap()
+            .insert(uuid, appointment.get_summary());
+        watcher
+            .locator_uuid_map
+            .lock()
+            .unwrap()
+            .insert(appointment.locator(), HashSet::from_iter([uuid]));
+
+        store_appointment_and_fks_to_db(&dbm.lock().unwrap(), uuid, &appointment);
+
+        // Delete and check data is not in memory
+        watcher.delete_appointment_from_memory(uuid);
+        assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
+        assert!(!watcher
+            .locator_uuid_map
+            .lock()
+            .unwrap()
+            .contains_key(&appointment.locator()));
+
+        // Data should be in the database too
+        assert!(matches!(
+            dbm.lock().unwrap().load_appointment(uuid),
+            Ok(ExtendedAppointment { .. })
+        ));
+    }
+
+    #[tokio::test]
     async fn test_delete_appointments() {
         // TODO: This is an adaptation of Responder::test_delete_trackers, merge together once the method
         // is implemented using generics.
@@ -1649,6 +1718,16 @@ mod tests {
                 .appointments
                 .contains_key(&uuid)
         );
+
+        // Data should have been kept in the database
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            Ok(ExtendedAppointment { .. })
+        ));
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_tracker(uuid),
+            Ok(TransactionTracker { .. })
+        ));
 
         // Checks invalid triggers. Add a new appointment and trigger it with invalid data.
         let dispute_tx = get_random_tx();
