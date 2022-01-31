@@ -207,20 +207,28 @@ impl DBM {
             .connection
             .prepare("SELECT available_slots, subscription_expiry FROM users WHERE user_id=(?)")
             .unwrap();
-        let mut user = stmt
+        let user = stmt
             .query_row([&key], |row| {
                 let slots = row.get(0).unwrap();
                 let expiry = row.get(1).unwrap();
-                Ok(UserInfo::new(slots, expiry))
+                Ok(UserInfo::with_appointments(
+                    slots,
+                    expiry,
+                    self.load_user_appointments(user_id),
+                ))
             })
             .map_err(|_| Error::NotFound)?;
 
-        // Loads the associated appointments if found
+        Ok(user)
+    }
+
+    /// Loads the associated appointments ([Appointment]) of a given user ([UserInfo]).
+    pub(crate) fn load_user_appointments(&self, user_id: UserId) -> HashMap<UUID, u32> {
         let mut stmt = self
             .connection
             .prepare("SELECT UUID, encrypted_blob FROM appointments WHERE user_id=(?)")
             .unwrap();
-        let mut rows = stmt.query([key]).unwrap();
+        let mut rows = stmt.query([user_id.serialize()]).unwrap();
 
         let mut appointments = HashMap::new();
         while let Ok(Some(inner_row)) = rows.next() {
@@ -234,11 +242,7 @@ impl DBM {
             );
         }
 
-        if !appointments.is_empty() {
-            user.appointments = appointments;
-        }
-
-        Ok(user)
+        appointments
     }
 
     /// Loads all users from the database.
@@ -253,7 +257,10 @@ impl DBM {
             let slots = row.get(1).unwrap();
             let expiry = row.get(2).unwrap();
 
-            users.insert(user_id, UserInfo::new(slots, expiry));
+            users.insert(
+                user_id,
+                UserInfo::with_appointments(slots, expiry, self.load_user_appointments(user_id)),
+            );
         }
 
         users
@@ -667,7 +674,9 @@ mod tests {
             user.appointments.insert(uuid, 1);
         }
 
+        // Check both loading the whole user info or only the associated appointments
         assert_eq!(dbm.load_user(user_id).unwrap(), user);
+        assert_eq!(dbm.load_user_appointments(user_id), user.appointments);
     }
 
     #[test]
@@ -703,6 +712,17 @@ mod tests {
             let user = UserInfo::new(i, i * 2);
             users.insert(user_id, user.clone());
             dbm.store_user(user_id, &user).unwrap();
+
+            // Add appointments to some of the users
+            if i % 2 == 0 {
+                let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+                dbm.store_appointment(uuid, &appointment).unwrap();
+                users
+                    .get_mut(&user_id)
+                    .unwrap()
+                    .appointments
+                    .insert(uuid, 1);
+            }
         }
 
         assert_eq!(dbm.load_all_users(), users);

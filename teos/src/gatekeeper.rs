@@ -35,6 +35,19 @@ impl UserInfo {
             appointments: HashMap::new(),
         }
     }
+
+    /// Creates a new [UserInfo] instance with some associated appointments.
+    pub fn with_appointments(
+        available_slots: u32,
+        subscription_expiry: u32,
+        appointments: HashMap<UUID, u32>,
+    ) -> Self {
+        UserInfo {
+            available_slots,
+            subscription_expiry,
+            appointments,
+        }
+    }
 }
 
 /// Error raised if the user cannot be authenticated.
@@ -83,12 +96,13 @@ impl Gatekeeper {
         expiry_delta: u32,
         dbm: Arc<Mutex<DBM>>,
     ) -> Self {
+        let registered_users = dbm.lock().unwrap().load_all_users().clone();
         Gatekeeper {
             last_known_block_header,
             subscription_slots,
             subscription_duration,
             expiry_delta,
-            registered_users: Mutex::new(HashMap::new()),
+            registered_users: Mutex::new(registered_users),
             dbm,
         }
     }
@@ -351,6 +365,42 @@ mod tests {
         let tip = chain.tip();
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA, dbm)
+    }
+
+    #[test]
+    fn test_new() {
+        // A fresh gatekeeper has no associated data
+        let chain = Blockchain::default().with_height(START_HEIGHT);
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let gatekeeper = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+
+        assert!(gatekeeper.registered_users.lock().unwrap().is_empty());
+
+        // If we add some users and appointments to the system and create a new Gatekeeper reusing the same db
+        // (as if simulating a bootstrap from existing data), the data should be properly loaded.
+        for _ in 0..10 {
+            let user_id = get_random_user_id();
+            gatekeeper.add_update_user(user_id).unwrap();
+
+            let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+            gatekeeper
+                .add_update_appointment(user_id, uuid, &appointment)
+                .unwrap();
+            // Add the appointment to the database. This is normally done by the Watcher.
+            gatekeeper
+                .dbm
+                .lock()
+                .unwrap()
+                .store_appointment(uuid, &appointment)
+                .unwrap();
+        }
+
+        // Create a new GK reusing the same DB and check that the data is loaded
+        let another_gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm);
+        assert_eq!(
+            gatekeeper.registered_users.into_inner().unwrap(),
+            another_gk.registered_users.into_inner().unwrap()
+        );
     }
 
     #[test]
