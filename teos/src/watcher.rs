@@ -721,41 +721,38 @@ impl chain::Listen for Watcher {
             let (valid_breaches, invalid_breaches) =
                 self.filter_breaches(self.get_breaches(locator_tx_map));
 
-            let mut appointments_to_delete = HashSet::new();
-            let mut appointments_to_delete_gatekeeper = HashMap::new();
-            {
-                let appointments = self.appointments.lock().unwrap();
-                for uuid in invalid_breaches.into_keys() {
-                    appointments_to_delete.insert(uuid);
-                    appointments_to_delete_gatekeeper.insert(uuid, appointments[&uuid].user_id);
-                }
-            }
-
             // Send data to the Responder and remove it from the Watcher
-            {
-                for (uuid, breach) in valid_breaches {
-                    log::info!(
-                        "Notifying Responder and deleting appointment (uuid: {})",
-                        uuid
-                    );
+            let mut appointments_to_delete = HashSet::from_iter(invalid_breaches.into_keys());
+            for (uuid, breach) in valid_breaches {
+                log::info!(
+                    "Notifying Responder and deleting appointment (uuid: {})",
+                    uuid
+                );
 
-                    //DISCUSS: This cannot be async given block_connected is not.
-                    // Is there any alternative? Remove async from here altogether?
-                    let receipt = block_on(self.responder.handle_breach(
-                        uuid,
-                        breach,
-                        self.appointments.lock().unwrap()[&uuid].user_id,
-                    ));
+                //DISCUSS: This cannot be async given block_connected is not.
+                // Is there any alternative? Remove async from here altogether?
+                let receipt = block_on(self.responder.handle_breach(
+                    uuid,
+                    breach,
+                    self.appointments.lock().unwrap()[&uuid].user_id,
+                ));
 
-                    if receipt.delivered() {
-                        self.delete_appointment_from_memory(uuid);
-                    } else {
-                        appointments_to_delete.insert(uuid);
-                    }
+                if receipt.delivered() {
+                    self.delete_appointment_from_memory(uuid);
+                } else {
+                    appointments_to_delete.insert(uuid);
                 }
             }
 
-            // Delete data from the Watcher (invalid + triggered)
+            let appointments_to_delete_gatekeeper = {
+                let appointments = self.appointments.lock().unwrap();
+                appointments_to_delete
+                    .iter()
+                    .map(|uuid| (*uuid, appointments[&uuid].user_id))
+                    .collect()
+            };
+
+            // Delete data from the Watcher (invalid + rejected)
             self.delete_appointments(appointments_to_delete, false);
 
             // Delete data from the Gatekeeper
@@ -1605,6 +1602,49 @@ mod tests {
         assert!(matches!(
             watcher.dbm.lock().unwrap().load_tracker(uuid),
             Ok(TransactionTracker { .. })
+        ));
+
+        // Check triggering with a valid formatted transaction but that is rejected by the Responder.
+        let dispute_tx = get_random_tx();
+        let appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
+        let sig = cryptography::sign(&appointment.inner.serialize(), &user2_sk).unwrap();
+        let uuid = UUID::new(appointment.locator(), user2_id);
+        watcher
+            .add_appointment(appointment.inner.clone(), sig)
+            .await
+            .unwrap();
+
+        // Set the carrier response
+        *watcher.responder.get_carrier().lock().unwrap() = create_carrier(
+            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+        );
+
+        watcher.block_connected(
+            &chain.generate(Some(vec![dispute_tx])),
+            chain.blocks.len() as u32,
+        );
+
+        // Data should not be in the Responder, in the Watcher nor in the Gatekeeper
+        assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
+        assert!(!watcher
+            .responder
+            .get_trackers()
+            .lock()
+            .unwrap()
+            .contains_key(&uuid));
+        assert!(
+            !watcher.gatekeeper.get_registered_users().lock().unwrap()[&user2_id]
+                .appointments
+                .contains_key(&uuid)
+        );
+        // Data should also have been deleted from the database
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            Err(DBError::NotFound)
+        ));
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_tracker(uuid),
+            Err(DBError::NotFound)
         ));
 
         // Checks invalid triggers. Add a new appointment and trigger it with invalid data.
