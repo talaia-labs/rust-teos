@@ -242,7 +242,7 @@ impl Gatekeeper {
 
     /// Gets a map of outdated users. Outdated users are those whose subscription has expired and the renewal grace period
     /// has already passed ([expiry_delta](Self::expiry_delta)).
-    pub fn get_outdated_users(&self, block_height: u32) -> HashMap<UserId, Vec<UUID>> {
+    pub fn get_outdated_users(&self, block_height: u32) -> HashMap<UserId, HashSet<UUID>> {
         let registered_users = self.registered_users.lock().unwrap().clone();
         registered_users
             .into_iter()
@@ -251,8 +251,8 @@ impl Gatekeeper {
             .collect()
     }
 
-    /// Gets a list of outdated user ids.
-    pub fn get_outdated_user_ids(&self, block_height: u32) -> Vec<UserId> {
+    /// Gets a set of outdated user ids.
+    pub fn get_outdated_user_ids(&self, block_height: u32) -> HashSet<UserId> {
         self.get_outdated_users(block_height)
             .keys()
             .cloned()
@@ -268,13 +268,17 @@ impl Gatekeeper {
         )
     }
 
-    /// Deletes a collection of appointments from the users' subscriptions (both from memory and from the database).
+    /// Deletes a collection of appointments from the users' subscriptions (from memory only)
+    /// and updates the available_slots count for the given user.
     ///
     /// Notice appointments are only de-linked from users, but not actually removed. This is because the [Gatekeeper]
     /// does not actually hold any [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) data,
-    /// just references to them (the same applies to the database).
-    pub fn delete_appointments(&self, appointments: &HashMap<UUID, UserId>) {
-        let mut updated_users = HashSet::new();
+    /// just references to them.
+    pub fn delete_appointments_from_memory(
+        &self,
+        appointments: &HashMap<UUID, UserId>,
+    ) -> HashMap<UserId, UserInfo> {
+        let mut updated_users = HashMap::new();
         let mut registered_users = self.registered_users.lock().unwrap();
 
         for (uuid, user_id) in appointments {
@@ -284,15 +288,11 @@ impl Gatekeeper {
                     .appointments
                     .remove(uuid)
                     .map(|x| user_info.available_slots += x);
-                updated_users.insert(user_id);
+                updated_users.insert(*user_id, user_info.clone());
             });
         }
 
-        // Update data in the database
-        let dbm = self.dbm.lock().unwrap();
-        for user_id in updated_users {
-            dbm.update_user(*user_id, registered_users.get(user_id).unwrap());
-        }
+        updated_users
     }
 }
 
@@ -305,12 +305,11 @@ impl chain::Listen for Gatekeeper {
 
         // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
         let outdated_users = self.get_outdated_user_ids(height);
-        let mut registered_users = self.registered_users.lock().unwrap();
-        let dbm = self.dbm.lock().unwrap();
-        for user_id in outdated_users.iter() {
-            registered_users.remove(user_id);
-            dbm.remove_user(*user_id);
-        }
+        self.registered_users
+            .lock()
+            .unwrap()
+            .retain(|id, _| !outdated_users.contains(id));
+        self.dbm.lock().unwrap().batch_remove_users(&outdated_users);
     }
 
     /// FIXME: To be implemented.
@@ -657,7 +656,7 @@ mod tests {
         gatekeeper.add_outdated_user(user_id, start_height, None);
         let outdated_users = gatekeeper.get_outdated_users(start_height);
         assert_eq!(outdated_users.len(), 1);
-        assert_eq!(outdated_users[&user_id], Vec::from([uuid]));
+        assert_eq!(outdated_users[&user_id], HashSet::from_iter([uuid]));
     }
 
     #[test]
@@ -690,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_appointments() {
+    fn test_delete_appointments_from_memory() {
         let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
 
         // delete_appointments will remove a list of appointments from the Gatekeeper (as long as they exist)
@@ -711,8 +710,9 @@ mod tests {
 
         // Calling the method with unknown data should work but do nothing
         assert!(gatekeeper.registered_users.lock().unwrap().is_empty());
-        gatekeeper.delete_appointments(&all_appointments);
-        assert!(gatekeeper.registered_users.lock().unwrap().is_empty());
+        assert!(gatekeeper
+            .delete_appointments_from_memory(&all_appointments)
+            .is_empty());
 
         // If there's matching data in the gatekeeper it should be deleted
         for (uuid, user_id) in to_be_deleted.iter() {
@@ -754,7 +754,7 @@ mod tests {
         }
 
         // And after
-        gatekeeper.delete_appointments(&all_appointments);
+        gatekeeper.delete_appointments_from_memory(&all_appointments);
         for (uuid, user_id) in to_be_deleted.iter() {
             assert!(!gatekeeper.registered_users.lock().unwrap()[&user_id]
                 .appointments
@@ -763,16 +763,6 @@ mod tests {
             // The slot count is back to default
             assert_eq!(
                 gatekeeper.registered_users.lock().unwrap()[&user_id].available_slots,
-                gatekeeper.subscription_slots
-            );
-            assert_eq!(
-                gatekeeper
-                    .dbm
-                    .lock()
-                    .unwrap()
-                    .load_user(*user_id)
-                    .unwrap()
-                    .available_slots,
                 gatekeeper.subscription_slots
             );
         }

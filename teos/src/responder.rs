@@ -19,7 +19,7 @@ use teos_common::UserId;
 use crate::carrier::{Carrier, DeliveryReceipt};
 use crate::dbm::DBM;
 use crate::extended_appointment::UUID;
-use crate::gatekeeper::Gatekeeper;
+use crate::gatekeeper::{Gatekeeper, UserInfo};
 use crate::protos as msgs;
 use crate::watcher::Breach;
 
@@ -382,11 +382,10 @@ impl Responder {
 
     // DISCUSS: Check comment regarding callbacks in watcher.rs
 
-    /// Deletes trackers from memory and the database.
+    /// Deletes trackers from memory.
     ///
     /// Logs a different message depending on whether the trackers have been outdated or completed.
-    /// Removes all data related to the appointment from the database in cascade.
-    fn delete_trackers(&self, uuids: HashSet<UUID>, outdated: bool) {
+    fn delete_trackers_from_memory(&self, uuids: &HashSet<UUID>, outdated: bool) {
         let mut trackers = self.trackers.lock().unwrap();
         let mut tx_tracker_map = self.tx_tracker_map.lock().unwrap();
         for uuid in uuids.iter() {
@@ -426,9 +425,22 @@ impl Responder {
                 }
             }
         }
+    }
 
-        // Remove both the appointment and tracker matching the given uuids
-        self.dbm.lock().unwrap().batch_remove_appointments(&uuids);
+    /// Deletes trackers from memory and the database.
+    ///
+    /// Removes all data related to the appointment from the database in cascade.
+    fn delete_trackers(
+        &self,
+        uuids: &HashSet<UUID>,
+        updated_users: &HashMap<UserId, UserInfo>,
+        outdated: bool,
+    ) {
+        self.delete_trackers_from_memory(uuids, outdated);
+        self.dbm
+            .lock()
+            .unwrap()
+            .batch_remove_appointments(&uuids, &updated_users);
     }
 }
 
@@ -447,22 +459,25 @@ impl Listen for Responder {
         log::info!("New block received: {}", block.header.block_hash());
 
         if self.trackers.lock().unwrap().len() > 0 {
-            let completed_trackers = block_on(self.get_completed_trackers());
-            let outdated_trackers = self.get_outdated_trackers(height);
+            // Start by deleting outdated data so it is not taken into account from this point on
+            self.delete_trackers_from_memory(&self.get_outdated_trackers(height), true);
 
+            // Complete those appointments that are due
+            let completed_trackers = block_on(self.get_completed_trackers());
             let trackers_to_delete_gk = completed_trackers
                 .iter()
                 .map(|uuid| (*uuid, self.trackers.lock().unwrap()[uuid].user_id))
                 .collect();
-
-            self.check_confirmations(&block.txdata);
-            self.delete_trackers(completed_trackers, false);
-            self.delete_trackers(outdated_trackers, true);
-
-            // Remove completed trackers from the GK
-            self.gatekeeper.delete_appointments(&trackers_to_delete_gk);
+            self.delete_trackers(
+                &completed_trackers,
+                &self
+                    .gatekeeper
+                    .delete_appointments_from_memory(&trackers_to_delete_gk),
+                false,
+            );
 
             // Rebroadcast those transactions that need to
+            self.check_confirmations(&block.txdata);
             block_on(self.rebroadcast());
 
             // Remove all receipts created in this block
@@ -473,6 +488,7 @@ impl Listen for Responder {
             }
         }
 
+        // Update last known block
         *self.last_known_block_header.lock().unwrap() = BlockHeaderData {
             header: block.header,
             height,
@@ -727,8 +743,8 @@ mod tests {
 
         assert!(responder.has_tracker(uuid));
 
-        // Delete the tracker and check again
-        responder.delete_trackers(HashSet::from_iter([uuid]), false);
+        // Delete the tracker and check again (updated users are irrelevant here)
+        responder.delete_trackers(&HashSet::from_iter([uuid]), &HashMap::new(), false);
         assert!(!responder.has_tracker(uuid));
     }
 
@@ -751,8 +767,8 @@ mod tests {
         responder.add_tracker(uuid, breach, user_id, 0);
         assert_eq!(responder.get_tracker(uuid).unwrap(), tracker);
 
-        // After deleting the data it should be gone
-        responder.delete_trackers(HashSet::from_iter([uuid]), false);
+        // After deleting the data it should be gone (updated users are irrelevant here)
+        responder.delete_trackers(&HashSet::from_iter([uuid]), &HashMap::new(), false);
         assert_eq!(responder.get_tracker(uuid), None);
     }
 
@@ -1017,6 +1033,52 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_delete_trackers_from_memory() {
+        let (responder, _) = init_responder(MockedServerQuery::Regular);
+
+        // Add user to the database
+        let user_id = get_random_user_id();
+        responder
+            .dbm
+            .lock()
+            .unwrap()
+            .store_user(user_id, &UserInfo::new(21, 42))
+            .unwrap();
+
+        // Add some trackers both to memory and to the database
+        let mut to_be_deleted = HashMap::new();
+
+        for _ in 0..10 {
+            let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+            responder
+                .dbm
+                .lock()
+                .unwrap()
+                .store_appointment(uuid, &appointment)
+                .unwrap();
+
+            let breach = get_random_breach_from_locator(appointment.locator());
+            responder.add_tracker(uuid, breach.clone(), user_id, 0);
+            to_be_deleted.insert(uuid, breach.penalty_tx.txid());
+        }
+
+        // Delete and check data is not in memory (the reason does not matter for the test)
+        responder.delete_trackers_from_memory(&to_be_deleted.keys().cloned().collect(), false);
+
+        for (uuid, txid) in to_be_deleted {
+            // Data is not in memory
+            assert!(!responder.trackers.lock().unwrap().contains_key(&uuid));
+            assert!(!responder.tx_tracker_map.lock().unwrap().contains_key(&txid));
+
+            // But it can be found in the database
+            assert!(matches!(
+                responder.dbm.lock().unwrap().load_tracker(uuid),
+                Ok(TransactionTracker { .. })
+            ));
+        }
+    }
+
     #[test]
     fn test_delete_trackers() {
         let (responder, _) = init_responder(MockedServerQuery::Regular);
@@ -1037,6 +1099,7 @@ mod tests {
         let mut target_trackers = HashSet::new();
         let mut uuid_txid_map = HashMap::new();
         let mut txs_with_multiple_uuids = HashSet::new();
+        let mut updated_users = HashMap::new();
 
         for i in 0..10 {
             // Generate appointment and also add it to the DB (FK checks)
@@ -1069,11 +1132,14 @@ mod tests {
 
             // Add some trackers to be deleted
             if i % 2 == 0 {
+                // Users will also be updated once the data is deleted.
+                // We can made up the numbers here just to check they are updated.
                 target_trackers.insert(uuid);
+                updated_users.insert(appointment.user_id, UserInfo::new(i, 42));
             }
         }
 
-        responder.delete_trackers(target_trackers.clone(), false);
+        responder.delete_trackers(&target_trackers, &updated_users, false);
 
         // Only trackers in the target_trackers map should have been removed from
         // the Responder data structures.
@@ -1118,6 +1184,20 @@ mod tests {
                     Ok(TransactionTracker { .. })
                 ));
             }
+        }
+
+        // The users that needed to be updated in the database have been (just checking the slot count)
+        for (id, info) in updated_users {
+            assert_eq!(
+                responder
+                    .dbm
+                    .lock()
+                    .unwrap()
+                    .load_user(id)
+                    .unwrap()
+                    .available_slots,
+                info.available_slots
+            )
         }
     }
 
