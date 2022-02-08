@@ -11,7 +11,9 @@ use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use bitcoincore_rpc::{Auth, Client};
 use lightning_block_sync::init::validate_best_block_header;
-use lightning_block_sync::poll::{ChainPoller, Poll, ValidatedBlock, ValidatedBlockHeader};
+use lightning_block_sync::poll::{
+    ChainPoller, Poll, Validate, ValidatedBlock, ValidatedBlockHeader,
+};
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
 use rusty_teos::api::http;
@@ -88,7 +90,6 @@ pub async fn main() {
 
     // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
     // key straightaway
-
     let (tower_sk, tower_pk) = {
         let locked_db = dbm.lock().unwrap();
         if conf.overwrite_key {
@@ -104,8 +105,7 @@ pub async fn main() {
             }
         }
     };
-
-    log::info!("tower_id = {}", tower_pk);
+    log::info!("tower_id: {}", tower_pk);
 
     // Initialize our bitcoind client
     let bitcoin_cli = match BitcoindClient::new(
@@ -137,13 +137,24 @@ pub async fn main() {
         )
         .unwrap(),
     );
-
     let mut derefed = bitcoin_cli.deref();
-    let tip = validate_best_block_header(&mut derefed).await.unwrap();
+    // Load last known block from DB if found. Poll it from Bitcoind otherwise.
+    let tip = if let Ok(block_hash) = dbm.lock().unwrap().load_last_known_block() {
+        derefed
+            .get_header(&block_hash, None)
+            .await
+            .unwrap()
+            .validate(block_hash)
+            .unwrap()
+    } else {
+        validate_best_block_header(&mut derefed).await.unwrap()
+    };
+    log::info!("Last known block: {}", tip.header.block_hash());
+
     let mut poller = ChainPoller::new(&mut derefed, Network::Bitcoin);
-    let cache = &mut UnboundedCache::new();
     let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
 
+    // Build components
     let gatekeeper = Arc::new(Gatekeeper::new(
         tip,
         conf.subscription_slots,
@@ -152,12 +163,7 @@ pub async fn main() {
         dbm.clone(),
     ));
     let carrier = Carrier::new(rpc);
-    let responder = Arc::new(Responder::new(
-        carrier,
-        gatekeeper.clone(),
-        dbm.clone(),
-        tip,
-    ));
+    let responder = Arc::new(Responder::new(carrier, gatekeeper.clone(), dbm.clone(), tip).await);
     let watcher = Arc::new(
         Watcher::new(
             gatekeeper.clone(),
@@ -166,16 +172,34 @@ pub async fn main() {
             tip,
             tower_sk,
             UserId(tower_pk),
-            dbm,
+            dbm.clone(),
         )
         .await,
     );
+
+    if watcher.is_fresh() & responder.is_fresh() & gatekeeper.is_fresh() {
+        log::info!("Fresh bootstrap");
+    } else {
+        log::info!("Bootstrapping from backed up data");
+    }
 
     let (shutdown_trigger, shutdown_signal_rpc_api) = triggered::trigger();
     let shutdown_signal_internal_rpc_api = shutdown_signal_rpc_api.clone();
     let shutdown_signal_http = shutdown_signal_rpc_api.clone();
     let shutdown_signal_cm = shutdown_signal_rpc_api.clone();
 
+    // The ordering here actually matters. Listeners are called by order, and we want the gatekeeper to be called
+    // last, so both the Watcher and the Responder can query the necessary data from it during data deletion.
+    let listener = &(watcher.clone(), &(responder.clone(), gatekeeper));
+    let cache = &mut UnboundedCache::new();
+    let spv_client = SpvClient::new(tip, poller, cache, listener);
+    let mut chain_monitor = ChainMonitor::new(spv_client, tip, dbm, 1, shutdown_signal_cm).await;
+
+    // Get all the components up to date if there's a backlog of blocks
+    chain_monitor.poll_best_tip().await;
+    log::info!("Bootstrap completed. Turning on interfaces");
+
+    // Build interfaces
     let rpc_api = Arc::new(InternalAPI::new(watcher.clone(), shutdown_trigger));
     let internal_rpc_api = rpc_api.clone();
 
@@ -193,6 +217,7 @@ pub async fn main() {
         .parse()
         .unwrap();
 
+    // Start tasks
     let private_api_task = task::spawn(async move {
         Server::builder()
             .add_service(PrivateTowerServicesServer::new(rpc_api))
@@ -214,15 +239,9 @@ pub async fn main() {
         internal_rpc_api_uri,
         shutdown_signal_http,
     ));
-
-    let listener = &(watcher, &(responder, gatekeeper));
-    let spv_client = SpvClient::new(tip, poller, cache, listener);
-
-    // DISCUSS: the CM may not be necessary since it's only being used to log stuff. Doing spv_client.poll_best_tip().await will
-    // have the same functionality. Consider whether to get rid of it of to massively simplify it.
-    let mut chain_monitor = ChainMonitor::new(spv_client, tip, 60, shutdown_signal_cm).await;
     chain_monitor.monitor_chain().await;
 
+    // Wait until shutdown
     http_api_task.await.unwrap();
     private_api_task.await.unwrap();
     public_api_task.await.unwrap();

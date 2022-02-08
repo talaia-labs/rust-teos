@@ -29,6 +29,7 @@ use crate::responder::{Responder, TransactionTracker};
 /// Data structure used to cache locators computed from parsed blocks.
 ///
 /// Holds up to `size` blocks with their corresponding computed [Locator]s.
+#[derive(Debug)]
 struct LocatorCache {
     /// A [Locator]:[Transaction] map.
     cache: HashMap<Locator, Transaction>,
@@ -63,34 +64,31 @@ impl LocatorCache {
     /// are not linked in strict descending order.
     fn new(last_n_blocks: Vec<ValidatedBlock>) -> LocatorCache {
         let size = last_n_blocks.len();
-        let mut cache = HashMap::new();
-        let mut blocks = Vec::with_capacity(size);
-        let mut tx_in_block = HashMap::new();
+        let mut cache = LocatorCache {
+            cache: HashMap::new(),
+            blocks: Vec::with_capacity(size),
+            tx_in_block: HashMap::new(),
+            size,
+        };
 
         for block in last_n_blocks.into_iter().rev() {
-            blocks.last().map(|prev_block_hash| {
+            cache.blocks.last().map(|prev_block_hash| {
                 if block.header.prev_blockhash != *prev_block_hash {
                     panic!("last_n_blocks contains unchained blocks");
                 }
             });
 
-            let mut locators = Vec::new();
-            for tx in block.txdata.iter() {
-                let locator = Locator::new(tx.txid());
-                cache.insert(locator, tx.clone());
-                locators.push(locator);
-            }
+            let locator_tx_map = block
+                .txdata
+                .iter()
+                .map(|tx| (Locator::new(tx.txid()), tx.clone()))
+                .collect();
 
-            tx_in_block.insert(block.block_hash(), locators);
-            blocks.push(block.header.block_hash());
+            cache.update(block.header, &locator_tx_map);
         }
 
-        LocatorCache {
-            cache,
-            blocks,
-            tx_in_block,
-            size,
-        }
+        cache.blocks.reverse();
+        cache
     }
 
     /// Gets a transaction from the cache if present. [None] otherwise.
@@ -111,17 +109,19 @@ impl LocatorCache {
     ) {
         self.blocks.push(block_header.block_hash());
 
-        let mut locators = Vec::new();
-        for (locator, tx) in locator_tx_map {
-            self.cache.insert(*locator, tx.clone());
-            locators.push(*locator);
-        }
+        let locators = locator_tx_map
+            .iter()
+            .map(|(l, tx)| {
+                self.cache.insert(*l, tx.clone());
+                *l
+            })
+            .collect();
 
         self.tx_in_block.insert(block_header.block_hash(), locators);
 
-        log::info!("New block added to cache: {}", block_header.block_hash());
-
         if self.is_full() {
+            // Avoid logging during bootstrap
+            log::info!("New block added to cache: {}", block_header.block_hash());
             self.remove_oldest_block();
         }
     }
@@ -228,6 +228,7 @@ enum DeletionReason {
 }
 
 /// Component in charge of watching for triggers in the chain (aka channel breaches for lightning).
+#[derive(Debug)]
 pub struct Watcher {
     /// A map holding a summary of every appointment ([ExtendedAppointment]) hold by the [Watcher], identified by a [UUID].
     appointments: Mutex<HashMap<UUID, AppointmentSummary>>,
@@ -260,14 +261,22 @@ impl Watcher {
         tower_id: UserId,
         dbm: Arc<Mutex<DBM>>,
     ) -> Self {
-        let appointments = Mutex::new(HashMap::new());
-        let locator_uuid_map = Mutex::new(HashMap::new());
-        let locator_cache = Mutex::new(LocatorCache::new(last_n_blocks));
+        let mut appointments = HashMap::new();
+        let mut locator_uuid_map: HashMap<Locator, HashSet<UUID>> = HashMap::new();
+        for (uuid, appointment) in dbm.lock().unwrap().load_all_appointments() {
+            appointments.insert(uuid, appointment.get_summary());
+
+            if let Some(map) = locator_uuid_map.get_mut(&appointment.locator()) {
+                map.insert(uuid);
+            } else {
+                locator_uuid_map.insert(appointment.locator(), HashSet::from_iter(vec![uuid]));
+            }
+        }
 
         Watcher {
-            appointments,
-            locator_uuid_map,
-            locator_cache,
+            appointments: Mutex::new(appointments),
+            locator_uuid_map: Mutex::new(locator_uuid_map),
+            locator_cache: Mutex::new(LocatorCache::new(last_n_blocks)),
             responder,
             gatekeeper,
             last_known_block_header: Mutex::new(*last_known_block_header.deref()),
@@ -275,6 +284,11 @@ impl Watcher {
             tower_id,
             dbm,
         }
+    }
+
+    /// Returns whether the [Watcher] has been created from scratch (fresh) or from backed-up data.
+    pub fn is_fresh(&self) -> bool {
+        self.appointments.lock().unwrap().is_empty()
     }
 
     /// Registers a new user within the [Watcher]. This request is passed to the [Gatekeeper], who is in
@@ -785,10 +799,6 @@ impl chain::Listen for Watcher {
             height,
             chainwork: block.header.work(),
         };
-        self.dbm
-            .lock()
-            .unwrap()
-            .store_last_known_block_watcher(&block.header.block_hash());
     }
 
     #[allow(unused_variables)]
@@ -820,6 +830,16 @@ mod tests {
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use lightning::chain::Listen;
 
+    impl PartialEq for Watcher {
+        fn eq(&self, other: &Self) -> bool {
+            *self.appointments.lock().unwrap() == *other.appointments.lock().unwrap()
+                && *self.locator_uuid_map.lock().unwrap() == *other.locator_uuid_map.lock().unwrap()
+                && *self.last_known_block_header.lock().unwrap()
+                    == *other.last_known_block_header.lock().unwrap()
+        }
+    }
+    impl Eq for Watcher {}
+
     impl Watcher {
         pub fn add_random_tracker_to_responder(&self, uuid: UUID) {
             self.responder.add_random_tracker(uuid);
@@ -827,9 +847,13 @@ mod tests {
     }
 
     async fn init_watcher(chain: &mut Blockchain) -> Watcher {
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        init_watcher_with_db(chain, dbm).await
+    }
+
+    async fn init_watcher_with_db(chain: &mut Blockchain, dbm: Arc<Mutex<DBM>>) -> Watcher {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let gk = Arc::new(Gatekeeper::new(
             chain.tip(),
             SLOTS,
@@ -837,7 +861,8 @@ mod tests {
             EXPIRY_DELTA,
             dbm.clone(),
         ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+        let responder =
+            create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
         create_watcher(
             chain,
             Arc::new(responder),
@@ -866,12 +891,96 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cache() {
+    async fn test_cache_new() {
         let mut chain = Blockchain::default().with_height(10);
-        let size = 6;
+        let last_six_blocks = get_last_n_blocks(&mut chain, 6).await;
+        let blocks: Vec<Block> = last_six_blocks
+            .iter()
+            .map(|block| block.deref().clone())
+            .collect();
 
-        let cache = LocatorCache::new(get_last_n_blocks(&mut chain, size).await);
-        assert_eq!(size, cache.size);
+        let cache = LocatorCache::new(last_six_blocks);
+        assert_eq!(blocks.len(), cache.size);
+        for block in blocks.iter() {
+            assert!(cache.blocks.contains(&block.block_hash()));
+
+            let mut locators = Vec::new();
+            for tx in block.txdata.iter() {
+                let locator = Locator::new(tx.txid());
+                assert!(cache.cache.contains_key(&locator));
+                locators.push(locator);
+            }
+
+            assert_eq!(cache.tx_in_block[&block.block_hash()], locators);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cache_update() {
+        let mut chain = Blockchain::default().with_height(10);
+        let mut last_n_blocks = get_last_n_blocks(&mut chain, 7).await;
+
+        // Safe the last block to use it for an update and the first to check eviction
+        let last_block = last_n_blocks.pop().unwrap();
+        let first_block = last_n_blocks.get(0).unwrap().deref().clone();
+
+        // Init the cache with the 6 block before the last
+        let mut cache = LocatorCache::new(last_n_blocks);
+
+        // Update the cache with the last block
+        let locator_tx_map = last_block
+            .deref()
+            .txdata
+            .iter()
+            .map(|tx| (Locator::new(tx.txid()), tx.clone()))
+            .collect();
+        cache.update(last_block.deref().header, &locator_tx_map);
+
+        // Check that the new data is in the cache
+        assert!(cache.blocks.contains(&last_block.block_hash()));
+        for (locator, _) in locator_tx_map.iter() {
+            assert!(cache.cache.contains_key(&locator));
+        }
+        assert_eq!(
+            cache.tx_in_block[&last_block.block_hash()],
+            locator_tx_map.keys().cloned().collect::<Vec<Locator>>()
+        );
+
+        // Check that the data from the first block has been evicted
+        assert!(!cache.blocks.contains(&first_block.block_hash()));
+        for tx in first_block.txdata.iter() {
+            assert!(!cache.cache.contains_key(&Locator::new(tx.txid())));
+        }
+        assert!(!cache.tx_in_block.contains_key(&first_block.block_hash()));
+    }
+
+    #[tokio::test]
+    async fn test_new() {
+        // A fresh watcher has no associated data
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let watcher = init_watcher_with_db(&mut chain, dbm.clone()).await;
+        assert!(watcher.is_fresh());
+
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        watcher.register(user_id).unwrap();
+        let appointment = generate_dummy_appointment(None).inner;
+
+        // If we add some trackers to the system and create a new Responder reusing the same db
+        // (as if simulating a bootstrap from existing data), the data should be properly loaded.
+        for _ in 0..10 {
+            let user_sig = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+            watcher
+                .add_appointment(appointment.clone(), user_sig.clone())
+                .await
+                .unwrap();
+        }
+
+        // Create a new Responder reusing the same DB and check that the data is loaded
+        let another_w = init_watcher_with_db(&mut chain, dbm).await;
+        assert!(!another_w.is_fresh());
+        assert_eq!(watcher, another_w);
     }
 
     #[tokio::test]
@@ -1519,16 +1628,6 @@ mod tests {
         assert_eq!(
             watcher.last_known_block_header.lock().unwrap().header,
             chain.tip().header
-        );
-        // Check the data also matches the on in database
-        assert_eq!(
-            watcher
-                .dbm
-                .lock()
-                .unwrap()
-                .load_last_known_block_watcher()
-                .unwrap(),
-            chain.tip().header.block_hash()
         );
 
         // If there are appointments to watch, the Watcher will:

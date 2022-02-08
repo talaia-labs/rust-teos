@@ -65,6 +65,7 @@ pub struct ExtendedAppointment {
 ///
 /// Contains the minimal amount of data the [Watcher](crate::watcher::Watcher) needs to keep in memory in order to
 /// watch for breaches.
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct AppointmentSummary {
     /// The [Appointment] locator.
     pub locator: Locator,

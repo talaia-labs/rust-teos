@@ -55,6 +55,7 @@ impl DeliveryReceipt {
 }
 
 /// Component in charge of the interaction with Bitcoind by sending / querying transactions via RPC.
+#[derive(Debug)]
 pub struct Carrier {
     /// The underlying bitcoin client used by the [Carrier].
     bitcoin_cli: Arc<BitcoindClient>,

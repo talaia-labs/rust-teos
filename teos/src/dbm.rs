@@ -33,16 +33,10 @@ pub enum Error {
     Unknown(SqliteError),
 }
 
-/// Identifies the tower component for those who store similar data into the database.
-#[derive(Clone)]
-pub enum Component {
-    Watcher,
-    Responder,
-}
-
 /// Component in charge of interacting with the underlying database.
 ///
 /// Currently works for `SQLite`. `PostgreSQL` should also be added in the future.
+#[derive(Debug)]
 pub struct DBM {
     /// The underlying database connection.
     connection: Connection,
@@ -523,78 +517,24 @@ impl DBM {
         trackers
     }
 
-    /// Stores the last known block of a given [Component] into the database.
-    fn store_last_known_block(
-        &self,
-        block_hash: &BlockHash,
-        component: Component,
-    ) -> Result<(), Error> {
-        let query = "INSERT OR REPLACE INTO last_known_block (id, block_hash) VALUES (?1, ?2)";
-        let id = match component {
-            Component::Watcher => 0,
-            Component::Responder => 1,
-        };
-
-        self.store_data(query, params![id, block_hash.to_vec()])
+    /// Stores the last known block into the database.
+    pub(crate) fn store_last_known_block(&self, block_hash: &BlockHash) -> Result<(), Error> {
+        let query = "INSERT OR REPLACE INTO last_known_block (id, block_hash) VALUES (0, ?)";
+        self.store_data(query, params![block_hash.to_vec()])
     }
 
-    /// Stores the last known block by the [Watcher](crate::watcher::Watcher) into the database.
-    pub(crate) fn store_last_known_block_watcher(&self, block_hash: &BlockHash) {
-        match self.store_last_known_block(block_hash, Component::Watcher) {
-            Ok(_) => log::debug!(
-                "Watcher's last known block successfully stored: {}",
-                block_hash
-            ),
-            Err(e) => log::error!(
-                "Couldn't store watcher's last known block: {}. Error: {:?}",
-                block_hash,
-                e
-            ),
-        }
-    }
-
-    /// Stores the last known block by the [Responder](crate::responder::Responder) into the database.
-    pub(crate) fn store_last_known_block_responder(&self, block_hash: &BlockHash) {
-        match self.store_last_known_block(block_hash, Component::Responder) {
-            Ok(_) => log::debug!(
-                "Responder's last known block successfully stored: {}",
-                block_hash
-            ),
-            Err(e) => log::error!(
-                "Couldn't store responder's last known block: {}. Error: {:?}",
-                block_hash,
-                e
-            ),
-        }
-    }
-
-    /// Loads the last known block of a [Component] from the database.
-    fn load_last_known_block(&self, component: Component) -> Result<BlockHash, Error> {
+    /// Loads the last known block from the database.
+    pub fn load_last_known_block(&self) -> Result<BlockHash, Error> {
         let mut stmt = self
             .connection
-            .prepare("SELECT block_hash FROM last_known_block WHERE id=?1")
+            .prepare("SELECT block_hash FROM last_known_block WHERE id=0")
             .unwrap();
 
-        let id = match component {
-            Component::Watcher => 0,
-            Component::Responder => 1,
-        };
-
-        stmt.query_row([id], |row| {
+        stmt.query_row([], |row| {
             let raw_hash: Vec<u8> = row.get(0).unwrap();
             Ok(BlockHash::from_slice(&raw_hash).unwrap())
         })
         .map_err(|_| Error::NotFound)
-    }
-
-    /// Loads the last known block by the [Watcher](crate::watcher::Watcher) from the database.
-    pub(crate) fn load_last_known_block_watcher(&self) -> Result<BlockHash, Error> {
-        self.load_last_known_block(Component::Watcher)
-    }
-
-    /// Loads the last known block by the [Responder](crate::responder::Responder) from the database.
-    pub(crate) fn load_last_known_block_responder(&self) -> Result<BlockHash, Error> {
-        self.load_last_known_block(Component::Responder)
     }
 
     /// Stores the tower secret key into the database.
@@ -640,7 +580,7 @@ mod tests {
         pub(crate) fn in_memory() -> Result<Self, SqliteError> {
             let connection = Connection::open_in_memory()?;
             connection.execute("PRAGMA foreign_keys=1;", [])?;
-            let dbm = Self { connection };
+            let mut dbm = Self { connection };
             dbm.create_tables()?;
 
             Ok(dbm)
@@ -671,7 +611,7 @@ mod tests {
     #[test]
     fn test_create_tables() {
         let connection = Connection::open_in_memory().unwrap();
-        let dbm = DBM { connection };
+        let mut dbm = DBM { connection };
         dbm.create_tables().unwrap();
     }
 
@@ -1162,72 +1102,20 @@ mod tests {
     fn test_store_load_last_known_block() {
         let dbm = DBM::in_memory().unwrap();
 
-        for component in [Component::Watcher, Component::Responder] {
-            let mut block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-            dbm.store_last_known_block(&block_hash, component.clone())
-                .unwrap();
-            assert_eq!(
-                dbm.load_last_known_block(component.clone()).unwrap(),
-                block_hash
-            );
+        let mut block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
+        dbm.store_last_known_block(&block_hash).unwrap();
+        assert_eq!(dbm.load_last_known_block().unwrap(), block_hash);
 
-            // Update with a new hash to check it can be done
-            block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-            dbm.store_last_known_block(&block_hash, component.clone())
-                .unwrap();
-            assert_eq!(dbm.load_last_known_block(component).unwrap(), block_hash);
-        }
+        // Update with a new hash to check it can be done
+        block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
+        dbm.store_last_known_block(&block_hash).unwrap();
+        assert_eq!(dbm.load_last_known_block().unwrap(), block_hash);
     }
 
     #[test]
     fn test_store_load_nonexistent_last_known_block() {
         let dbm = DBM::in_memory().unwrap();
 
-        for component in [Component::Watcher, Component::Responder] {
-            assert!(matches!(
-                dbm.load_last_known_block(component.clone()),
-                Err(Error::NotFound)
-            ));
-        }
-    }
-
-    #[test]
-    fn test_store_load_last_known_block_watcher() {
-        let dbm = DBM::in_memory().unwrap();
-
-        let mut block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-        dbm.store_last_known_block_watcher(&block_hash);
-        assert_eq!(dbm.load_last_known_block_watcher().unwrap(), block_hash);
-
-        // Update with a new hash to check it can be done
-        block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-        dbm.store_last_known_block_watcher(&block_hash);
-        assert_eq!(dbm.load_last_known_block_watcher().unwrap(), block_hash);
-
-        // Check that the Responder's entry is unaffected
-        assert!(matches!(
-            dbm.load_last_known_block_responder(),
-            Err(Error::NotFound)
-        ));
-    }
-
-    #[test]
-    fn test_store_load_last_known_block_responder() {
-        let dbm = DBM::in_memory().unwrap();
-
-        let mut block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-        dbm.store_last_known_block_responder(&block_hash);
-        assert_eq!(dbm.load_last_known_block_responder().unwrap(), block_hash);
-
-        // Update with a new hash to check it can be done
-        block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-        dbm.store_last_known_block_responder(&block_hash);
-        assert_eq!(dbm.load_last_known_block_responder().unwrap(), block_hash);
-
-        // Check that the Watcher's entry is unaffected
-        assert!(matches!(
-            dbm.load_last_known_block_watcher(),
-            Err(Error::NotFound)
-        ));
+        assert!(matches!(dbm.load_last_known_block(), Err(Error::NotFound)));
     }
 }

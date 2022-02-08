@@ -72,6 +72,7 @@ pub struct MaxSlotsReached;
 /// This is the only component in the system that has some knowledge regarding users, all other components do query the
 /// [Gatekeeper] for such information.
 //TODO: Check if calls to the Gatekeeper need explicit Mutex of if Rust already prevents race conditions in this case.
+#[derive(Debug)]
 pub struct Gatekeeper {
     /// last known block header by the [Gatekeeper].
     last_known_block_header: ValidatedBlockHeader,
@@ -105,6 +106,11 @@ impl Gatekeeper {
             registered_users: Mutex::new(registered_users),
             dbm,
         }
+    }
+
+    /// Returns whether the [Gatekeeper] has been created from scratch (fresh) or from backed-up data.
+    pub fn is_fresh(&self) -> bool {
+        self.registered_users.lock().unwrap().is_empty()
     }
 
     /// Ges the number of users currently registered to the tower.
@@ -337,6 +343,17 @@ mod tests {
     const EXPIRY_DELTA: u32 = 42;
     const START_HEIGHT: usize = 100;
 
+    impl PartialEq for Gatekeeper {
+        fn eq(&self, other: &Self) -> bool {
+            self.subscription_slots == other.subscription_slots
+                && self.subscription_duration == other.subscription_duration
+                && self.expiry_delta == other.expiry_delta
+                && *self.registered_users.lock().unwrap() == *other.registered_users.lock().unwrap()
+                && self.last_known_block_header == other.last_known_block_header
+        }
+    }
+    impl Eq for Gatekeeper {}
+
     impl Gatekeeper {
         pub fn get_registered_users(&self) -> &Mutex<HashMap<UserId, UserInfo>> {
             &self.registered_users
@@ -371,9 +388,9 @@ mod tests {
         // A fresh gatekeeper has no associated data
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let gatekeeper = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
 
-        assert!(gatekeeper.registered_users.lock().unwrap().is_empty());
+        let gatekeeper = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+        assert!(gatekeeper.is_fresh());
 
         // If we add some users and appointments to the system and create a new Gatekeeper reusing the same db
         // (as if simulating a bootstrap from existing data), the data should be properly loaded.
@@ -396,10 +413,8 @@ mod tests {
 
         // Create a new GK reusing the same DB and check that the data is loaded
         let another_gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm);
-        assert_eq!(
-            gatekeeper.registered_users.into_inner().unwrap(),
-            another_gk.registered_users.into_inner().unwrap()
-        );
+        assert!(!another_gk.is_fresh());
+        assert_eq!(gatekeeper, another_gk);
     }
 
     #[test]
@@ -451,7 +466,7 @@ mod tests {
         );
 
         // Let generate a new block and add the user again to check that both the slots and expiry are updated.
-        chain.generate_with_txs(Vec::new());
+        chain.generate(None);
         gatekeeper.last_known_block_header = chain.tip();
         let updated_receipt = gatekeeper.add_update_user(user_id).unwrap();
 
