@@ -110,7 +110,7 @@ impl Blockchain {
         };
 
         for _ in 1..=height {
-            self.generate_with_txs((0..tx_count).map(|_| get_random_tx()).collect());
+            self.generate(Some((0..tx_count).map(|_| get_random_tx()).collect()));
         }
 
         self
@@ -178,26 +178,6 @@ impl Blockchain {
         self.blocks.pop()
     }
 
-    pub fn generate_with_txs(&mut self, txs: Vec<Transaction>) {
-        let bits = BlockHeader::compact_target_from_u256(&Uint256::from_be_bytes([0xff; 32]));
-        let prev_block = &self.blocks.last().unwrap();
-        let prev_blockhash = prev_block.block_hash();
-        let time = prev_block.header.time + 1 as u32;
-        let hashes = txs.iter().map(|obj| obj.txid().as_hash());
-
-        self.blocks.push(Block {
-            header: BlockHeader {
-                version: 0,
-                prev_blockhash,
-                merkle_root: bitcoin_merkle_root(hashes).into(),
-                time,
-                bits,
-                nonce: 0,
-            },
-            txdata: txs,
-        });
-    }
-
     pub fn header_cache(&self, heights: std::ops::RangeInclusive<usize>) -> UnboundedCache {
         let mut cache = UnboundedCache::new();
         for i in heights {
@@ -222,11 +202,13 @@ impl Blockchain {
             Some(t) => t,
             None => vec![],
         };
+        let hashes = txdata.iter().map(|obj| obj.txid().as_hash());
+
         let block = Block {
             header: BlockHeader {
                 version: 0,
                 prev_blockhash,
-                merkle_root: Default::default(),
+                merkle_root: bitcoin_merkle_root(hashes).into(),
                 time,
                 bits,
                 nonce: 0,
@@ -431,7 +413,7 @@ pub fn create_carrier(query: MockedServerQuery) -> Carrier {
     Carrier::new(bitcoin_cli)
 }
 
-pub fn create_responder(
+pub async fn create_responder(
     tip: ValidatedBlockHeader,
     gatekeeper: Arc<Gatekeeper>,
     dbm: Arc<Mutex<DBM>>,
@@ -440,7 +422,7 @@ pub fn create_responder(
     let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
     let carrier = Carrier::new(bitcoin_cli);
 
-    Responder::new(carrier, gatekeeper, dbm, tip)
+    Responder::new(carrier, gatekeeper, dbm, tip).await
 }
 
 pub(crate) async fn create_watcher(
@@ -500,7 +482,8 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
         EXPIRY_DELTA,
         dbm.clone(),
     ));
-    let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+    let responder =
+        create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
     let watcher = create_watcher(
         &mut chain,
         Arc::new(responder),

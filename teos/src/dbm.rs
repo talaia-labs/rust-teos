@@ -33,16 +33,10 @@ pub enum Error {
     Unknown(SqliteError),
 }
 
-/// Identifies the tower component for those who store similar data into the database.
-#[derive(Clone)]
-pub enum Component {
-    Watcher,
-    Responder,
-}
-
 /// Component in charge of interacting with the underlying database.
 ///
 /// Currently works for `SQLite`. `PostgreSQL` should also be added in the future.
+#[derive(Debug)]
 pub struct DBM {
     /// The underlying database connection.
     connection: Connection,
@@ -53,7 +47,7 @@ impl DBM {
     pub fn new(db_path: PathBuf) -> Result<Self, SqliteError> {
         let connection = Connection::open(db_path)?;
         connection.execute("PRAGMA foreign_keys=1;", [])?;
-        let dbm = Self { connection };
+        let mut dbm = Self { connection };
         dbm.create_tables()?;
 
         Ok(dbm)
@@ -67,8 +61,9 @@ impl DBM {
     /// - trackers
     /// - last_known_block
     /// - keys
-    fn create_tables(&self) -> Result<(), SqliteError> {
-        self.connection.execute(
+    fn create_tables(&mut self) -> Result<(), SqliteError> {
+        let tx = self.connection.transaction().unwrap();
+        tx.execute(
             "CREATE TABLE IF NOT EXISTS users (
                     user_id INT PRIMARY KEY,
                     available_slots INT NOT NULL,
@@ -76,7 +71,7 @@ impl DBM {
                 )",
             [],
         )?;
-        self.connection.execute(
+        tx.execute(
             "CREATE TABLE IF NOT EXISTS appointments (
                 UUID INT PRIMARY KEY,
                 locator INT NOT NULL,
@@ -91,7 +86,7 @@ impl DBM {
             )",
             [],
         )?;
-        self.connection.execute(
+        tx.execute(
             "CREATE TABLE IF NOT EXISTS trackers (
                 UUID INT PRIMARY KEY,
                 dispute_tx BLOB NOT NULL,
@@ -102,7 +97,7 @@ impl DBM {
             )",
             [],
         )?;
-        self.connection.execute(
+        tx.execute(
             "CREATE TABLE IF NOT EXISTS last_known_block (
                 id INT PRIMARY KEY,
                 block_hash INT NOT NULL
@@ -110,14 +105,14 @@ impl DBM {
             [],
         )?;
 
-        self.connection.execute(
+        tx.execute(
             "CREATE TABLE IF NOT EXISTS keys (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 key INT NOT NULL
             )",
             [],
         )?;
-        Ok(())
+        tx.commit()
     }
 
     /// Generic method to store data into the database.
@@ -198,29 +193,13 @@ impl DBM {
         }
     }
 
-    /// Loads a user ([UserInfo]) from the database.
-    // DISCUSS: This could be implemented with an INNER JOIN query, but the logic will be more complex given each row
-    // will have the user info replicated. Consider whether it makes sense to change it.
-    pub(crate) fn load_user(&self, user_id: UserId) -> Result<UserInfo, Error> {
-        let key = user_id.serialize();
-        let mut stmt = self
-            .connection
-            .prepare("SELECT available_slots, subscription_expiry FROM users WHERE user_id=(?)")
-            .unwrap();
-        let mut user = stmt
-            .query_row([&key], |row| {
-                let slots = row.get(0).unwrap();
-                let expiry = row.get(1).unwrap();
-                Ok(UserInfo::new(slots, expiry))
-            })
-            .map_err(|_| Error::NotFound)?;
-
-        // Loads the associated appointments if found
+    /// Loads the associated appointments ([Appointment]) of a given user ([UserInfo]).
+    pub(crate) fn load_user_appointments(&self, user_id: UserId) -> HashMap<UUID, u32> {
         let mut stmt = self
             .connection
             .prepare("SELECT UUID, encrypted_blob FROM appointments WHERE user_id=(?)")
             .unwrap();
-        let mut rows = stmt.query([key]).unwrap();
+        let mut rows = stmt.query([user_id.serialize()]).unwrap();
 
         let mut appointments = HashMap::new();
         while let Ok(Some(inner_row)) = rows.next() {
@@ -234,11 +213,7 @@ impl DBM {
             );
         }
 
-        if !appointments.is_empty() {
-            user.appointments = appointments;
-        }
-
-        Ok(user)
+        appointments
     }
 
     /// Loads all users from the database.
@@ -253,23 +228,43 @@ impl DBM {
             let slots = row.get(1).unwrap();
             let expiry = row.get(2).unwrap();
 
-            users.insert(user_id, UserInfo::new(slots, expiry));
+            users.insert(
+                user_id,
+                UserInfo::with_appointments(slots, expiry, self.load_user_appointments(user_id)),
+            );
         }
 
         users
     }
 
-    /// Removes a user ([UserInfo]) from the database.
-    pub(crate) fn remove_user(&self, user_id: UserId) {
-        let query = "DELETE FROM users WHERE user_id=(?)";
-        match self.remove_data(query, params![user_id.serialize()]) {
-            Ok(_) => {
-                log::debug!("User successfully removed: {}", user_id);
-            }
-            Err(_) => {
-                log::error!("User not found, data cannot be removed: {}", user_id);
+    /// Removes some users from the database in batch.
+    pub(crate) fn batch_remove_users(&mut self, users: &HashSet<UserId>) -> usize {
+        let limit = self.connection.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
+        let tx = self.connection.transaction().unwrap();
+        let iter = users
+            .iter()
+            .map(|uuid| uuid.serialize())
+            .collect::<Vec<Vec<u8>>>();
+
+        for chunk in iter.chunks(limit) {
+            let query = "DELETE FROM users WHERE user_id IN ".to_owned();
+            let placeholders = format!("(?{})", (", ?").repeat(chunk.len() - 1));
+
+            match tx.execute(
+                &format!("{}{}", query, placeholders),
+                params_from_iter(chunk),
+            ) {
+                Ok(_) => log::debug!("Users deletion added to db transaction"),
+                Err(e) => log::error!("Couldn't add deletion query to transaction. Error: {:?}", e),
             }
         }
+
+        match tx.commit() {
+            Ok(_) => log::debug!("Users successfully deleted"),
+            Err(e) => log::error!("Couldn't delete users. Error: {:?}", e),
+        }
+
+        (users.len() as f64 / limit as f64).ceil() as usize
     }
 
     /// Stores an [Appointment] into the database.
@@ -385,7 +380,7 @@ impl DBM {
     }
 
     /// Removes an [Appointment] from the database.
-    pub fn remove_appointment(&self, uuid: UUID) {
+    pub(crate) fn remove_appointment(&self, uuid: UUID) {
         let query = "DELETE FROM appointments WHERE UUID=(?)";
         match self.remove_data(query, params![uuid.serialize()]) {
             Ok(_) => {
@@ -397,24 +392,44 @@ impl DBM {
         }
     }
 
-    /// Removes some appointments from the database in batch.
-    pub(crate) fn batch_remove_appointments(&self, appointments: &HashSet<UUID>) -> usize {
+    /// Removes some appointments from the database in batch and updates the associated users giving back
+    /// the freed appointment slots
+    pub(crate) fn batch_remove_appointments(
+        &mut self,
+        appointments: &HashSet<UUID>,
+        updated_users: &HashMap<UserId, UserInfo>,
+    ) -> usize {
         let limit = self.connection.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
+        let tx = self.connection.transaction().unwrap();
         let iter = appointments
             .iter()
             .map(|uuid| uuid.serialize())
             .collect::<Vec<Vec<u8>>>();
+
         for chunk in iter.chunks(limit) {
             let query = "DELETE FROM appointments WHERE UUID IN ".to_owned();
             let placeholders = format!("(?{})", (", ?").repeat(chunk.len() - 1));
 
-            match self.remove_data(
+            match tx.execute(
                 &format!("{}{}", query, placeholders),
                 params_from_iter(chunk),
             ) {
-                Ok(_) => log::debug!("Appointments successfully deleted"),
-                Err(e) => log::error!("Couldn't delete appointments. Error: {:?}", e),
+                Ok(_) => log::debug!("Appointments deletion added to db transaction"),
+                Err(e) => log::error!("Couldn't add deletion query to transaction. Error: {:?}", e),
             }
+        }
+
+        for (id, info) in updated_users.iter() {
+            let query = "UPDATE users SET available_slots=(?1) WHERE user_id=(?2)";
+            match tx.execute(query, params![info.available_slots, id.serialize(),]) {
+                Ok(_) => log::debug!("User update added to db transaction"),
+                Err(e) => log::error!("Couldn't add update query to transaction. Error: {:?}", e),
+            };
+        }
+
+        match tx.commit() {
+            Ok(_) => log::debug!("Appointments successfully deleted"),
+            Err(e) => log::error!("Couldn't delete appointments. Error: {:?}", e),
         }
 
         (appointments.len() as f64 / limit as f64).ceil() as usize
@@ -502,78 +517,24 @@ impl DBM {
         trackers
     }
 
-    /// Stores the last known block of a given [Component] into the database.
-    fn store_last_known_block(
-        &self,
-        block_hash: &BlockHash,
-        component: Component,
-    ) -> Result<(), Error> {
-        let query = "INSERT OR REPLACE INTO last_known_block (id, block_hash) VALUES (?1, ?2)";
-        let id = match component {
-            Component::Watcher => 0,
-            Component::Responder => 1,
-        };
-
-        self.store_data(query, params![id, block_hash.to_vec()])
+    /// Stores the last known block into the database.
+    pub(crate) fn store_last_known_block(&self, block_hash: &BlockHash) -> Result<(), Error> {
+        let query = "INSERT OR REPLACE INTO last_known_block (id, block_hash) VALUES (0, ?)";
+        self.store_data(query, params![block_hash.to_vec()])
     }
 
-    /// Stores the last known block by the [Watcher](crate::watcher::Watcher) into the database.
-    pub(crate) fn store_last_known_block_watcher(&self, block_hash: &BlockHash) {
-        match self.store_last_known_block(block_hash, Component::Watcher) {
-            Ok(_) => log::debug!(
-                "Watcher's last known block successfully stored: {}",
-                block_hash
-            ),
-            Err(e) => log::error!(
-                "Couldn't store watcher's last known block: {}. Error: {:?}",
-                block_hash,
-                e
-            ),
-        }
-    }
-
-    /// Stores the last known block by the [Responder](crate::responder::Responder) into the database.
-    pub(crate) fn store_last_known_block_responder(&self, block_hash: &BlockHash) {
-        match self.store_last_known_block(block_hash, Component::Responder) {
-            Ok(_) => log::debug!(
-                "Responder's last known block successfully stored: {}",
-                block_hash
-            ),
-            Err(e) => log::error!(
-                "Couldn't store responder's last known block: {}. Error: {:?}",
-                block_hash,
-                e
-            ),
-        }
-    }
-
-    /// Loads the last known block of a [Component] from the database.
-    fn load_last_known_block(&self, component: Component) -> Result<BlockHash, Error> {
+    /// Loads the last known block from the database.
+    pub fn load_last_known_block(&self) -> Result<BlockHash, Error> {
         let mut stmt = self
             .connection
-            .prepare("SELECT block_hash FROM last_known_block WHERE id=?1")
+            .prepare("SELECT block_hash FROM last_known_block WHERE id=0")
             .unwrap();
 
-        let id = match component {
-            Component::Watcher => 0,
-            Component::Responder => 1,
-        };
-
-        stmt.query_row([id], |row| {
+        stmt.query_row([], |row| {
             let raw_hash: Vec<u8> = row.get(0).unwrap();
             Ok(BlockHash::from_slice(&raw_hash).unwrap())
         })
         .map_err(|_| Error::NotFound)
-    }
-
-    /// Loads the last known block by the [Watcher](crate::watcher::Watcher) from the database.
-    pub(crate) fn load_last_known_block_watcher(&self) -> Result<BlockHash, Error> {
-        self.load_last_known_block(Component::Watcher)
-    }
-
-    /// Loads the last known block by the [Responder](crate::responder::Responder) from the database.
-    pub(crate) fn load_last_known_block_responder(&self) -> Result<BlockHash, Error> {
-        self.load_last_known_block(Component::Responder)
     }
 
     /// Stores the tower secret key into the database.
@@ -610,7 +571,7 @@ mod tests {
 
     use crate::test_utils::{
         generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_breach_from_locator, get_random_tracker, get_random_user_id,
+        get_random_tracker, get_random_user_id,
     };
     use std::iter::FromIterator;
     use teos_common::cryptography::get_random_bytes;
@@ -619,17 +580,38 @@ mod tests {
         pub(crate) fn in_memory() -> Result<Self, SqliteError> {
             let connection = Connection::open_in_memory()?;
             connection.execute("PRAGMA foreign_keys=1;", [])?;
-            let dbm = Self { connection };
+            let mut dbm = Self { connection };
             dbm.create_tables()?;
 
             Ok(dbm)
+        }
+
+        pub(crate) fn load_user(&self, user_id: UserId) -> Result<UserInfo, Error> {
+            let key = user_id.serialize();
+            let mut stmt = self
+                .connection
+                .prepare("SELECT available_slots, subscription_expiry FROM users WHERE user_id=(?)")
+                .unwrap();
+            let user = stmt
+                .query_row([&key], |row| {
+                    let slots = row.get(0).unwrap();
+                    let expiry = row.get(1).unwrap();
+                    Ok(UserInfo::with_appointments(
+                        slots,
+                        expiry,
+                        self.load_user_appointments(user_id),
+                    ))
+                })
+                .map_err(|_| Error::NotFound)?;
+
+            Ok(user)
         }
     }
 
     #[test]
     fn test_create_tables() {
         let connection = Connection::open_in_memory().unwrap();
-        let dbm = DBM { connection };
+        let mut dbm = DBM { connection };
         dbm.create_tables().unwrap();
     }
 
@@ -667,7 +649,9 @@ mod tests {
             user.appointments.insert(uuid, 1);
         }
 
+        // Check both loading the whole user info or only the associated appointments
         assert_eq!(dbm.load_user(user_id).unwrap(), user);
+        assert_eq!(dbm.load_user_appointments(user_id), user.appointments);
     }
 
     #[test]
@@ -703,30 +687,113 @@ mod tests {
             let user = UserInfo::new(i, i * 2);
             users.insert(user_id, user.clone());
             dbm.store_user(user_id, &user).unwrap();
+
+            // Add appointments to some of the users
+            if i % 2 == 0 {
+                let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+                dbm.store_appointment(uuid, &appointment).unwrap();
+                users
+                    .get_mut(&user_id)
+                    .unwrap()
+                    .appointments
+                    .insert(uuid, 1);
+            }
         }
 
         assert_eq!(dbm.load_all_users(), users);
     }
 
     #[test]
-    fn test_remove_user() {
-        let dbm = DBM::in_memory().unwrap();
-        let user_id = get_random_user_id();
+    fn test_batch_remove_users() {
+        let mut dbm = DBM::in_memory().unwrap();
 
-        let user = UserInfo::new(21, 42);
-        assert!(matches!(dbm.store_user(user_id, &user), Ok { .. }));
+        // Set a limit value for the maximum number of variables in SQLite so we can
+        // test splitting big queries into chunks.
+        let limit = 10;
+        dbm.connection
+            .set_limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER, limit);
 
-        dbm.remove_user(user_id);
-        assert!(matches!(dbm.load_user(user_id), Err(Error::NotFound)));
+        let mut to_be_deleted = HashSet::new();
+        let mut rest = HashSet::new();
+        for i in 1..100 {
+            let user_id = get_random_user_id();
+            let user = UserInfo::new(21, 42);
+            dbm.store_user(user_id, &user).unwrap();
+
+            if i % 2 == 0 {
+                to_be_deleted.insert(user_id);
+            } else {
+                rest.insert(user_id);
+            }
+        }
+
+        // Check that the db transaction had 5 (100/2*10) queries on it
+        assert_eq!(dbm.batch_remove_users(&to_be_deleted), 5);
+        // Check user data was deleted
+        assert_eq!(
+            rest,
+            dbm.load_all_users()
+                .keys()
+                .cloned()
+                .collect::<HashSet<UserId>>()
+        );
     }
 
     #[test]
-    fn test_remove_nonexistent_user() {
-        let dbm = DBM::in_memory().unwrap();
-        let user_id = get_random_user_id();
+    fn test_batch_remove_users_cascade() {
+        // Test that removing users cascade deleted appointments and trackers
+        let mut dbm = DBM::in_memory().unwrap();
+        let uuid = generate_uuid();
+        let appointment = generate_dummy_appointment(None);
+        let tracker = get_random_tracker(appointment.user_id);
+
+        // Add the user and link an appointment (this is usually done once the appointment)
+        // is added after the user creation, but for the test purpose it can be done all at once.
+        let info = UserInfo::new(21, 42);
+        dbm.store_user(appointment.user_id, &info).unwrap();
+
+        // Appointment only
+        assert!(matches!(
+            dbm.store_appointment(uuid, &appointment.clone()),
+            Ok { .. }
+        ));
+
+        dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id]));
+        assert!(matches!(
+            dbm.load_user(appointment.user_id),
+            Err(Error::NotFound)
+        ));
+        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+
+        // Appointment + Tracker
+        dbm.store_user(appointment.user_id, &info).unwrap();
+        assert!(matches!(
+            dbm.store_appointment(uuid, &appointment.clone()),
+            Ok { .. }
+        ));
+        assert!(matches!(
+            dbm.store_tracker(uuid, &tracker.clone()),
+            Ok { .. }
+        ));
+
+        dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id]));
+        assert!(matches!(
+            dbm.load_user(appointment.user_id),
+            Err(Error::NotFound)
+        ));
+        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
+    }
+
+    #[test]
+    fn test_batch_remove_nonexistent_users() {
+        let mut dbm = DBM::in_memory().unwrap();
+        let users = (0..10)
+            .map(|_| get_random_user_id())
+            .collect::<HashSet<UserId>>();
 
         // Test it does not fail even if the user does not exist (it will log though)
-        dbm.remove_user(user_id);
+        dbm.batch_remove_users(&users);
     }
 
     #[test]
@@ -841,30 +908,107 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_appointment() {
-        let dbm = DBM::in_memory().unwrap();
+    fn test_batch_remove_appointments() {
+        let mut dbm = DBM::in_memory().unwrap();
+
+        // Set a limit value for the maximum number of variables in SQLite so we can
+        // test splitting big queries into chunks.
+        let limit = 10;
+        dbm.connection
+            .set_limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER, limit);
+
         let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
+        let mut user = UserInfo::new(500, 42);
         dbm.store_user(user_id, &user).unwrap();
 
-        // Store and delete appointment
-        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        dbm.store_appointment(uuid, &appointment).unwrap();
-        assert_eq!(dbm.load_appointment(uuid).unwrap(), appointment);
-        dbm.remove_appointment(uuid);
+        let mut rest = HashSet::new();
+        for i in 1..6 {
+            let mut to_be_deleted = HashSet::new();
+            for j in 0..limit * 2 * i {
+                let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+                dbm.store_appointment(uuid, &appointment).unwrap();
 
-        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+                if j % 2 == 0 {
+                    to_be_deleted.insert(uuid);
+                } else {
+                    rest.insert(uuid);
+                }
+            }
+
+            // When the appointment are deleted, the user will get back slots based on the deleted data.
+            // Here we can just make a number up to make sure it matches.
+            user.available_slots = i as u32;
+            let updated_users = HashMap::from_iter([(user_id, user.clone())]);
+
+            // Check that the db transaction had i queries on it
+            assert_eq!(
+                dbm.batch_remove_appointments(&to_be_deleted, &updated_users),
+                i as usize
+            );
+            // Check appointment data was deleted and users properly updated
+            assert_eq!(
+                rest,
+                dbm.load_all_appointments()
+                    .keys()
+                    .cloned()
+                    .collect::<HashSet<UUID>>()
+            );
+            assert_eq!(
+                dbm.load_user(user_id).unwrap().available_slots,
+                user.available_slots
+            );
+        }
     }
 
     #[test]
-    fn test_remove_nonexistent_appointment() {
-        let dbm = DBM::in_memory().unwrap();
-        let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
-        dbm.store_user(user_id, &user).unwrap();
+    fn test_batch_remove_appointments_cascade() {
+        let mut dbm = DBM::in_memory().unwrap();
+        let uuid = generate_uuid();
+        let appointment = generate_dummy_appointment(None);
+        let tracker = get_random_tracker(appointment.user_id);
 
-        // Test it does not fail even if the appointment does not exist (it will log though)
-        dbm.remove_appointment(generate_uuid());
+        let info = UserInfo::new(21, 42);
+
+        // Add the user b/c of FK restrictions
+        dbm.store_user(appointment.user_id, &info).unwrap();
+
+        // Appointment only
+        assert!(matches!(
+            dbm.store_appointment(uuid, &appointment.clone()),
+            Ok { .. }
+        ));
+
+        dbm.batch_remove_appointments(
+            &HashSet::from_iter(vec![uuid]),
+            &HashMap::from_iter([(appointment.user_id, info.clone())]),
+        );
+        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+
+        // Appointment + Tracker
+        assert!(matches!(
+            dbm.store_appointment(uuid, &appointment.clone()),
+            Ok { .. }
+        ));
+        assert!(matches!(
+            dbm.store_tracker(uuid, &tracker.clone()),
+            Ok { .. }
+        ));
+
+        dbm.batch_remove_appointments(
+            &HashSet::from_iter(vec![uuid]),
+            &HashMap::from_iter([(appointment.user_id, info)]),
+        );
+        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
+    }
+
+    #[test]
+    fn test_batch_remove_nonexistent_appointments() {
+        let mut dbm = DBM::in_memory().unwrap();
+        let appointments = (0..10).map(|_| generate_uuid()).collect::<HashSet<UUID>>();
+
+        // Test it does not fail even if the user does not exist (it will log though)
+        dbm.batch_remove_appointments(&appointments, &HashMap::new());
     }
 
     #[test]
@@ -958,187 +1102,20 @@ mod tests {
     fn test_store_load_last_known_block() {
         let dbm = DBM::in_memory().unwrap();
 
-        for component in [Component::Watcher, Component::Responder] {
-            let mut block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-            dbm.store_last_known_block(&block_hash, component.clone())
-                .unwrap();
-            assert_eq!(
-                dbm.load_last_known_block(component.clone()).unwrap(),
-                block_hash
-            );
+        let mut block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
+        dbm.store_last_known_block(&block_hash).unwrap();
+        assert_eq!(dbm.load_last_known_block().unwrap(), block_hash);
 
-            // Update with a new hash to check it can be done
-            block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-            dbm.store_last_known_block(&block_hash, component.clone())
-                .unwrap();
-            assert_eq!(dbm.load_last_known_block(component).unwrap(), block_hash);
-        }
+        // Update with a new hash to check it can be done
+        block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
+        dbm.store_last_known_block(&block_hash).unwrap();
+        assert_eq!(dbm.load_last_known_block().unwrap(), block_hash);
     }
 
     #[test]
     fn test_store_load_nonexistent_last_known_block() {
         let dbm = DBM::in_memory().unwrap();
 
-        for component in [Component::Watcher, Component::Responder] {
-            assert!(matches!(
-                dbm.load_last_known_block(component.clone()),
-                Err(Error::NotFound)
-            ));
-        }
-    }
-
-    #[test]
-    fn test_store_load_last_known_block_watcher() {
-        let dbm = DBM::in_memory().unwrap();
-
-        let mut block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-        dbm.store_last_known_block_watcher(&block_hash);
-        assert_eq!(dbm.load_last_known_block_watcher().unwrap(), block_hash);
-
-        // Update with a new hash to check it can be done
-        block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-        dbm.store_last_known_block_watcher(&block_hash);
-        assert_eq!(dbm.load_last_known_block_watcher().unwrap(), block_hash);
-
-        // Check that the Responder's entry is unaffected
-        assert!(matches!(
-            dbm.load_last_known_block_responder(),
-            Err(Error::NotFound)
-        ));
-    }
-
-    #[test]
-    fn test_store_load_last_known_block_responder() {
-        let dbm = DBM::in_memory().unwrap();
-
-        let mut block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-        dbm.store_last_known_block_responder(&block_hash);
-        assert_eq!(dbm.load_last_known_block_responder().unwrap(), block_hash);
-
-        // Update with a new hash to check it can be done
-        block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
-        dbm.store_last_known_block_responder(&block_hash);
-        assert_eq!(dbm.load_last_known_block_responder().unwrap(), block_hash);
-
-        // Check that the Watcher's entry is unaffected
-        assert!(matches!(
-            dbm.load_last_known_block_watcher(),
-            Err(Error::NotFound)
-        ));
-    }
-
-    #[test]
-    fn test_batch_remove_appointments() {
-        let dbm = DBM::in_memory().unwrap();
-
-        // Set a limit value for the maximum number of variables in SQLite so we can
-        // test splitting big queries into chunks.
-        let limit = 10;
-        dbm.connection
-            .set_limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER, limit);
-
-        let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
-        dbm.store_user(user_id, &user).unwrap();
-
-        let mut rest = HashSet::new();
-        for i in 1..6 {
-            let mut to_be_deleted = HashSet::new();
-            for j in 0..limit * 2 * i {
-                let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-                dbm.store_appointment(uuid, &appointment).unwrap();
-
-                if j % 2 == 0 {
-                    to_be_deleted.insert(uuid);
-                } else {
-                    rest.insert(uuid);
-                }
-            }
-
-            assert_eq!(dbm.batch_remove_appointments(&to_be_deleted), i as usize);
-            assert_eq!(
-                rest,
-                dbm.load_all_appointments()
-                    .keys()
-                    .cloned()
-                    .collect::<HashSet<UUID>>()
-            );
-        }
-    }
-
-    #[test]
-    fn test_batch_remove_appointments_cascade() {
-        let dbm = DBM::in_memory().unwrap();
-        let uuid = generate_uuid();
-        let appointment = generate_dummy_appointment(None);
-        let tracker = get_random_tracker(appointment.user_id);
-
-        // Add the user b/c of FK restrictions
-        dbm.store_user(appointment.user_id, &UserInfo::new(21, 42))
-            .unwrap();
-
-        // Appointment only
-        assert!(matches!(
-            dbm.store_appointment(uuid, &appointment.clone()),
-            Ok { .. }
-        ));
-
-        dbm.batch_remove_appointments(&HashSet::from_iter(vec![uuid]));
-        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
-
-        // Appointment + Tracker
-        assert!(matches!(
-            dbm.store_appointment(uuid, &appointment.clone()),
-            Ok { .. }
-        ));
-        assert!(matches!(
-            dbm.store_tracker(uuid, &tracker.clone()),
-            Ok { .. }
-        ));
-
-        dbm.batch_remove_appointments(&HashSet::from_iter(vec![uuid]));
-        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
-        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
-    }
-
-    #[test]
-    fn test_batch_remove_nonexistent_appointments() {
-        let dbm = DBM::in_memory().unwrap();
-        let appointments = (0..10).map(|_| generate_uuid()).collect::<HashSet<UUID>>();
-
-        // Test it does not fail even if the user does not exist (it will log though)
-        dbm.batch_remove_appointments(&appointments);
-    }
-
-    #[test]
-    fn test_remove_user_cascade() {
-        // Users are FKs to appointments, and appointments are FKs to trackers.
-        // Both tables have a ON DELETE CASCADE trigger for those FKs, therefore
-        // Deleting a user should delete their associated appointments and trackers
-        let dbm = DBM::in_memory().unwrap();
-        let user_id = get_random_user_id();
-
-        let mut user = UserInfo::new(21, 42);
-        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        user.appointments.insert(uuid, 1);
-        let tracker = TransactionTracker::new(
-            get_random_breach_from_locator(appointment.locator()),
-            user_id,
-        );
-
-        dbm.store_user(user_id, &user).unwrap();
-        dbm.store_appointment(uuid, &appointment).unwrap();
-        dbm.store_tracker(uuid, &tracker).unwrap();
-
-        // Check data is in the DB (this is implicitly checked by the unwraps, but anyway)
-        assert_eq!(dbm.load_user(user_id).unwrap(), user);
-        assert_eq!(dbm.load_appointment(uuid).unwrap(), appointment);
-        assert_eq!(dbm.load_tracker(uuid).unwrap(), tracker);
-
-        // Remove the user and check again
-        dbm.remove_user(user_id);
-        assert!(matches!(dbm.load_user(user_id), Err(Error::NotFound)));
-        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
-        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
+        assert!(matches!(dbm.load_last_known_block(), Err(Error::NotFound)));
     }
 }

@@ -29,6 +29,7 @@ use crate::responder::{Responder, TransactionTracker};
 /// Data structure used to cache locators computed from parsed blocks.
 ///
 /// Holds up to `size` blocks with their corresponding computed [Locator]s.
+#[derive(Debug)]
 struct LocatorCache {
     /// A [Locator]:[Transaction] map.
     cache: HashMap<Locator, Transaction>,
@@ -63,34 +64,31 @@ impl LocatorCache {
     /// are not linked in strict descending order.
     fn new(last_n_blocks: Vec<ValidatedBlock>) -> LocatorCache {
         let size = last_n_blocks.len();
-        let mut cache = HashMap::new();
-        let mut blocks = Vec::with_capacity(size);
-        let mut tx_in_block = HashMap::new();
+        let mut cache = LocatorCache {
+            cache: HashMap::new(),
+            blocks: Vec::with_capacity(size),
+            tx_in_block: HashMap::new(),
+            size,
+        };
 
         for block in last_n_blocks.into_iter().rev() {
-            blocks.last().map(|prev_block_hash| {
+            cache.blocks.last().map(|prev_block_hash| {
                 if block.header.prev_blockhash != *prev_block_hash {
                     panic!("last_n_blocks contains unchained blocks");
                 }
             });
 
-            let mut locators = Vec::new();
-            for tx in block.txdata.iter() {
-                let locator = Locator::new(tx.txid());
-                cache.insert(locator, tx.clone());
-                locators.push(locator);
-            }
+            let locator_tx_map = block
+                .txdata
+                .iter()
+                .map(|tx| (Locator::new(tx.txid()), tx.clone()))
+                .collect();
 
-            tx_in_block.insert(block.block_hash(), locators);
-            blocks.push(block.header.block_hash());
+            cache.update(block.header, &locator_tx_map);
         }
 
-        LocatorCache {
-            cache,
-            blocks,
-            tx_in_block,
-            size,
-        }
+        cache.blocks.reverse();
+        cache
     }
 
     /// Gets a transaction from the cache if present. [None] otherwise.
@@ -111,17 +109,19 @@ impl LocatorCache {
     ) {
         self.blocks.push(block_header.block_hash());
 
-        let mut locators = Vec::new();
-        for (locator, tx) in locator_tx_map {
-            self.cache.insert(*locator, tx.clone());
-            locators.push(*locator);
-        }
+        let locators = locator_tx_map
+            .iter()
+            .map(|(l, tx)| {
+                self.cache.insert(*l, tx.clone());
+                *l
+            })
+            .collect();
 
         self.tx_in_block.insert(block_header.block_hash(), locators);
 
-        log::info!("New block added to cache: {}", block_header.block_hash());
-
         if self.is_full() {
+            // Avoid logging during bootstrap
+            log::info!("New block added to cache: {}", block_header.block_hash());
             self.remove_oldest_block();
         }
     }
@@ -220,7 +220,15 @@ pub enum AppointmentInfo {
     Tracker(TransactionTracker),
 }
 
+/// Reason why the appointment is deleted. Used for logging purposes.
+enum DeletionReason {
+    Outdated,
+    Invalid,
+    Accepted,
+}
+
 /// Component in charge of watching for triggers in the chain (aka channel breaches for lightning).
+#[derive(Debug)]
 pub struct Watcher {
     /// A map holding a summary of every appointment ([ExtendedAppointment]) hold by the [Watcher], identified by a [UUID].
     appointments: Mutex<HashMap<UUID, AppointmentSummary>>,
@@ -253,14 +261,22 @@ impl Watcher {
         tower_id: UserId,
         dbm: Arc<Mutex<DBM>>,
     ) -> Self {
-        let appointments = Mutex::new(HashMap::new());
-        let locator_uuid_map = Mutex::new(HashMap::new());
-        let locator_cache = Mutex::new(LocatorCache::new(last_n_blocks));
+        let mut appointments = HashMap::new();
+        let mut locator_uuid_map: HashMap<Locator, HashSet<UUID>> = HashMap::new();
+        for (uuid, appointment) in dbm.lock().unwrap().load_all_appointments() {
+            appointments.insert(uuid, appointment.get_summary());
+
+            if let Some(map) = locator_uuid_map.get_mut(&appointment.locator()) {
+                map.insert(uuid);
+            } else {
+                locator_uuid_map.insert(appointment.locator(), HashSet::from_iter(vec![uuid]));
+            }
+        }
 
         Watcher {
-            appointments,
-            locator_uuid_map,
-            locator_cache,
+            appointments: Mutex::new(appointments),
+            locator_uuid_map: Mutex::new(locator_uuid_map),
+            locator_cache: Mutex::new(LocatorCache::new(last_n_blocks)),
             responder,
             gatekeeper,
             last_known_block_header: Mutex::new(*last_known_block_header.deref()),
@@ -268,6 +284,11 @@ impl Watcher {
             tower_id,
             dbm,
         }
+    }
+
+    /// Returns whether the [Watcher] has been created from scratch (fresh) or from backed-up data.
+    pub fn is_fresh(&self) -> bool {
+        self.appointments.lock().unwrap().is_empty()
     }
 
     /// Registers a new user within the [Watcher]. This request is passed to the [Gatekeeper], who is in
@@ -554,62 +575,66 @@ impl Watcher {
         (valid_breaches, invalid_breaches)
     }
 
-    /// Deletes an appointment from memory.
-    ///
-    /// The appointment is deleted from the appointments and locator_uuid_map maps.
-    fn delete_appointment_from_memory(&self, uuid: UUID) {
-        let mut appointments = self.appointments.lock().unwrap();
-        let mut locator_uuid_map = self.locator_uuid_map.lock().unwrap();
-
-        match appointments.remove(&uuid) {
-            Some(appointment) => {
-                let appointments = locator_uuid_map.get_mut(&appointment.locator).unwrap();
-
-                if appointments.len() == 1 {
-                    locator_uuid_map.remove(&appointment.locator);
-
-                    log::info!("No more appointments for locator: {}", appointment.locator);
-                } else {
-                    appointments.remove(&uuid);
-                }
-            }
-            None => {
-                // This should never happen. Logging just in case so we can fix it if so
-                log::error!("Appointment not found when cleaning: {}", uuid);
-            }
-        }
-    }
-
     // DISCUSS:: For outdated data this may be nicer if implemented with a callback from the GK given that:
     // - The GK is queried for the data to be deleted
     // - Appointment and tracker data can be deleted in cascade when a user is deleted
     // If done, the GK can notify the Watcher and Responder to delete data in memory and
     // take care of the database itself.
 
-    /// Deletes appointments from memory and the database.
+    /// Deletes appointments from memory.
     ///
-    /// Logs a different message depending on whether the appointments have been outdated or they are invalid.
-    /// Valid appointment deletion is only performed from memory (through [delete_appointments_from_memory](Self::delete_appointment_from_memory)),
-    /// since the data is kept in the database since it's deletion is delegated to the Responder.
-    fn delete_appointments(&self, uuids: HashSet<UUID>, outdated: bool) {
-        // FIXME: This is identical to Responder::delete_trackers. It can be implemented using generics.
-        for uuid in uuids.iter() {
-            if outdated {
-                log::info!(
-                    "End time reached without breach. Deleting appointment  {}",
-                    uuid
-                );
-            } else {
-                log::info!(
-                    "Appointment cannot be completed, it contains invalid data. Deleting  {}",
-                    uuid
-                );
-            }
-            self.delete_appointment_from_memory(*uuid);
-        }
+    /// The appointments are deleted from the appointments and locator_uuid_map maps.
+    /// Logs a different message depending on whether the appointments have been outdated, invalid, or accepted.
+    fn delete_appointments_from_memory(&self, uuids: &HashSet<UUID>, reason: DeletionReason) {
+        let mut appointments = self.appointments.lock().unwrap();
+        let mut locator_uuid_map = self.locator_uuid_map.lock().unwrap();
 
-        // Remove data from the database
-        self.dbm.lock().unwrap().batch_remove_appointments(&uuids);
+        for uuid in uuids {
+            match reason {
+                DeletionReason::Outdated => log::info!(
+                    "End time reached by {} without breach. Deleting appointment",
+                    uuid
+                ),
+                DeletionReason::Invalid => log::info!(
+                    "{} cannot be completed, it contains invalid data. Deleting appointment",
+                    uuid
+                ),
+                DeletionReason::Accepted => {
+                    log::info!("{} accepted by the Responder. Deleting appointment", uuid)
+                }
+            };
+            match appointments.remove(&uuid) {
+                Some(appointment) => {
+                    let appointments = locator_uuid_map.get_mut(&appointment.locator).unwrap();
+
+                    if appointments.len() == 1 {
+                        locator_uuid_map.remove(&appointment.locator);
+
+                        log::info!("No more appointments for locator: {}", appointment.locator);
+                    } else {
+                        appointments.remove(&uuid);
+                    }
+                }
+                None => {
+                    // This should never happen. Logging just in case so we can fix it if so
+                    log::error!("Appointment not found when cleaning: {}", uuid);
+                }
+            }
+        }
+    }
+
+    /// Deletes appointments from memory and the database.
+    fn delete_appointments(
+        &self,
+        uuids: &HashSet<UUID>,
+        updated_users: &HashMap<UserId, UserInfo>,
+        reason: DeletionReason,
+    ) {
+        self.delete_appointments_from_memory(uuids, reason);
+        self.dbm
+            .lock()
+            .unwrap()
+            .batch_remove_appointments(uuids, updated_users);
     }
 
     /// Ges the number of users currently registered with the tower.
@@ -712,70 +737,68 @@ impl chain::Listen for Watcher {
             .update(block.header, &locator_tx_map);
 
         if !self.appointments.lock().unwrap().is_empty() {
-            // Get a list of outdated appointments from the Gatekeeper. This appointments may be either in the Watcher
-            // or in the Responder.
-            let outdated_appointments = self.gatekeeper.get_outdated_appointments(height);
-            self.delete_appointments(outdated_appointments, true);
+            // Start by removing outdated data so it is not taken into account from this point on
+            self.delete_appointments_from_memory(
+                &self.gatekeeper.get_outdated_appointments(height),
+                DeletionReason::Outdated,
+            );
 
             // Filter out those breaches that do not yield a valid transaction
             let (valid_breaches, invalid_breaches) =
                 self.filter_breaches(self.get_breaches(locator_tx_map));
 
-            let mut appointments_to_delete = HashSet::new();
-            let mut appointments_to_delete_gatekeeper = HashMap::new();
-            {
-                let appointments = self.appointments.lock().unwrap();
-                for uuid in invalid_breaches.into_keys() {
+            // Send data to the Responder
+            let mut appointments_to_delete = HashSet::from_iter(invalid_breaches.into_keys());
+            let mut delivered_appointments = HashSet::new();
+            for (uuid, breach) in valid_breaches {
+                log::info!(
+                    "Notifying Responder and deleting appointment (uuid: {})",
+                    uuid
+                );
+
+                //DISCUSS: This cannot be async given block_connected is not.
+                // Is there any alternative? Remove async from here altogether?
+                let receipt = block_on(self.responder.handle_breach(
+                    uuid,
+                    breach,
+                    self.appointments.lock().unwrap()[&uuid].user_id,
+                ));
+
+                if receipt.delivered() {
+                    delivered_appointments.insert(uuid);
+                } else {
                     appointments_to_delete.insert(uuid);
-                    appointments_to_delete_gatekeeper.insert(uuid, appointments[&uuid].user_id);
                 }
             }
 
-            // Send data to the Responder and remove it from the Watcher
-            {
-                for (uuid, breach) in valid_breaches {
-                    log::info!(
-                        "Notifying Responder and deleting appointment (uuid: {})",
-                        uuid
-                    );
-
-                    //DISCUSS: This cannot be async given block_connected is not.
-                    // Is there any alternative? Remove async from here altogether?
-                    let receipt = block_on(self.responder.handle_breach(
-                        uuid,
-                        breach,
-                        self.appointments.lock().unwrap()[&uuid].user_id,
-                    ));
-
-                    if receipt.delivered() {
-                        self.delete_appointment_from_memory(uuid);
-                    } else {
-                        appointments_to_delete.insert(uuid);
-                    }
-                }
-            }
-
-            // Delete data from the Watcher (invalid + triggered)
-            self.delete_appointments(appointments_to_delete, false);
-
-            // Delete data from the Gatekeeper
-            self.gatekeeper
-                .delete_appointments(&appointments_to_delete_gatekeeper);
+            // Delete data
+            let appointments_to_delete_gatekeeper = {
+                let appointments = self.appointments.lock().unwrap();
+                appointments_to_delete
+                    .iter()
+                    .map(|uuid| (*uuid, appointments[&uuid].user_id))
+                    .collect()
+            };
+            self.delete_appointments_from_memory(&delivered_appointments, DeletionReason::Accepted);
+            self.delete_appointments(
+                &appointments_to_delete,
+                &self
+                    .gatekeeper
+                    .delete_appointments_from_memory(&appointments_to_delete_gatekeeper),
+                DeletionReason::Invalid,
+            );
 
             if self.appointments.lock().unwrap().is_empty() {
                 log::info!("No more pending appointments");
             }
         }
 
+        // Update last known block
         *self.last_known_block_header.lock().unwrap() = BlockHeaderData {
             header: block.header,
             height,
             chainwork: block.header.work(),
         };
-        self.dbm
-            .lock()
-            .unwrap()
-            .store_last_known_block_watcher(&block.header.block_hash());
     }
 
     #[allow(unused_variables)]
@@ -807,6 +830,16 @@ mod tests {
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use lightning::chain::Listen;
 
+    impl PartialEq for Watcher {
+        fn eq(&self, other: &Self) -> bool {
+            *self.appointments.lock().unwrap() == *other.appointments.lock().unwrap()
+                && *self.locator_uuid_map.lock().unwrap() == *other.locator_uuid_map.lock().unwrap()
+                && *self.last_known_block_header.lock().unwrap()
+                    == *other.last_known_block_header.lock().unwrap()
+        }
+    }
+    impl Eq for Watcher {}
+
     impl Watcher {
         pub fn add_random_tracker_to_responder(&self, uuid: UUID) {
             self.responder.add_random_tracker(uuid);
@@ -814,9 +847,13 @@ mod tests {
     }
 
     async fn init_watcher(chain: &mut Blockchain) -> Watcher {
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        init_watcher_with_db(chain, dbm).await
+    }
+
+    async fn init_watcher_with_db(chain: &mut Blockchain, dbm: Arc<Mutex<DBM>>) -> Watcher {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let gk = Arc::new(Gatekeeper::new(
             chain.tip(),
             SLOTS,
@@ -824,7 +861,8 @@ mod tests {
             EXPIRY_DELTA,
             dbm.clone(),
         ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+        let responder =
+            create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
         create_watcher(
             chain,
             Arc::new(responder),
@@ -853,12 +891,96 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cache() {
+    async fn test_cache_new() {
         let mut chain = Blockchain::default().with_height(10);
-        let size = 6;
+        let last_six_blocks = get_last_n_blocks(&mut chain, 6).await;
+        let blocks: Vec<Block> = last_six_blocks
+            .iter()
+            .map(|block| block.deref().clone())
+            .collect();
 
-        let cache = LocatorCache::new(get_last_n_blocks(&mut chain, size).await);
-        assert_eq!(size, cache.size);
+        let cache = LocatorCache::new(last_six_blocks);
+        assert_eq!(blocks.len(), cache.size);
+        for block in blocks.iter() {
+            assert!(cache.blocks.contains(&block.block_hash()));
+
+            let mut locators = Vec::new();
+            for tx in block.txdata.iter() {
+                let locator = Locator::new(tx.txid());
+                assert!(cache.cache.contains_key(&locator));
+                locators.push(locator);
+            }
+
+            assert_eq!(cache.tx_in_block[&block.block_hash()], locators);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cache_update() {
+        let mut chain = Blockchain::default().with_height(10);
+        let mut last_n_blocks = get_last_n_blocks(&mut chain, 7).await;
+
+        // Safe the last block to use it for an update and the first to check eviction
+        let last_block = last_n_blocks.pop().unwrap();
+        let first_block = last_n_blocks.get(0).unwrap().deref().clone();
+
+        // Init the cache with the 6 block before the last
+        let mut cache = LocatorCache::new(last_n_blocks);
+
+        // Update the cache with the last block
+        let locator_tx_map = last_block
+            .deref()
+            .txdata
+            .iter()
+            .map(|tx| (Locator::new(tx.txid()), tx.clone()))
+            .collect();
+        cache.update(last_block.deref().header, &locator_tx_map);
+
+        // Check that the new data is in the cache
+        assert!(cache.blocks.contains(&last_block.block_hash()));
+        for (locator, _) in locator_tx_map.iter() {
+            assert!(cache.cache.contains_key(&locator));
+        }
+        assert_eq!(
+            cache.tx_in_block[&last_block.block_hash()],
+            locator_tx_map.keys().cloned().collect::<Vec<Locator>>()
+        );
+
+        // Check that the data from the first block has been evicted
+        assert!(!cache.blocks.contains(&first_block.block_hash()));
+        for tx in first_block.txdata.iter() {
+            assert!(!cache.cache.contains_key(&Locator::new(tx.txid())));
+        }
+        assert!(!cache.tx_in_block.contains_key(&first_block.block_hash()));
+    }
+
+    #[tokio::test]
+    async fn test_new() {
+        // A fresh watcher has no associated data
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let watcher = init_watcher_with_db(&mut chain, dbm.clone()).await;
+        assert!(watcher.is_fresh());
+
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        watcher.register(user_id).unwrap();
+        let appointment = generate_dummy_appointment(None).inner;
+
+        // If we add some trackers to the system and create a new Responder reusing the same db
+        // (as if simulating a bootstrap from existing data), the data should be properly loaded.
+        for _ in 0..10 {
+            let user_sig = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+            watcher
+                .add_appointment(appointment.clone(), user_sig.clone())
+                .await
+                .unwrap();
+        }
+
+        // Create a new Responder reusing the same DB and check that the data is loaded
+        let another_w = init_watcher_with_db(&mut chain, dbm).await;
+        assert!(!another_w.is_fresh());
+        assert_eq!(watcher, another_w);
     }
 
     #[tokio::test]
@@ -1314,40 +1436,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_appointment_from_memory() {
+    async fn test_delete_appointments_from_memory() {
         let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
         let watcher = init_watcher(&mut chain).await;
 
-        // Add an appointment both to memory and to the database
-        let uuid = generate_uuid();
-        let appointment = generate_dummy_appointment(None);
-        watcher
-            .appointments
-            .lock()
-            .unwrap()
-            .insert(uuid, appointment.get_summary());
-        watcher
-            .locator_uuid_map
-            .lock()
-            .unwrap()
-            .insert(appointment.locator(), HashSet::from_iter([uuid]));
+        // Add some appointments both to memory and to the database
+        let mut to_be_deleted = HashMap::new();
 
-        store_appointment_and_fks_to_db(&watcher.dbm.lock().unwrap(), uuid, &appointment);
+        for _ in 0..10 {
+            let uuid = generate_uuid();
+            let appointment = generate_dummy_appointment(None);
+            watcher
+                .appointments
+                .lock()
+                .unwrap()
+                .insert(uuid, appointment.get_summary());
+            watcher
+                .locator_uuid_map
+                .lock()
+                .unwrap()
+                .insert(appointment.locator(), HashSet::from_iter([uuid]));
 
-        // Delete and check data is not in memory
-        watcher.delete_appointment_from_memory(uuid);
-        assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
-        assert!(!watcher
-            .locator_uuid_map
-            .lock()
-            .unwrap()
-            .contains_key(&appointment.locator()));
+            store_appointment_and_fks_to_db(&watcher.dbm.lock().unwrap(), uuid, &appointment);
+            to_be_deleted.insert(uuid, appointment.locator());
+        }
 
-        // Data should be in the database too
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Ok(ExtendedAppointment { .. })
-        ));
+        // Delete and check data is not in memory (the reason does not matter for the test)
+        watcher.delete_appointments_from_memory(
+            &to_be_deleted.keys().cloned().collect(),
+            DeletionReason::Outdated,
+        );
+
+        for (uuid, locator) in to_be_deleted {
+            // Data is not in memory
+            assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
+            assert!(!watcher
+                .locator_uuid_map
+                .lock()
+                .unwrap()
+                .contains_key(&locator));
+
+            // But it can be found in the database
+            assert!(matches!(
+                watcher.dbm.lock().unwrap().load_appointment(uuid),
+                Ok(ExtendedAppointment { .. })
+            ));
+        }
     }
 
     #[tokio::test]
@@ -1363,6 +1497,7 @@ mod tests {
         let mut target_appointments = HashSet::new();
         let mut uuid_locator_map = HashMap::new();
         let mut locator_with_multiple_uuids = HashSet::new();
+        let mut updated_users = HashMap::new();
 
         for i in 0..10 {
             let uuid = generate_uuid();
@@ -1400,11 +1535,19 @@ mod tests {
 
             // Add some appointments to be deleted
             if i % 2 == 0 {
+                // Users will also be updated once the data is deleted.
+                // We can made up the numbers here just to check they are updated.
                 target_appointments.insert(uuid);
+                updated_users.insert(appointment.user_id, UserInfo::new(i, 42));
             }
         }
 
-        watcher.delete_appointments(target_appointments.clone(), false);
+        // The deletion reason does not matter here, it only changes the logged message when deleting data
+        watcher.delete_appointments(
+            &target_appointments,
+            &updated_users,
+            DeletionReason::Accepted,
+        );
 
         // Only appointments in the target_appointments map should have been removed from
         // the Watcher's data structures.
@@ -1451,6 +1594,20 @@ mod tests {
                 ));
             }
         }
+
+        // The users that needed to be updated in the database have been (just checking the slot count)
+        for (id, info) in updated_users {
+            assert_eq!(
+                watcher
+                    .dbm
+                    .lock()
+                    .unwrap()
+                    .load_user(id)
+                    .unwrap()
+                    .available_slots,
+                info.available_slots
+            );
+        }
     }
 
     #[tokio::test]
@@ -1471,16 +1628,6 @@ mod tests {
         assert_eq!(
             watcher.last_known_block_header.lock().unwrap().header,
             chain.tip().header
-        );
-        // Check the data also matches the on in database
-        assert_eq!(
-            watcher
-                .dbm
-                .lock()
-                .unwrap()
-                .load_last_known_block_watcher()
-                .unwrap(),
-            chain.tip().header.block_hash()
         );
 
         // If there are appointments to watch, the Watcher will:
@@ -1544,6 +1691,8 @@ mod tests {
 
         assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid1));
         assert!(!watcher.locator_uuid_map.lock().unwrap()[&appointment.locator()].contains(&uuid1));
+        // Data is still in the Gatekeeper and in the database, since it'll be deleted in cascade by the
+        // Gatekeeper on user's deletion (given the user was outdated in the test).
         assert!(
             watcher.gatekeeper.get_registered_users().lock().unwrap()[&user_id]
                 .appointments
@@ -1551,7 +1700,7 @@ mod tests {
         );
         assert!(matches!(
             watcher.dbm.lock().unwrap().load_appointment(uuid1),
-            Err(DBError::NotFound)
+            Ok(ExtendedAppointment { .. })
         ));
 
         assert!(watcher.appointments.lock().unwrap().contains_key(&uuid2));
@@ -1605,6 +1754,49 @@ mod tests {
         assert!(matches!(
             watcher.dbm.lock().unwrap().load_tracker(uuid),
             Ok(TransactionTracker { .. })
+        ));
+
+        // Check triggering with a valid formatted transaction but that is rejected by the Responder.
+        let dispute_tx = get_random_tx();
+        let appointment = generate_dummy_appointment(Some(&dispute_tx.txid()));
+        let sig = cryptography::sign(&appointment.inner.serialize(), &user2_sk).unwrap();
+        let uuid = UUID::new(appointment.locator(), user2_id);
+        watcher
+            .add_appointment(appointment.inner.clone(), sig)
+            .await
+            .unwrap();
+
+        // Set the carrier response
+        *watcher.responder.get_carrier().lock().unwrap() = create_carrier(
+            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+        );
+
+        watcher.block_connected(
+            &chain.generate(Some(vec![dispute_tx])),
+            chain.blocks.len() as u32,
+        );
+
+        // Data should not be in the Responder, in the Watcher nor in the Gatekeeper
+        assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
+        assert!(!watcher
+            .responder
+            .get_trackers()
+            .lock()
+            .unwrap()
+            .contains_key(&uuid));
+        assert!(
+            !watcher.gatekeeper.get_registered_users().lock().unwrap()[&user2_id]
+                .appointments
+                .contains_key(&uuid)
+        );
+        // Data should also have been deleted from the database
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            Err(DBError::NotFound)
+        ));
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_tracker(uuid),
+            Err(DBError::NotFound)
         ));
 
         // Checks invalid triggers. Add a new appointment and trigger it with invalid data.
