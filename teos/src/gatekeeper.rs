@@ -2,10 +2,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use lightning::chain;
-use lightning_block_sync::poll::ValidatedBlockHeader;
+use lightning_block_sync::{poll::ValidatedBlockHeader, BlockHeaderData};
 
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
 use teos_common::cryptography;
@@ -75,7 +76,7 @@ pub struct MaxSlotsReached;
 #[derive(Debug)]
 pub struct Gatekeeper {
     /// last known block header by the [Gatekeeper].
-    last_known_block_header: ValidatedBlockHeader,
+    last_known_block_header: Mutex<BlockHeaderData>,
     /// Number of slots new subscriptions get by default.
     subscription_slots: u32,
     /// Expiry time new subscription get by default, in blocks (starting from the block the subscription is requested).
@@ -99,7 +100,7 @@ impl Gatekeeper {
     ) -> Self {
         let registered_users = dbm.lock().unwrap().load_all_users().clone();
         Gatekeeper {
-            last_known_block_header,
+            last_known_block_header: Mutex::new(*last_known_block_header.deref()),
             subscription_slots,
             subscription_duration,
             expiry_delta,
@@ -160,7 +161,7 @@ impl Gatekeeper {
 
     /// Adds a new user to the tower (or updates its subscription if already registered).
     pub fn add_update_user(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
-        let block_count = self.last_known_block_header.height;
+        let block_count = self.last_known_block_header.lock().unwrap().height;
 
         // TODO: For now, new calls to `add_update_user` add subscription_slots to the current count and reset the expiry time
         let mut registered_users = self.registered_users.lock().unwrap();
@@ -239,7 +240,8 @@ impl Gatekeeper {
             Err(AuthenticationFailure("User not found.")),
             |user_info| {
                 Ok((
-                    self.last_known_block_header.height >= user_info.subscription_expiry,
+                    self.last_known_block_header.lock().unwrap().height
+                        >= user_info.subscription_expiry,
                     user_info.subscription_expiry,
                 ))
             },
@@ -316,6 +318,13 @@ impl chain::Listen for Gatekeeper {
             .unwrap()
             .retain(|id, _| !outdated_users.contains(id));
         self.dbm.lock().unwrap().batch_remove_users(&outdated_users);
+
+        // Update last known block
+        *self.last_known_block_header.lock().unwrap() = BlockHeaderData {
+            header: block.header,
+            height,
+            chainwork: block.header.work(),
+        };
     }
 
     /// FIXME: To be implemented.
@@ -349,7 +358,8 @@ mod tests {
                 && self.subscription_duration == other.subscription_duration
                 && self.expiry_delta == other.expiry_delta
                 && *self.registered_users.lock().unwrap() == *other.registered_users.lock().unwrap()
-                && self.last_known_block_header == other.last_known_block_header
+                && *self.last_known_block_header.lock().unwrap()
+                    == *other.last_known_block_header.lock().unwrap()
         }
     }
     impl Eq for Gatekeeper {}
@@ -451,7 +461,7 @@ mod tests {
     #[test]
     fn test_add_update_user() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let mut gatekeeper = init_gatekeeper(&chain);
+        let gatekeeper = init_gatekeeper(&chain);
 
         // add_update_user adds a user to the system if it is not still registered, otherwise it add slots to the user subscription
         // and refreshes the subscription expiry. Slots are added up to u32:MAX, further call will return an MaxSlotsReached error.
@@ -467,7 +477,7 @@ mod tests {
 
         // Let generate a new block and add the user again to check that both the slots and expiry are updated.
         chain.generate(None);
-        gatekeeper.last_known_block_header = chain.tip();
+        *gatekeeper.last_known_block_header.lock().unwrap() = *chain.tip().deref();
         let updated_receipt = gatekeeper.add_update_user(user_id).unwrap();
 
         assert_eq!(
@@ -821,5 +831,11 @@ mod tests {
                 Err(DBError::NotFound)
             ));
         }
+
+        // Check that the last_known_block_header has been properly updated
+        assert_eq!(
+            gatekeeper.last_known_block_header.lock().unwrap().header,
+            chain.tip().header
+        );
     }
 }
