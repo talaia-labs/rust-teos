@@ -6,12 +6,8 @@ use std::sync::Arc;
 use crate::errors;
 use crate::rpc_errors;
 
-use bitcoin::hashes::Hash;
 use bitcoin::util::psbt::serialize::Serialize;
 use bitcoin::{Transaction, Txid};
-use bitcoincore_rpc::bitcoin::hashes::Hash as RpcHash;
-use bitcoincore_rpc::bitcoin::util::psbt::serialize::Serialize as RpcSerialize;
-use bitcoincore_rpc::bitcoin::{Transaction as RpcTransaction, Txid as RpcTxid};
 use bitcoincore_rpc::{
     jsonrpc::error::Error::Rpc as RpcError, Client as BitcoindClient,
     Error::JsonRpc as JsonRpcError, RpcApi,
@@ -84,7 +80,6 @@ impl Carrier {
     /// Sends a [Transaction] to the Bitcoin network.
     ///
     /// Returns a [DeliveryReceipt] indicating whether the transaction could be delivered or not.
-    // FIXME: This needs finer catching of rejection reasons.
     pub async fn send_transaction(&mut self, tx: &Transaction) -> DeliveryReceipt {
         if let Some(receipt) = self.issued_receipts.get(&tx.txid()) {
             log::info!("Transaction already sent: {}", tx.txid());
@@ -94,12 +89,7 @@ impl Carrier {
         log::info!("Pushing transaction to the network: {}", tx.txid());
         let receipt: DeliveryReceipt;
 
-        // FIXME: Temporary hack until bitcoincore_rpc bumps it's version to match ldk's
-        let rpc_tx =
-            bitcoincore_rpc::bitcoin::consensus::deserialize::<RpcTransaction>(&tx.serialize())
-                .unwrap();
-
-        match self.bitcoin_cli.send_raw_transaction(&rpc_tx) {
+        match self.bitcoin_cli.send_raw_transaction(tx) {
             Ok(_) => {
                 log::info!("Transaction successfully delivered: {}", tx.txid());
                 receipt = DeliveryReceipt::new(true, Some(0), None);
@@ -158,12 +148,8 @@ impl Carrier {
     }
 
     /// Queries a [Transaction] from our node. Returns it if found, [None] otherwise.
-    // FIXME: This needs finer catching of rejection reasons.
     pub async fn get_transaction(&self, txid: &Txid) -> Option<Transaction> {
-        // FIXME: Temporary conversion between bitcoincore-rpc data and bitcoin data structures until both crates use the same
-        // bitcoin version.
-        let rpc_txid = RpcTxid::from_slice(&txid.into_inner()).unwrap();
-        match self.bitcoin_cli.get_raw_transaction(&rpc_txid, None) {
+        match self.bitcoin_cli.get_raw_transaction(txid, None) {
             Ok(tx) => Some(bitcoin::consensus::deserialize(&tx.serialize()).unwrap()),
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                 rpc_errors::RPC_INVALID_ADDRESS_OR_KEY => {
@@ -190,12 +176,8 @@ impl Carrier {
     }
 
     /// Queries the confirmation count of a given [Transaction]. Returns it if the transaction can be found, [None] otherwise.
-    // FIXME: This needs finer catching. e.g. Connection errors need to be handled here
     pub async fn get_confirmations(&self, txid: &Txid) -> Option<u32> {
-        // FIXME: Temporary conversion between bitcoincore-rpc data and bitcoin data structures until both crates use the same
-        // bitcoin version.
-        let rpc_txid = RpcTxid::from_slice(&txid.into_inner()).unwrap();
-        match self.bitcoin_cli.get_raw_transaction_info(&rpc_txid, None) {
+        match self.bitcoin_cli.get_raw_transaction_info(txid, None) {
             Ok(tx_data) => tx_data.confirmations,
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                 rpc_errors::RPC_INVALID_ADDRESS_OR_KEY => {
@@ -366,7 +348,7 @@ mod tests {
     async fn test_send_transaction_connection_error() {
         // Try to connect to an nonexisting server.
         let bitcoin_cli =
-            Arc::new(BitcoindClient::new("http://localhost:1234".to_string(), Auth::None).unwrap());
+            Arc::new(BitcoindClient::new("http://localhost:1234", Auth::None).unwrap());
         let mut carrier = Carrier::new(bitcoin_cli);
         let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx).await;
@@ -410,7 +392,7 @@ mod tests {
     async fn get_transaction_connection_error() {
         // Try to connect to an nonexisting server.
         let bitcoin_cli =
-            Arc::new(BitcoindClient::new("http://localhost:1234".to_string(), Auth::None).unwrap());
+            Arc::new(BitcoindClient::new("http://localhost:1234", Auth::None).unwrap());
         let carrier = Carrier::new(bitcoin_cli);
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         let r = carrier.get_transaction(&txid).await;
