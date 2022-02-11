@@ -57,12 +57,10 @@ impl std::error::Error for ConfigError {}
 #[structopt(rename_all = "lowercase")]
 #[structopt(version = "0.0.1", about = "The Eye of Satoshi - Lightning watchtower")]
 pub struct Opt {
-    // FIXME: Not currently used
     /// Address teos HTTP(s) API will bind to [default: localhost]
     #[structopt(long)]
     pub api_bind: Option<String>,
 
-    // FIXME: Not currently used
     /// Port teos HTTP(s) API will bind to [default: 9814]
     #[structopt(long)]
     pub api_port: Option<u16>,

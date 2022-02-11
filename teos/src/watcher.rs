@@ -51,8 +51,6 @@ impl fmt::Display for LocatorCache {
     }
 }
 
-//TODO: Check if calls to the LocatorCache needs explicit Mutex of if Rust already prevents race conditions in this case.
-// This is accessed both by block_connected (write) and add_appointment (read). The later is an API method.
 impl LocatorCache {
     /// Creates a new [LocatorCache] instance.
     /// The cache is initialized using the provided vector of blocks.

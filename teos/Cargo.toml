@@ -6,45 +6,43 @@ license = "MIT"
 edition = "2018"
 default-run="rusty-teos"
 
-
-
 [[bin]]
 name = "teos-cli"
 path = "src/cli.rs"
 
 [dependencies]
-home = "0.5.3"
-toml = "0.5"
-structopt = "0.3"
-serde = "1.0.130"
-hex = {version = "0.4.3", features = ["serde"] }
-base64 = "0.13.0"
+# General
 futures = "0.3"
+hex = { version = "0.4.3", features = [ "serde" ] }
+home = "0.5.3"
 log = "0.4"
-tonic = "0.6"
 prost = "0.9"
-prost-types = "0.9"
-simple_logger = "1.12.1"
+rusqlite = { version = "0.26.0", features = [ "bundled", "limits" ] }
+serde = "1.0.130"
 serde_json = "1.0"
-rusqlite = {version = "0.26.0", features = ["bundled", "limits"]}
-tokio = { version = "1.5", features = [ "io-util", "macros", "rt", "rt-multi-thread", "sync", "net", "time" ] }
+simple_logger = "2.1.0"
+structopt = "0.3"
+toml = "0.5"
+tonic = "0.6"
+tokio = { version = "1.5", features = [ "rt-multi-thread" ] }
 triggered = "0.1.2"
 warp = "0.3.2"
 
-
-bitcoin = "0.27"
-lightning-block-sync = {version = "0.0.104", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
-lightning-net-tokio = { version = "0.0.104", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
-lightning = { version = "0.0.104", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+# Bitcoin and Lightning
+bitcoin = { version = "0.27", features = [ "base64" ] }
 bitcoincore-rpc = "0.14.0"
+lightning = { version = "0.0.104", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+lightning-net-tokio = { version = "0.0.104", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
+lightning-block-sync = { version = "0.0.104", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
 
-teos-common = {path = "../teos-common"}
+# Local
+teos-common = { path = "../teos-common" }
 
 [build-dependencies]
 tonic-build = "0.6"
 
 [dev-dependencies]
-rand = "0.8.4"
 chunked_transfer = "1.4"
+rand = "0.8.4"
 jsonrpc-http-server = "17.1.0"
-tokio-stream = {version = "0.1.5", features = ["net"]}
+tokio-stream = { version = "0.1.5", features = [ "net" ] }
