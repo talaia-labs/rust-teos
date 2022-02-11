@@ -9,11 +9,11 @@
  * at your option.
 */
 
-use base64;
 use futures::executor::block_on;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use bitcoin::base64;
 use bitcoin::hash_types::{BlockHash, Txid};
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::{Block, Transaction};
@@ -78,7 +78,7 @@ impl<'a> BitcoindClient<'a> {
         rpc_password: &'a str,
     ) -> std::io::Result<BitcoindClient<'a>> {
         let http_endpoint = HttpEndpoint::for_host(host.to_owned()).with_port(port);
-        let rpc_credentials = base64::encode(format!("{}:{}", rpc_user, rpc_password));
+        let rpc_credentials = base64::encode(&format!("{}:{}", rpc_user, rpc_password));
         let bitcoind_rpc_client = RpcClient::new(&rpc_credentials, http_endpoint)?;
 
         let client = Self {
@@ -99,7 +99,7 @@ impl<'a> BitcoindClient<'a> {
     /// Gets a fresh RPC client.
     pub fn get_new_rpc_client(&self) -> std::io::Result<RpcClient> {
         let http_endpoint = HttpEndpoint::for_host(self.host.to_owned()).with_port(self.port);
-        let rpc_credentials = base64::encode(format!("{}:{}", self.rpc_user, self.rpc_password));
+        let rpc_credentials = base64::encode(&format!("{}:{}", self.rpc_user, self.rpc_password));
         RpcClient::new(&rpc_credentials, http_endpoint)
     }
 

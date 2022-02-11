@@ -7,10 +7,13 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# General
 hex = "0.4.3"
 
+# Crypto
 rand = "0.8.4"
 chacha20poly1305 = "0.8.0"
 
+# Bitcoin and Lightning
 bitcoin = "0.27"
 lightning = "0.0.99"

@@ -72,7 +72,6 @@ pub struct MaxSlotsReached;
 /// available slots.
 /// This is the only component in the system that has some knowledge regarding users, all other components do query the
 /// [Gatekeeper] for such information.
-//TODO: Check if calls to the Gatekeeper need explicit Mutex of if Rust already prevents race conditions in this case.
 #[derive(Debug)]
 pub struct Gatekeeper {
     /// last known block header by the [Gatekeeper].
