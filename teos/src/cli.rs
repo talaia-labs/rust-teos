@@ -1,3 +1,4 @@
+use serde_json::to_string_pretty as pretty_json;
 use std::fs;
 use std::str::FromStr;
 use structopt::StructOpt;
@@ -41,15 +42,15 @@ async fn main() {
     match command {
         Command::GetAllAppointments => {
             let appointments = client.get_all_appointments(Request::new(())).await.unwrap();
-            println!("{}", appointments.into_inner());
+            println!("{}", pretty_json(&appointments.into_inner()).unwrap());
         }
         Command::GetTowerInfo => {
             let info = client.get_tower_info(Request::new(())).await.unwrap();
-            println!("{}", info.into_inner())
+            println!("{}", pretty_json(&info.into_inner()).unwrap())
         }
         Command::GetUsers => {
             let users = client.get_users(Request::new(())).await.unwrap();
-            println!("{}", users.into_inner());
+            println!("{}", pretty_json(&users.into_inner()).unwrap());
         }
         Command::GetUser(data) => {
             match UserId::from_str(&data.user_id) {
@@ -60,7 +61,9 @@ async fn main() {
                         }))
                         .await
                     {
-                        Ok(response) => println!("{}", response.into_inner()),
+                        Ok(response) => {
+                            println!("{}", pretty_json(&response.into_inner()).unwrap())
+                        }
                         Err(status) => println!("{}", status.message()),
                     }
                 }

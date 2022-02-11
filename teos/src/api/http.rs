@@ -57,12 +57,12 @@ impl ApiError {
     }
 }
 
-pub fn serialize_locators<S>(locators: &Vec<Vec<u8>>, s: S) -> Result<S::Ok, S::Error>
+pub fn serialize_vec_bytes<S>(v: &Vec<Vec<u8>>, s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    let mut seq = s.serialize_seq(Some(locators.len()))?;
-    for element in locators.iter() {
+    let mut seq = s.serialize_seq(Some(v.len()))?;
+    for element in v.iter() {
         seq.serialize_element(&hex::encode(element))?;
     }
     seq.end()

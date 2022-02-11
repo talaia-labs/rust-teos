@@ -16,8 +16,6 @@ pub mod dbm;
 mod errors;
 mod extended_appointment;
 pub mod gatekeeper;
-#[doc(hidden)]
-mod proto_fmt;
 pub mod responder;
 #[doc(hidden)]
 mod rpc_errors;
