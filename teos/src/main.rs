@@ -132,7 +132,7 @@ pub async fn main() {
     };
     let rpc = Arc::new(
         Client::new(
-            format!("{}{}:{}", schema, conf.btc_rpc_connect, conf.btc_rpc_port).to_string(),
+            &format!("{}{}:{}", schema, conf.btc_rpc_connect, conf.btc_rpc_port),
             Auth::UserPass(conf.btc_rpc_user.clone(), conf.btc_rpc_password.clone()),
         )
         .unwrap(),

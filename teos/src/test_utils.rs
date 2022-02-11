@@ -417,7 +417,7 @@ pub async fn create_responder(
     tip: ValidatedBlockHeader,
     gatekeeper: Arc<Gatekeeper>,
     dbm: Arc<Mutex<DBM>>,
-    server_url: String,
+    server_url: &str,
 ) -> Responder {
     let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
     let carrier = Carrier::new(bitcoin_cli);
@@ -602,8 +602,8 @@ impl BitcoindMock {
         })
     }
 
-    pub fn url(&self) -> String {
-        self.url.clone()
+    pub fn url(&self) -> &str {
+        &self.url
     }
 }
 
