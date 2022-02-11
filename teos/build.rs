@@ -5,12 +5,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .field_attribute("AppointmentData.appointment_data", "#[serde(flatten)]")
         .field_attribute("appointment_data", "#[serde(rename = \"appointment\")]")
         .field_attribute("user_id", "#[serde(with = \"hex::serde\")]")
+        .field_attribute("tower_id", "#[serde(with = \"hex::serde\")]")
         .field_attribute("locator", "#[serde(with = \"hex::serde\")]")
         .field_attribute("encrypted_blob", "#[serde(with = \"hex::serde\")]")
         .field_attribute("tx", "#[serde(with = \"hex::serde\")]")
         .field_attribute(
             "locators",
-            "#[serde(serialize_with = \"crate::api::http::serialize_locators\")]",
+            "#[serde(serialize_with = \"crate::api::http::serialize_vec_bytes\")]",
+        )
+        .field_attribute(
+            "user_ids",
+            "#[serde(serialize_with = \"crate::api::http::serialize_vec_bytes\")]",
+        )
+        .field_attribute(
+            "GetUserResponse.appointments",
+            "#[serde(serialize_with = \"crate::api::http::serialize_vec_bytes\")]",
         )
         .field_attribute(
             "GetAppointmentResponse.status",
