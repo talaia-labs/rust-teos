@@ -164,8 +164,6 @@ impl LocatorCache {
 /// Breaches are passed to the [Responder] once created.
 #[derive(Debug, Clone)]
 pub struct Breach {
-    /// Breach locator. Matches the [Appointment] locator.
-    pub locator: Locator,
     /// Transaction that triggered the breach.
     pub dispute_tx: Transaction,
     /// Transaction that will be used as a response to the breach.
@@ -174,9 +172,8 @@ pub struct Breach {
 
 impl Breach {
     /// Creates a new [Breach] instance.
-    pub fn new(locator: Locator, dispute_tx: Transaction, penalty_tx: Transaction) -> Self {
+    pub fn new(dispute_tx: Transaction, penalty_tx: Transaction) -> Self {
         Breach {
-            locator,
             dispute_tx,
             penalty_tx,
         }
@@ -364,7 +361,7 @@ impl Watcher {
                             .store_appointment(uuid, &extended_appointment)
                             .unwrap();
 
-                        let breach = Breach::new(locator, dispute_tx.clone(), penalty_tx);
+                        let breach = Breach::new(dispute_tx.clone(), penalty_tx);
                         let receipt = self.responder.handle_breach(uuid, breach, user_id).await;
 
                         if receipt.delivered() {
@@ -541,10 +538,8 @@ impl Watcher {
                 let appointment = dbm.load_appointment(*uuid).unwrap();
                 match decrypted_blobs.get(appointment.encrypted_blob()) {
                     Some(penalty_tx) => {
-                        valid_breaches.insert(
-                            *uuid,
-                            Breach::new(locator, dispute_tx.clone(), penalty_tx.clone()),
-                        );
+                        valid_breaches
+                            .insert(*uuid, Breach::new(dispute_tx.clone(), penalty_tx.clone()));
                     }
                     None => {
                         match cryptography::decrypt(
@@ -556,10 +551,8 @@ impl Watcher {
                                     appointment.encrypted_blob().clone(),
                                     penalty_tx.clone(),
                                 );
-                                valid_breaches.insert(
-                                    *uuid,
-                                    Breach::new(locator, dispute_tx.clone(), penalty_tx),
-                                );
+                                valid_breaches
+                                    .insert(*uuid, Breach::new(dispute_tx.clone(), penalty_tx));
                             }
                             Err(e) => {
                                 invalid_breaches.insert(*uuid, e);
@@ -693,14 +686,24 @@ impl Watcher {
         let mut locators = Vec::new();
 
         let appointments = self.appointments.lock().unwrap();
+        let dbm = self.dbm.lock().unwrap();
         for uuid in subscription_info.appointments.keys() {
             match appointments.get(uuid) {
-                    Some(a) => locators.push(a.locator),
-                    None => match self.responder.get_tracker(*uuid) {
-                        Some(t) => locators.push(t.locator),
-                        None => log::debug!("The appointment was not found in the Watcher nor the Responder (uuid = {})", uuid)
+                Some(a) => locators.push(a.locator),
+                None => {
+                    if self.responder.has_tracker(*uuid) {
+                        match dbm.load_locator(*uuid) {
+                            Ok(locator) => locators.push(locator),
+                            Err(_) => log::error!(
+                                "Tracker found in Responder but not in DB (uuid = {})",
+                                uuid
+                            ),
+                        }
+                    } else {
+                        log::error!("Appointment found in the Gatekeeper but not in the Watcher nor the Responder (uuid = {})", uuid)
                     }
                 }
+            }
         }
 
         Ok((subscription_info, locators))
@@ -816,10 +819,9 @@ mod tests {
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, create_responder, create_watcher, generate_dummy_appointment,
-        generate_dummy_appointment_with_user, generate_uuid, get_last_n_blocks,
-        get_random_breach_from_locator, get_random_tx, store_appointment_and_fks_to_db,
-        BitcoindMock, Blockchain, MockOptions, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS,
-        START_HEIGHT,
+        generate_dummy_appointment_with_user, generate_uuid, get_last_n_blocks, get_random_breach,
+        get_random_tx, store_appointment_and_fks_to_db, BitcoindMock, Blockchain, MockOptions,
+        MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
 
@@ -1081,7 +1083,7 @@ mod tests {
             .await
             .unwrap();
 
-        let breach = get_random_breach_from_locator(triggered_appointment.locator());
+        let breach = get_random_breach();
         watcher.responder.add_tracker(uuid, breach, user_id, 0);
         let receipt = watcher
             .add_appointment(triggered_appointment.inner, signature)
@@ -1287,15 +1289,15 @@ mod tests {
             .remove(&appointment.locator);
 
         // Add data to the Responder
-        let breach = get_random_breach_from_locator(appointment.locator);
+        let breach = get_random_breach();
         let tracker = TransactionTracker::new(breach.clone(), user_id);
 
         watcher.responder.add_tracker(uuid, breach, user_id, 0);
 
-        let tracker_message = format!("get appointment {}", tracker.locator);
+        let tracker_message = format!("get appointment {}", appointment.locator);
         let tracker_signature = cryptography::sign(tracker_message.as_bytes(), &user_sk).unwrap();
         let info = watcher
-            .get_appointment(tracker.locator, &tracker_signature)
+            .get_appointment(appointment.locator, &tracker_signature)
             .unwrap();
 
         match info {
