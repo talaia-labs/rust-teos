@@ -68,6 +68,7 @@ pub(crate) struct Blockchain {
     malformed_headers: bool,
 }
 
+#[allow(dead_code)]
 impl Blockchain {
     pub fn default() -> Self {
         Blockchain::with_network(Network::Bitcoin)
