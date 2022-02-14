@@ -12,7 +12,6 @@ use lightning::chain::Listen;
 use lightning_block_sync::poll::ValidatedBlockHeader;
 use lightning_block_sync::BlockHeaderData;
 
-use teos_common::appointment::Locator;
 use teos_common::constants;
 use teos_common::UserId;
 
@@ -40,8 +39,6 @@ pub struct TrackerSummary {
 /// It is analogous to [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) for the [`Watcher`](crate::watcher::Watcher).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionTracker {
-    /// Matches the corresponding [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) locator.
-    pub locator: Locator,
     /// Matches the corresponding [Breach] `dispute_tx` field.
     pub dispute_tx: Transaction,
     /// Matches the corresponding [Breach] penalty_tx field.
@@ -54,7 +51,6 @@ impl TransactionTracker {
     /// Creates a new [TransactionTracker] instance.
     pub fn new(breach: Breach, user_id: UserId) -> Self {
         Self {
-            locator: breach.locator,
             dispute_tx: breach.dispute_tx,
             penalty_tx: breach.penalty_tx,
             user_id,
@@ -73,7 +69,6 @@ impl TransactionTracker {
 impl Into<msgs::Tracker> for TransactionTracker {
     fn into(self) -> msgs::Tracker {
         msgs::Tracker {
-            locator: self.locator.serialize(),
             dispute_txid: self.dispute_tx.txid().to_vec(),
             penalty_txid: self.penalty_tx.txid().to_vec(),
             penalty_rawtx: self.penalty_tx.serialize(),
@@ -542,9 +537,8 @@ mod tests {
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, generate_dummy_appointment_with_user, generate_uuid, get_random_breach,
-        get_random_breach_from_locator, get_random_tracker, get_random_tx, get_random_user_id,
-        store_appointment_and_fks_to_db, Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA,
-        SLOTS, START_HEIGHT,
+        get_random_tracker, get_random_tx, get_random_user_id, store_appointment_and_fks_to_db,
+        Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
 
     impl PartialEq for Responder {
@@ -637,7 +631,7 @@ mod tests {
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
             store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
-            let breach = get_random_breach_from_locator(appointment.locator());
+            let breach = get_random_breach();
             responder.add_tracker(uuid, breach.clone(), user_id, 0);
         }
 
@@ -656,7 +650,7 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
-        let breach = get_random_breach_from_locator(appointment.locator());
+        let breach = get_random_breach();
         let penalty_txid = breach.penalty_tx.txid();
 
         let r = responder.handle_breach(uuid, breach.clone(), user_id).await;
@@ -731,7 +725,7 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
-        let mut breach = get_random_breach_from_locator(appointment.locator());
+        let mut breach = get_random_breach();
         responder.add_tracker(uuid, breach.clone(), user_id, 0);
 
         // Check that the data has been added to trackers and tom the tx_tracker_map
@@ -756,7 +750,7 @@ mod tests {
         // Adding a tracker with confirmations should result in the same but with the penalty not being added to the unconfirmed_transactions
         //map
         let uuid = generate_uuid();
-        breach = get_random_breach_from_locator(appointment.locator());
+        breach = get_random_breach();
 
         responder
             .dbm
@@ -826,7 +820,7 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
-        let breach = get_random_breach_from_locator(appointment.locator());
+        let breach = get_random_breach();
         responder.add_tracker(uuid, breach.clone(), user_id, 0);
 
         assert!(responder.has_tracker(uuid));
@@ -850,7 +844,7 @@ mod tests {
         assert_eq!(responder.get_tracker(uuid), None);
 
         // Data should be there now
-        let breach = get_random_breach_from_locator(appointment.locator());
+        let breach = get_random_breach();
         let tracker = TransactionTracker::new(breach.clone(), user_id);
         responder.add_tracker(uuid, breach, user_id, 0);
         assert_eq!(responder.get_tracker(uuid).unwrap(), tracker);
@@ -942,7 +936,7 @@ mod tests {
                 .unwrap();
 
             // Create a breach and add it, manually setting the missed confirmation count
-            let breach = get_random_breach_from_locator(appointment.locator());
+            let breach = get_random_breach();
             txs.push(breach.penalty_tx.clone());
 
             responder.add_tracker(uuid, breach.clone(), user_id, 0);
@@ -970,7 +964,7 @@ mod tests {
         store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
         // Let's add a tracker first
-        let breach = get_random_breach_from_locator(appointment.locator());
+        let breach = get_random_breach();
         responder.add_tracker(uuid, breach.clone(), user_id, 1);
 
         // A tracker is completed when it has passed constants::IRREVOCABLY_RESOLVED confirmations
@@ -1072,7 +1066,7 @@ mod tests {
                 .store_appointment(uuid, &appointment)
                 .unwrap();
 
-            let breach = get_random_breach_from_locator(appointment.locator());
+            let breach = get_random_breach();
             let penalty_txid = breach.penalty_tx.txid();
             responder.add_tracker(uuid, breach, user_id, 0);
 
@@ -1146,7 +1140,7 @@ mod tests {
                 .store_appointment(uuid, &appointment)
                 .unwrap();
 
-            let breach = get_random_breach_from_locator(appointment.locator());
+            let breach = get_random_breach();
             responder.add_tracker(uuid, breach.clone(), user_id, 0);
             to_be_deleted.insert(uuid, breach.penalty_tx.txid());
         }
@@ -1198,7 +1192,7 @@ mod tests {
                 .store_appointment(uuid, &appointment)
                 .unwrap();
 
-            let breach = get_random_breach_from_locator(appointment.locator());
+            let breach = get_random_breach();
             responder.add_tracker(uuid, breach.clone(), user_id, 0);
 
             // Make it so some of the penalties have multiple associated trackers
@@ -1344,7 +1338,7 @@ mod tests {
                 .store_appointment(uuid, &appointment)
                 .unwrap();
 
-            let breach = get_random_breach_from_locator(appointment.locator());
+            let breach = get_random_breach();
             responder.add_tracker(
                 uuid,
                 breach.clone(),
@@ -1381,7 +1375,7 @@ mod tests {
                     .store_appointment(*uuid, &appointment)
                     .unwrap();
 
-                let breach = get_random_breach_from_locator(appointment.locator());
+                let breach = get_random_breach();
                 penalties.push(breach.penalty_tx.txid());
                 responder.add_tracker(*uuid, breach, user_id, 0);
             }
@@ -1412,7 +1406,7 @@ mod tests {
                 .store_appointment(uuid, &appointment)
                 .unwrap();
 
-            let breach = get_random_breach_from_locator(appointment.locator());
+            let breach = get_random_breach();
             transactions.push(breach.clone().penalty_tx.txid());
 
             if i % 2 == 0 {
@@ -1435,7 +1429,7 @@ mod tests {
             .store_appointment(uuid, &appointment)
             .unwrap();
 
-        let breach_rebroadcast = get_random_breach_from_locator(appointment.locator());
+        let breach_rebroadcast = get_random_breach();
         responder.add_tracker(uuid, breach_rebroadcast.clone(), standalone_user_id, 0);
         responder.missed_confirmations.lock().unwrap().insert(
             breach_rebroadcast.penalty_tx.txid(),

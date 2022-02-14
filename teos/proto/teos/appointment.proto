@@ -16,10 +16,9 @@ message Appointment {
 message Tracker {
   // It's the equivalent of an appointment message from data held by the Responder.
 
-  bytes locator = 1;
-  bytes dispute_txid = 2;
-  bytes penalty_txid = 3;
-  bytes penalty_rawtx = 4;
+  bytes dispute_txid = 1;
+  bytes penalty_txid = 2;
+  bytes penalty_rawtx = 3;
 }
 
 message AppointmentData {

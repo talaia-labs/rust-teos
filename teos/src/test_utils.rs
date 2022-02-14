@@ -353,15 +353,8 @@ pub(crate) fn generate_dummy_appointment_with_user(
 pub fn get_random_breach() -> Breach {
     let dispute_tx = get_random_tx();
     let penalty_tx = get_random_tx();
-    let locator = Locator::new(dispute_tx.txid());
 
-    Breach::new(locator, dispute_tx, penalty_tx)
-}
-
-pub fn get_random_breach_from_locator(locator: Locator) -> Breach {
-    let mut breach = get_random_breach();
-    breach.locator = locator;
-    breach
+    Breach::new(dispute_tx, penalty_tx)
 }
 
 pub fn get_random_tracker(user_id: UserId) -> TransactionTracker {

@@ -435,6 +435,20 @@ impl DBM {
         (appointments.len() as f64 / limit as f64).ceil() as usize
     }
 
+    /// Loads the locator associated to a given UUID
+    pub(crate) fn load_locator(&self, uuid: UUID) -> Result<Locator, Error> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT locator FROM appointments WHERE UUID=(?)")
+            .unwrap();
+
+        stmt.query_row([uuid.serialize()], |row| {
+            let raw_locator: Vec<u8> = row.get(0).unwrap();
+            Ok(Locator::deserialize(&raw_locator).unwrap())
+        })
+        .map_err(|_| Error::NotFound)
+    }
+
     /// Stores a [TransactionTracker] into the database.
     pub(crate) fn store_tracker(
         &self,
@@ -465,20 +479,17 @@ impl DBM {
     pub(crate) fn load_tracker(&self, uuid: UUID) -> Result<TransactionTracker, Error> {
         let key = uuid.serialize();
         let mut stmt = self.connection.prepare(
-            "SELECT t.*, a.locator, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID WHERE t.UUID=(?)").unwrap();
+            "SELECT t.*, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID WHERE t.UUID=(?)").unwrap();
 
         stmt.query_row([key], |row| {
             let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
             let dispute_tx = deserialize::<Transaction>(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
             let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
-            let raw_locator: Vec<u8> = row.get(3).unwrap();
-            let locator = Locator::deserialize(&raw_locator).unwrap();
-            let raw_userid: Vec<u8> = row.get(4).unwrap();
+            let raw_userid: Vec<u8> = row.get(3).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 
             Ok(TransactionTracker {
-                locator,
                 dispute_tx,
                 penalty_tx,
                 user_id,
@@ -492,7 +503,7 @@ impl DBM {
         let mut trackers = HashMap::new();
         let mut stmt = self
             .connection
-            .prepare("SELECT t.*, a.locator, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID")
+            .prepare("SELECT t.*, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID")
             .unwrap();
         let mut rows = stmt.query([]).unwrap();
 
@@ -503,14 +514,12 @@ impl DBM {
             let dispute_tx = deserialize::<Transaction>(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
             let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
-            let raw_locator: Vec<u8> = row.get(3).unwrap();
-            let locator = Locator::deserialize(&raw_locator).unwrap();
-            let raw_userid: Vec<u8> = row.get(4).unwrap();
+            let raw_userid: Vec<u8> = row.get(3).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 
             trackers.insert(
                 uuid,
-                TransactionTracker::new(Breach::new(locator, dispute_tx, penalty_tx), user_id),
+                TransactionTracker::new(Breach::new(dispute_tx, penalty_tx), user_id),
             );
         }
 
@@ -899,8 +908,7 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         dbm.store_appointment(uuid, &appointment).unwrap();
 
-        let mut tracker = get_random_tracker(user_id);
-        tracker.locator = appointment.locator();
+        let tracker = get_random_tracker(user_id);
         dbm.store_tracker(uuid, &tracker).unwrap();
 
         // We should get all the appointments back except from the triggered one
@@ -1010,6 +1018,33 @@ mod tests {
         // Test it does not fail even if the user does not exist (it will log though)
         dbm.batch_remove_appointments(&appointments, &HashMap::new());
     }
+    #[test]
+    fn test_load_locator() {
+        let dbm = DBM::in_memory().unwrap();
+
+        // In order to add an appointment we need the associated user to be present
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(21, 42);
+        dbm.store_user(user_id, &user).unwrap();
+
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+
+        assert!(matches!(
+            dbm.store_appointment(uuid, &appointment),
+            Ok { .. }
+        ));
+
+        // We should be able to load the locator now the appointment exists
+        assert_eq!(dbm.load_locator(uuid).unwrap(), appointment.locator());
+    }
+
+    #[test]
+    fn test_load_nonexistent_locator() {
+        let dbm = DBM::in_memory().unwrap();
+
+        let (uuid, _) = generate_dummy_appointment_with_user(get_random_user_id(), None);
+        assert!(matches!(dbm.load_locator(uuid), Err(Error::NotFound)));
+    }
 
     #[test]
     fn test_store_load_tracker() {
@@ -1024,10 +1059,7 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         dbm.store_appointment(uuid, &appointment).unwrap();
 
-        let mut tracker = get_random_tracker(user_id);
-        // Set the locator to match between appointment and tracker
-        tracker.locator = appointment.locator();
-
+        let tracker = get_random_tracker(user_id);
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
         assert_eq!(dbm.load_tracker(uuid).unwrap(), tracker);
     }
@@ -1043,8 +1075,7 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         dbm.store_appointment(uuid, &appointment).unwrap();
 
-        let mut tracker = get_random_tracker(user_id);
-        tracker.locator = appointment.locator();
+        let tracker = get_random_tracker(user_id);
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
         // Try to store it again, but it shouldn't go through
@@ -1089,8 +1120,7 @@ mod tests {
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
             dbm.store_appointment(uuid, &appointment).unwrap();
 
-            let mut tracker = get_random_tracker(user_id);
-            tracker.locator = appointment.locator();
+            let tracker = get_random_tracker(user_id);
             dbm.store_tracker(uuid, &tracker).unwrap();
             trackers.insert(uuid, tracker);
         }
