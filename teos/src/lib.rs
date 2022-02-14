@@ -3,7 +3,7 @@
 //! A watchtower implementation written in Rust.
 
 pub mod protos {
-    tonic::include_proto!("teos.v1");
+    tonic::include_proto!("teos.v2");
 }
 pub mod api;
 pub mod bitcoin_cli;

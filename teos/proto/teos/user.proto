@@ -1,5 +1,5 @@
 syntax = "proto3";
-package teos.v1;
+package teos.v2;
 
 message RegisterRequest {
   // Requests a user registration with the tower. Contains the user id in the form of a compressed ECDSA public key.
