@@ -74,6 +74,30 @@ fn with_grpc(
     warp::any().map(move || grpc_endpoint.clone())
 }
 
+fn match_status(s: &tonic::Status) -> (StatusCode, u8) {
+    let mut status_code = StatusCode::BAD_REQUEST;
+    let error_code = match s.code() {
+        Code::InvalidArgument => errors::WRONG_FIELD_FORMAT,
+        Code::NotFound => {
+            status_code = StatusCode::NOT_FOUND;
+            errors::APPOINTMENT_NOT_FOUND
+        }
+        Code::AlreadyExists => errors::APPOINTMENT_ALREADY_TRIGGERED,
+        Code::ResourceExhausted => errors::REGISTRATION_RESOURCE_EXHAUSTED,
+        Code::Unauthenticated => {
+            status_code = StatusCode::UNAUTHORIZED;
+            errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
+        }
+
+        _ => {
+            log::debug!("Unexpected error ocurred: {}", s.message());
+            errors::UNEXPECTED_ERROR
+        }
+    };
+
+    (status_code, error_code)
+}
+
 async fn register(
     req: msgs::RegisterRequest,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
@@ -93,17 +117,10 @@ async fn register(
     let (body, status) = match grpc_conn.register(req).await {
         Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
         Err(s) => {
-            let error_code = match s.code() {
-                Code::InvalidArgument => errors::WRONG_FIELD_FORMAT,
-                Code::ResourceExhausted => errors::REGISTRATION_RESOURCE_EXHAUSTED,
-                _ => {
-                    log::debug!("Unexpected error ocurred: {}", s.message());
-                    errors::UNEXPECTED_ERROR
-                }
-            };
+            let (status_code, error_code) = match_status(&s);
             (
                 reply::json(&ApiError::new(s.message().into(), error_code)),
-                StatusCode::BAD_REQUEST,
+                status_code,
             )
         }
     };
@@ -136,17 +153,10 @@ async fn add_appointment(
     let (body, status) = match grpc_conn.add_appointment(req).await {
         Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
         Err(s) => {
-            let error_code = match s.code() {
-                Code::Unauthenticated => errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR,
-                Code::AlreadyExists => errors::APPOINTMENT_ALREADY_TRIGGERED,
-                _ => {
-                    log::debug!("Unexpected error ocurred: {}", s.message());
-                    errors::UNEXPECTED_ERROR
-                }
-            };
+            let (status_code, error_code) = match_status(&s);
             (
                 reply::json(&ApiError::new(s.message().into(), error_code)),
-                StatusCode::BAD_REQUEST,
+                status_code,
             )
         }
     };
@@ -175,16 +185,7 @@ async fn get_appointment(
     let (body, status) = match grpc_conn.get_appointment(req).await {
         Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
         Err(s) => {
-            let (error_code, status_code) = match s.code() {
-                Code::Unauthenticated | Code::NotFound => (
-                    errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR,
-                    StatusCode::NOT_FOUND,
-                ),
-                _ => {
-                    log::debug!("Unexpected error ocurred: {}", s.message());
-                    (errors::UNEXPECTED_ERROR, StatusCode::BAD_REQUEST)
-                }
-            };
+            let (status_code, error_code) = match_status(&s);
             (
                 reply::json(&ApiError::new(s.message().into(), error_code)),
                 status_code,
@@ -206,16 +207,7 @@ async fn get_subscription_info(
     let (body, status) = match grpc_conn.get_subscription_info(req).await {
         Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
         Err(s) => {
-            let (error_code, status_code) = match s.code() {
-                Code::Unauthenticated => (
-                    errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR,
-                    StatusCode::NOT_FOUND,
-                ),
-                _ => {
-                    log::debug!("Unexpected error ocurred: {}", s.message());
-                    (errors::UNEXPECTED_ERROR, StatusCode::BAD_REQUEST)
-                }
-            };
+            let (status_code, error_code) = match_status(&s);
             (
                 reply::json(&ApiError::new(s.message().into(), error_code)),
                 status_code,
@@ -738,7 +730,7 @@ mod tests_methods {
                     "Invalid signature or user does not have enough slots available".into(),
                     errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
                 ),
-                StatusCode::BAD_REQUEST
+                StatusCode::UNAUTHORIZED
             )
         );
     }
@@ -864,7 +856,7 @@ mod tests_methods {
             (
                 ApiError::new(
                     "Appointment not found".into(),
-                    errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
+                    errors::APPOINTMENT_NOT_FOUND
                 ),
                 StatusCode::NOT_FOUND
             )
@@ -907,7 +899,7 @@ mod tests_methods {
             (
                 ApiError::new(
                     "Appointment not found".into(),
-                    errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
+                    errors::APPOINTMENT_NOT_FOUND
                 ),
                 StatusCode::NOT_FOUND
             )
@@ -970,7 +962,7 @@ mod tests_methods {
                     "User not found. Have you registered?".into(),
                     errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
                 ),
-                StatusCode::NOT_FOUND
+                StatusCode::UNAUTHORIZED
             )
         );
     }
