@@ -6,6 +6,7 @@ pub const WRONG_FIELD_SIZE: u8 = 4;
 pub const WRONG_FIELD_FORMAT: u8 = 5;
 pub const INVALID_REQUEST_FORMAT: u8 = 6;
 pub const INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR: u8 = 7;
+pub const SERVICE_UNAVAILABLE: u8 = 32;
 
 /// Appointment errors [33, 64]
 pub const APPOINTMENT_FIELD_TOO_SMALL: u8 = 33;

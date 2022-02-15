@@ -88,7 +88,10 @@ fn match_status(s: &tonic::Status) -> (StatusCode, u8) {
             status_code = StatusCode::UNAUTHORIZED;
             errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
         }
-
+        Code::Unavailable => {
+            status_code = StatusCode::SERVICE_UNAVAILABLE;
+            errors::SERVICE_UNAVAILABLE
+        }
         _ => {
             log::debug!("Unexpected error ocurred: {}", s.message());
             errors::UNEXPECTED_ERROR
@@ -367,7 +370,6 @@ mod test_helpers {
         };
 
         let res = req.reply(&router(grpc_conn)).await;
-
         (
             serde_json::from_slice::<ApiError>(res.body()).unwrap(),
             res.status(),
@@ -621,7 +623,9 @@ mod tests_methods {
         run_tower_in_background_with_config, RequestBody,
     };
     use crate::extended_appointment::UUID;
-    use crate::test_utils::{generate_dummy_appointment, get_random_user_id, ApiConfig, DURATION};
+    use crate::test_utils::{
+        generate_dummy_appointment, get_random_user_id, ApiConfig, DURATION, SLOTS,
+    };
     use teos_common::{cryptography, UserId};
 
     #[tokio::test]
@@ -671,6 +675,34 @@ mod tests_methods {
                     errors::REGISTRATION_RESOURCE_EXHAUSTED
                 ),
                 StatusCode::BAD_REQUEST
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_service_unavailable() {
+        let (server_addr, _) = run_tower_in_background_with_config(
+            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+        )
+        .await;
+        let user_id = get_random_user_id();
+
+        // Register with bitcoind down
+        assert_eq!(
+            check_api_error(
+                "/register",
+                RequestBody::Json(serde_json::json!(msgs::RegisterRequest {
+                    user_id: user_id.serialize(),
+                })),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "Service currently unavailable".into(),
+                    errors::SERVICE_UNAVAILABLE
+                ),
+                StatusCode::SERVICE_UNAVAILABLE
             )
         );
     }
@@ -782,6 +814,36 @@ mod tests_methods {
     }
 
     #[tokio::test]
+    async fn test_add_appointment_service_unavailable() {
+        let (server_addr, _) = run_tower_in_background_with_config(
+            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+        )
+        .await;
+        let (user_sk, _) = cryptography::get_random_keypair();
+        let appointment = generate_dummy_appointment(None).inner;
+        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+
+        assert_eq!(
+            check_api_error(
+                "/add_appointment",
+                RequestBody::Json(serde_json::json!(msgs::AddAppointmentRequest {
+                    appointment: Some(appointment.into()),
+                    signature,
+                })),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "Service currently unavailable".into(),
+                    errors::SERVICE_UNAVAILABLE
+                ),
+                StatusCode::SERVICE_UNAVAILABLE
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn test_get_appointment() {
         let server_addr = run_tower_in_background().await;
 
@@ -855,10 +917,10 @@ mod tests_methods {
             .await,
             (
                 ApiError::new(
-                    "Appointment not found".into(),
-                    errors::APPOINTMENT_NOT_FOUND
+                    "User cannot be authenticated".into(),
+                    errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
                 ),
-                StatusCode::NOT_FOUND
+                StatusCode::UNAUTHORIZED
             )
         );
     }
@@ -902,6 +964,41 @@ mod tests_methods {
                     errors::APPOINTMENT_NOT_FOUND
                 ),
                 StatusCode::NOT_FOUND
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_service_unavailable() {
+        let (server_addr, _) = run_tower_in_background_with_config(
+            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+        )
+        .await;
+
+        // Appointment hasn't been added
+        let (user_sk, _) = cryptography::get_random_keypair();
+        let appointment = generate_dummy_appointment(None).inner;
+
+        assert_eq!(
+            check_api_error(
+                "/get_appointment",
+                RequestBody::Json(serde_json::json!(msgs::GetAppointmentRequest {
+                    locator: appointment.locator.serialize(),
+                    signature: cryptography::sign(
+                        format!("get appointment {}", appointment.locator).as_bytes(),
+                        &user_sk,
+                    )
+                    .unwrap()
+                })),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "Service currently unavailable".into(),
+                    errors::SERVICE_UNAVAILABLE
+                ),
+                StatusCode::SERVICE_UNAVAILABLE
             )
         );
     }
@@ -963,6 +1060,34 @@ mod tests_methods {
                     errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
                 ),
                 StatusCode::UNAUTHORIZED
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info_service_unavailable() {
+        let (user_sk, _) = cryptography::get_random_keypair();
+        let (server_addr, _) = run_tower_in_background_with_config(
+            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+        )
+        .await;
+
+        assert_eq!(
+            check_api_error(
+                "/get_subscription_info",
+                RequestBody::Json(serde_json::json!(msgs::GetSubscriptionInfoRequest {
+                    signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
+                        .unwrap(),
+                })),
+                server_addr,
+            )
+            .await,
+            (
+                ApiError::new(
+                    "Service currently unavailable".into(),
+                    errors::SERVICE_UNAVAILABLE
+                ),
+                StatusCode::SERVICE_UNAVAILABLE
             )
         );
     }

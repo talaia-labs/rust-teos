@@ -9,7 +9,7 @@
 
 use rand::Rng;
 use std::convert::TryInto;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 use jsonrpc_http_server::jsonrpc_core::error::ErrorCode as JsonRpcErrorCode;
@@ -66,6 +66,7 @@ pub(crate) struct Blockchain {
     without_blocks: Option<std::ops::RangeFrom<usize>>,
     without_headers: bool,
     malformed_headers: bool,
+    pub unreachable: Arc<Mutex<bool>>,
 }
 
 #[allow(dead_code)]
@@ -138,6 +139,13 @@ impl Blockchain {
         }
     }
 
+    pub fn unreachable(self) -> Self {
+        Self {
+            unreachable: Arc::new(Mutex::new(true)),
+            ..self
+        }
+    }
+
     pub fn fork_at_height(&self, height: usize) -> Self {
         assert!(height + 1 < self.blocks.len());
         let mut blocks = self.blocks.clone();
@@ -150,6 +158,7 @@ impl Blockchain {
         Self {
             blocks,
             without_blocks: None,
+            unreachable: self.unreachable.clone(),
             ..*self
         }
     }
@@ -270,6 +279,9 @@ impl BlockSource for Blockchain {
 
     fn get_best_block<'a>(&'a mut self) -> AsyncBlockSourceResult<'a, (BlockHash, Option<u32>)> {
         Box::pin(async move {
+            if *self.unreachable.lock().unwrap() {
+                return Err(BlockSourceError::transient("Connection refused"));
+            }
             match self.blocks.last() {
                 None => Err(BlockSourceError::transient("empty chain")),
                 Some(block) => {
@@ -443,15 +455,25 @@ pub(crate) async fn create_watcher(
     )
     .await
 }
-
+#[derive(Clone)]
 pub struct ApiConfig {
     slots: u32,
     duration: u32,
+    bitcoind_reachable: bool,
 }
 
 impl ApiConfig {
     pub fn new(slots: u32, duration: u32) -> Self {
-        Self { slots, duration }
+        Self {
+            slots,
+            duration,
+            bitcoind_reachable: true,
+        }
+    }
+
+    pub fn bitcoind_unreachable(&mut self) -> Self {
+        self.bitcoind_reachable = false;
+        self.clone()
     }
 }
 
@@ -460,6 +482,7 @@ impl Default for ApiConfig {
         Self {
             slots: SLOTS,
             duration: DURATION,
+            bitcoind_reachable: true,
         }
     }
 }
@@ -487,8 +510,13 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
     )
     .await;
 
+    let bitcoind_reachable = Arc::new((Mutex::new(api_config.bitcoind_reachable), Condvar::new()));
     let (shutdown_trigger, _) = triggered::trigger();
-    Arc::new(InternalAPI::new(Arc::new(watcher), shutdown_trigger))
+    Arc::new(InternalAPI::new(
+        Arc::new(watcher),
+        bitcoind_reachable,
+        shutdown_trigger,
+    ))
 }
 
 pub(crate) async fn create_api() -> Arc<InternalAPI> {
