@@ -414,9 +414,10 @@ pub fn create_carrier(query: MockedServerQuery) -> Carrier {
         MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
     };
     let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+    let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
     start_server(bitcoind_mock);
 
-    Carrier::new(bitcoin_cli)
+    Carrier::new(bitcoin_cli, bitcoind_reachable)
 }
 
 pub fn create_responder(
@@ -426,7 +427,8 @@ pub fn create_responder(
     server_url: &str,
 ) -> Responder {
     let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
-    let carrier = Carrier::new(bitcoin_cli);
+    let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+    let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
 
     Responder::new(carrier, gatekeeper, dbm, tip)
 }

@@ -1,7 +1,7 @@
 //! Logic related to the Carrier, the component in charge or sending/requesting transaction data from/to `bitcoind`.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::errors;
 use crate::rpc_errors;
@@ -9,8 +9,8 @@ use crate::rpc_errors;
 use bitcoin::util::psbt::serialize::Serialize;
 use bitcoin::{Transaction, Txid};
 use bitcoincore_rpc::{
-    jsonrpc::error::Error::Rpc as RpcError, Client as BitcoindClient,
-    Error::JsonRpc as JsonRpcError, RpcApi,
+    jsonrpc::error::Error::Rpc as RpcError, jsonrpc::error::Error::Transport as TransportError,
+    Client as BitcoindClient, Error::JsonRpc as JsonRpcError, RpcApi,
 };
 
 /// Contains data regarding an attempt of broadcasting a transaction.
@@ -55,6 +55,8 @@ impl DeliveryReceipt {
 pub struct Carrier {
     /// The underlying bitcoin client used by the [Carrier].
     bitcoin_cli: Arc<BitcoindClient>,
+    /// A flag that indicates wether bitcoind is reachable or not.
+    bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
     /// A map of receipts already issued by the [Carrier].
     /// Used to prevent potentially re-sending the same transaction over and over.
     issued_receipts: HashMap<Txid, DeliveryReceipt>,
@@ -62,9 +64,13 @@ pub struct Carrier {
 
 impl Carrier {
     /// Creates a new [Carrier] instance.
-    pub fn new(bitcoin_cli: Arc<BitcoindClient>) -> Self {
+    pub fn new(
+        bitcoin_cli: Arc<BitcoindClient>,
+        bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
+    ) -> Self {
         Carrier {
             bitcoin_cli,
+            bitcoind_reachable,
             issued_receipts: HashMap::new(),
         }
     }
@@ -77,10 +83,28 @@ impl Carrier {
         }
     }
 
+    /// Hangs the process until bitcoind is reachable. If bitcoind is already reachable it just passes trough.
+    fn hang_until_bitcoind_reachable(&self) {
+        let (lock, notifier) = &*self.bitcoind_reachable;
+        let mut reachable = lock.lock().unwrap();
+        while !*reachable {
+            reachable = notifier.wait(reachable).unwrap();
+        }
+    }
+
+    /// Flags bitcoind as unreachable.
+    fn flag_bitcoind_unreachable(&self) {
+        let (lock, _) = &*self.bitcoind_reachable;
+        let mut reachable = lock.lock().unwrap();
+        *reachable = false;
+    }
+
     /// Sends a [Transaction] to the Bitcoin network.
     ///
     /// Returns a [DeliveryReceipt] indicating whether the transaction could be delivered or not.
     pub fn send_transaction(&mut self, tx: &Transaction) -> DeliveryReceipt {
+        self.hang_until_bitcoind_reachable();
+
         if let Some(receipt) = self.issued_receipts.get(&tx.txid()) {
             log::info!("Transaction already sent: {}", tx.txid());
             return receipt.clone();
@@ -133,12 +157,16 @@ impl Carrier {
                         DeliveryReceipt::new(false, None, Some(errors::UNKNOWN_JSON_RPC_EXCEPTION))
                 }
             },
+            Err(JsonRpcError(TransportError(_))) => {
+                // Connection refused, bitcoind is down
+                log::error!("Connection lost with bitcoind, retrying request when possible");
+                self.flag_bitcoind_unreachable();
+                receipt = self.send_transaction(tx);
+            }
             Err(e) => {
-                {
-                    // FIXME: Only logging for now. This needs finer catching. e.g. Connection errors need to be handled here
-                    log::error!("Unexpected error when calling sendrawtransaction: {:?}", e);
-                    receipt = DeliveryReceipt::new(false, None, None)
-                }
+                // TODO: This may need finer catching.
+                log::error!("Unexpected error when calling sendrawtransaction: {:?}", e);
+                receipt = DeliveryReceipt::new(false, None, None)
             }
         }
 
@@ -148,6 +176,8 @@ impl Carrier {
 
     /// Queries a [Transaction] from our node. Returns it if found, [None] otherwise.
     pub fn get_transaction(&self, txid: &Txid) -> Option<Transaction> {
+        self.hang_until_bitcoind_reachable();
+
         match self.bitcoin_cli.get_raw_transaction(txid, None) {
             Ok(tx) => Some(bitcoin::consensus::deserialize(&tx.serialize()).unwrap()),
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
@@ -163,7 +193,13 @@ impl Carrier {
                     None
                 }
             },
-            // FIXME: This needs finer catching. e.g. Connection errors need to be handled here
+            Err(JsonRpcError(TransportError(_))) => {
+                // Connection refused, bitcoind is down
+                log::error!("Connection lost with bitcoind, retrying request when possible");
+                self.flag_bitcoind_unreachable();
+                self.get_transaction(txid)
+            }
+            // TODO: This may need finer catching.
             Err(e) => {
                 log::error!(
                     "Unexpected JSONRPCError when calling getrawtransaction: {}",
@@ -176,6 +212,8 @@ impl Carrier {
 
     /// Queries the confirmation count of a given [Transaction]. Returns it if the transaction can be found, [None] otherwise.
     pub fn get_confirmations(&self, txid: &Txid) -> Option<u32> {
+        self.hang_until_bitcoind_reachable();
+
         match self.bitcoin_cli.get_raw_transaction_info(txid, None) {
             Ok(tx_data) => tx_data.confirmations,
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
@@ -191,7 +229,13 @@ impl Carrier {
                     None
                 }
             },
-            // FIXME: This needs finer catching. e.g. Connection errors need to be handled here
+            Err(JsonRpcError(TransportError(_))) => {
+                // Connection refused, bitcoind is down
+                log::error!("Connection lost with bitcoind, retrying request when possible");
+                self.flag_bitcoind_unreachable();
+                self.get_confirmations(txid)
+            }
+            // TODO: This may need finer catching.
             Err(e) => {
                 log::error!(
                     "Unexpected JSONRPCError when calling getrawtransaction: {}",
@@ -206,6 +250,7 @@ impl Carrier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
 
     use crate::rpc_errors::RPC_INVALID_ADDRESS_OR_KEY;
     use crate::test_utils::{
@@ -226,10 +271,11 @@ mod tests {
     #[test]
     fn test_clear_receipts() {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
-        let mut carrier = Carrier::new(bitcoin_cli);
+        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
 
         // Lets add some dummy data into the cache
         for i in 0..10 {
@@ -248,10 +294,11 @@ mod tests {
     #[test]
     fn test_send_transaction_ok() {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
-        let mut carrier = Carrier::new(bitcoin_cli);
+        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
         let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -268,10 +315,11 @@ mod tests {
         let bitcoind_mock = BitcoindMock::new(MockOptions::with_error(
             rpc_errors::RPC_VERIFY_REJECTED as i64,
         ));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
-        let mut carrier = Carrier::new(bitcoin_cli);
+        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
         let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -287,10 +335,11 @@ mod tests {
     fn test_send_transaction_verify_error() {
         let bitcoind_mock =
             BitcoindMock::new(MockOptions::with_error(rpc_errors::RPC_VERIFY_ERROR as i64));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
-        let mut carrier = Carrier::new(bitcoin_cli);
+        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
         let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -309,10 +358,11 @@ mod tests {
             Some(rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN as i64),
             Some(expected_confirmations),
         ));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
-        let mut carrier = Carrier::new(bitcoin_cli);
+        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
         let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -328,10 +378,11 @@ mod tests {
     fn test_send_transaction_unexpected_error() {
         let bitcoind_mock =
             BitcoindMock::new(MockOptions::with_error(rpc_errors::RPC_MISC_ERROR as i64));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
-        let mut carrier = Carrier::new(bitcoin_cli);
+        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
         let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -345,28 +396,40 @@ mod tests {
 
     #[test]
     fn test_send_transaction_connection_error() {
-        // Try to connect to an nonexisting server.
-        let bitcoin_cli =
-            Arc::new(BitcoindClient::new("http://localhost:1234", Auth::None).unwrap());
-        let mut carrier = Carrier::new(bitcoin_cli);
+        // Try to connect to an offline bitcoind.
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let bitcoind_reachable = Arc::new((Mutex::new(false), Condvar::new()));
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable.clone());
+
         let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
-        let r = carrier.send_transaction(&tx);
+        let delay = std::time::Duration::new(3, 0);
 
-        assert!(!r.delivered);
-        assert_eq!(r.confirmations, None);
-        assert_eq!(r.reason, None);
+        thread::spawn(move || {
+            thread::sleep(delay);
+            let (reachable, notifier) = &*bitcoind_reachable;
+            *reachable.lock().unwrap() = true;
+            notifier.notify_all();
+        });
 
-        // Check the receipt is on the cache
-        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
+        let before = std::time::Instant::now();
+        carrier.send_transaction(&tx);
+
+        // Check the request has hanged for ~delay
+        assert_eq!(
+            (std::time::Instant::now() - before).as_secs(),
+            delay.as_secs()
+        );
     }
 
     #[test]
     fn get_transaction_ok() {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
-        let carrier = Carrier::new(bitcoin_cli);
+        let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         let r = carrier.get_transaction(&txid);
 
@@ -377,10 +440,11 @@ mod tests {
     fn get_transaction_not_found() {
         let bitcoind_mock =
             BitcoindMock::new(MockOptions::with_error(RPC_INVALID_ADDRESS_OR_KEY as i64));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock);
 
-        let carrier = Carrier::new(bitcoin_cli);
+        let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         let r = carrier.get_transaction(&txid);
 
@@ -389,13 +453,29 @@ mod tests {
 
     #[test]
     fn get_transaction_connection_error() {
-        // Try to connect to an nonexisting server.
-        let bitcoin_cli =
-            Arc::new(BitcoindClient::new("http://localhost:1234", Auth::None).unwrap());
-        let carrier = Carrier::new(bitcoin_cli);
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
-        let r = carrier.get_transaction(&txid);
+        // Try to connect to an offline bitcoind.
+        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let bitcoind_reachable = Arc::new((Mutex::new(false), Condvar::new()));
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable.clone());
 
-        assert_eq!(r, None);
+        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let delay = std::time::Duration::new(3, 0);
+
+        thread::spawn(move || {
+            thread::sleep(delay);
+            let (reachable, notifier) = &*bitcoind_reachable;
+            *reachable.lock().unwrap() = true;
+            notifier.notify_all();
+        });
+
+        let before = std::time::Instant::now();
+        carrier.get_transaction(&txid);
+
+        // Check the request has hanged for ~delay
+        assert_eq!(
+            (std::time::Instant::now() - before).as_secs(),
+            delay.as_secs()
+        );
     }
 }

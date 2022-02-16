@@ -165,7 +165,8 @@ pub async fn main() {
         conf.expiry_delta,
         dbm.clone(),
     ));
-    let carrier = Carrier::new(rpc);
+
+    let carrier = Carrier::new(rpc, bitcoind_reachable.clone());
     let responder = Arc::new(Responder::new(
         carrier,
         gatekeeper.clone(),
