@@ -1,4 +1,3 @@
-use futures::executor::block_on;
 use std::convert::TryInto;
 use std::sync::{Arc, Condvar, Mutex};
 use tonic::{Code, Request, Response, Status};
@@ -101,11 +100,10 @@ impl PublicTowerServices for Arc<InternalAPI> {
         );
         let locator = appointment.locator;
 
-        // This is block_on because MutexGuard cannot be sent between threads safely.
-        match block_on(
-            self.watcher
-                .add_appointment(appointment, req_data.signature),
-        ) {
+        match self
+            .watcher
+            .add_appointment(appointment, req_data.signature)
+        {
             Ok((receipt, available_slots, subscription_expiry)) => {
                 Ok(Response::new(msgs::AddAppointmentResponse {
                     locator: locator.serialize(),
@@ -356,7 +354,6 @@ mod tests_private_api {
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
-            .await
             .unwrap();
 
         let response = internal_api
@@ -431,7 +428,6 @@ mod tests_private_api {
             internal_api
                 .watcher
                 .add_appointment(appointment.clone(), user_signature)
-                .await
                 .unwrap();
         }
 
@@ -519,7 +515,6 @@ mod tests_private_api {
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
-            .await
             .unwrap();
 
         let response = internal_api
@@ -850,7 +845,6 @@ mod tests_public_api {
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
-            .await
             .unwrap();
 
         // Get the appointment through the API

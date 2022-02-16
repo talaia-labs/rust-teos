@@ -9,7 +9,6 @@
  * at your option.
 */
 
-use futures::executor::block_on;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -90,7 +89,7 @@ impl<'a> BitcoindClient<'a> {
         };
 
         // Test that bitcoind is reachable
-        match block_on(client.get_best_block_hash_and_height()) {
+        match client.get_best_block_hash_and_height().await {
             Ok(_) => Ok(client),
             Err(e) => Err(e),
         }

@@ -166,19 +166,21 @@ pub async fn main() {
         dbm.clone(),
     ));
     let carrier = Carrier::new(rpc);
-    let responder = Arc::new(Responder::new(carrier, gatekeeper.clone(), dbm.clone(), tip).await);
-    let watcher = Arc::new(
-        Watcher::new(
-            gatekeeper.clone(),
-            responder.clone(),
-            last_n_blocks,
-            tip,
-            tower_sk,
-            UserId(tower_pk),
-            dbm.clone(),
-        )
-        .await,
-    );
+    let responder = Arc::new(Responder::new(
+        carrier,
+        gatekeeper.clone(),
+        dbm.clone(),
+        tip,
+    ));
+    let watcher = Arc::new(Watcher::new(
+        gatekeeper.clone(),
+        responder.clone(),
+        last_n_blocks,
+        tip,
+        tower_sk,
+        UserId(tower_pk),
+        dbm.clone(),
+    ));
 
     if watcher.is_fresh() & responder.is_fresh() & gatekeeper.is_fresh() {
         log::info!("Fresh bootstrap");

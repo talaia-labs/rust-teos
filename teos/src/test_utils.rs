@@ -419,7 +419,7 @@ pub fn create_carrier(query: MockedServerQuery) -> Carrier {
     Carrier::new(bitcoin_cli)
 }
 
-pub async fn create_responder(
+pub fn create_responder(
     tip: ValidatedBlockHeader,
     gatekeeper: Arc<Gatekeeper>,
     dbm: Arc<Mutex<DBM>>,
@@ -428,7 +428,7 @@ pub async fn create_responder(
     let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
     let carrier = Carrier::new(bitcoin_cli);
 
-    Responder::new(carrier, gatekeeper, dbm, tip).await
+    Responder::new(carrier, gatekeeper, dbm, tip)
 }
 
 pub(crate) async fn create_watcher(
@@ -453,7 +453,6 @@ pub(crate) async fn create_watcher(
         tower_id,
         dbm,
     )
-    .await
 }
 #[derive(Clone)]
 pub struct ApiConfig {
@@ -499,8 +498,7 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
         EXPIRY_DELTA,
         dbm.clone(),
     ));
-    let responder =
-        create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
+    let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
     let watcher = create_watcher(
         &mut chain,
         Arc::new(responder),

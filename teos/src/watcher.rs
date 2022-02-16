@@ -1,6 +1,5 @@
 //! Logic related to the Watcher, the components in charge of watching for breaches on chain.
 
-use futures::executor::block_on;
 use log;
 
 use std::collections::{HashMap, HashSet};
@@ -127,7 +126,7 @@ impl LocatorCache {
     #[allow(dead_code)]
     /// FIXME: Currently dead code. Fixes the cache by removing reorged blocks and adding the new valid ones.
     /// This should be called within Watcher::block_disconnected).
-    async fn fix(&mut self, header: &BlockHeader) {
+    fn fix(&mut self, header: &BlockHeader) {
         for locator in self.tx_in_block[&header.block_hash()].iter() {
             self.cache.remove(locator);
         }
@@ -247,7 +246,7 @@ pub struct Watcher {
 
 impl Watcher {
     /// Creates a new [Watcher] instance.
-    pub async fn new(
+    pub fn new(
         gatekeeper: Arc<Gatekeeper>,
         responder: Arc<Responder>,
         last_n_blocks: Vec<ValidatedBlock>,
@@ -307,7 +306,7 @@ impl Watcher {
     /// monitored by the [Watcher]. An [ExtendedAppointment] (constructed from the [Appointment]) will be persisted on disk.
     /// In case the locator for the given appointment can be found in the cache (meaning the appointment has been
     /// triggered recently) the data will be passed to the [Responder] straightaway (modulo it being valid).
-    pub async fn add_appointment(
+    pub fn add_appointment(
         &self,
         appointment: Appointment,
         user_signature: String,
@@ -362,7 +361,7 @@ impl Watcher {
                             .unwrap();
 
                         let breach = Breach::new(dispute_tx.clone(), penalty_tx);
-                        let receipt = self.responder.handle_breach(uuid, breach, user_id).await;
+                        let receipt = self.responder.handle_breach(uuid, breach, user_id);
 
                         if receipt.delivered() {
                             log::info!("Appointment went straight to the Responder");
@@ -757,13 +756,11 @@ impl chain::Listen for Watcher {
                     uuid
                 );
 
-                //DISCUSS: This cannot be async given block_connected is not.
-                // Is there any alternative? Remove async from here altogether?
-                let receipt = block_on(self.responder.handle_breach(
+                let receipt = self.responder.handle_breach(
                     uuid,
                     breach,
                     self.appointments.lock().unwrap()[&uuid].user_id,
-                ));
+                );
 
                 if receipt.delivered() {
                     delivered_appointments.insert(uuid);
@@ -861,8 +858,7 @@ mod tests {
             EXPIRY_DELTA,
             dbm.clone(),
         ));
-        let responder =
-            create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
+        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
         create_watcher(
             chain,
             Arc::new(responder),
@@ -973,7 +969,6 @@ mod tests {
             let user_sig = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
             watcher
                 .add_appointment(appointment.clone(), user_sig.clone())
-                .await
                 .unwrap();
         }
 
@@ -1040,7 +1035,6 @@ mod tests {
             let user_sig = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
             let (receipt, slots, expiry) = watcher
                 .add_appointment(appointment.clone(), user_sig.clone())
-                .await
                 .unwrap();
 
             assert_appointment_added(slots, SLOTS - 1, expiry, receipt, &user_sig, tower_id);
@@ -1054,7 +1048,6 @@ mod tests {
         let user2_sig = cryptography::sign(&appointment.serialize(), &user2_sk).unwrap();
         let (receipt, slots, expiry) = watcher
             .add_appointment(appointment.clone(), user2_sig.clone())
-            .await
             .unwrap();
 
         assert_appointment_added(slots, SLOTS - 1, expiry, receipt, &user2_sig, tower_id);
@@ -1080,14 +1073,12 @@ mod tests {
             cryptography::sign(&triggered_appointment.inner.serialize(), &user_sk).unwrap();
         watcher
             .add_appointment(triggered_appointment.inner.clone(), signature.clone())
-            .await
             .unwrap();
 
         let breach = get_random_breach();
         watcher.responder.add_tracker(uuid, breach, user_id, 0);
-        let receipt = watcher
-            .add_appointment(triggered_appointment.inner, signature)
-            .await;
+        let receipt = watcher.add_appointment(triggered_appointment.inner, signature);
+
         assert!(matches!(
             receipt,
             Err(AddAppointmentFailure::AlreadyTriggered)
@@ -1101,7 +1092,6 @@ mod tests {
             cryptography::sign(&appointment_in_cache.inner.serialize(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
             .add_appointment(appointment_in_cache.inner.clone(), user_sig.clone())
-            .await
             .unwrap();
 
         // The appointment should have been accepted, slots should have been decreased, and data should have been deleted from
@@ -1135,7 +1125,6 @@ mod tests {
             cryptography::sign(&invalid_appointment.inner.serialize(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
             .add_appointment(invalid_appointment.inner.clone(), user_sig.clone())
-            .await
             .unwrap();
 
         assert_appointment_added(slots, SLOTS - 4, expiry, receipt, &user_sig, tower_id);
@@ -1162,7 +1151,6 @@ mod tests {
         let user_sig = cryptography::sign(&invalid_appointment.serialize(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
             .add_appointment(invalid_appointment.clone(), user_sig.clone())
-            .await
             .unwrap();
 
         assert_appointment_added(slots, SLOTS - 4, expiry, receipt, &user_sig, tower_id);
@@ -1181,9 +1169,7 @@ mod tests {
         let user3_sig = String::from_utf8((0..65).collect()).unwrap();
 
         assert!(matches!(
-            watcher
-                .add_appointment(appointment.clone(), user3_sig.clone())
-                .await,
+            watcher.add_appointment(appointment.clone(), user3_sig.clone()),
             Err(AddAppointmentFailure::AuthenticationFailure)
         ));
         // Data should not be in the database
@@ -1208,7 +1194,7 @@ mod tests {
         let new_app_sig = cryptography::sign(&new_appointment.serialize(), &user_sk).unwrap();
 
         assert!(matches!(
-            watcher.add_appointment(new_appointment, new_app_sig).await,
+            watcher.add_appointment(new_appointment, new_app_sig),
             Err(AddAppointmentFailure::NotEnoughSlots)
         ));
         // Data should not be in the database
@@ -1228,9 +1214,7 @@ mod tests {
             .subscription_expiry = START_HEIGHT as u32;
 
         assert!(matches!(
-            watcher
-                .add_appointment(appointment.clone(), user2_sig.clone())
-                .await,
+            watcher.add_appointment(appointment.clone(), user2_sig.clone()),
             Err(AddAppointmentFailure::SubscriptionExpired { .. })
         ));
         // Data should not be in the database
@@ -1263,7 +1247,6 @@ mod tests {
                 appointment.clone(),
                 cryptography::sign(&appointment.serialize(), &user_sk).unwrap(),
             )
-            .await
             .unwrap();
 
         let message = format!("get appointment {}", appointment.locator);
@@ -1652,12 +1635,10 @@ mod tests {
         let user_sig = cryptography::sign(&appointment.inner.serialize(), &user_sk).unwrap();
         watcher
             .add_appointment(appointment.inner.clone(), user_sig)
-            .await
             .unwrap();
         let user2_sig = cryptography::sign(&appointment.inner.serialize(), &user2_sk).unwrap();
         watcher
             .add_appointment(appointment.inner.clone(), user2_sig)
-            .await
             .unwrap();
 
         watcher
@@ -1722,7 +1703,6 @@ mod tests {
         let uuid = UUID::new(appointment.locator(), user2_id);
         watcher
             .add_appointment(appointment.inner.clone(), sig)
-            .await
             .unwrap();
 
         assert!(watcher.appointments.lock().unwrap().contains_key(&uuid));
@@ -1763,7 +1743,6 @@ mod tests {
         let uuid = UUID::new(appointment.locator(), user2_id);
         watcher
             .add_appointment(appointment.inner.clone(), sig)
-            .await
             .unwrap();
 
         // Set the carrier response
@@ -1809,7 +1788,6 @@ mod tests {
         let uuid = UUID::new(appointment.locator(), user2_id);
         watcher
             .add_appointment(appointment.inner.clone(), sig)
-            .await
             .unwrap();
 
         watcher.block_connected(
