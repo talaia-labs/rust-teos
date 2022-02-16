@@ -22,7 +22,9 @@ use teos_common::UserId;
 pub struct InternalAPI {
     /// A [Watcher] instance.
     watcher: Arc<Watcher>,
+    /// A flag that indicates wether bitcoind is reachable or not.
     bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
+    /// A signal indicating the tower is shuting down.
     shutdown_trigger: Trigger,
 }
 
@@ -39,6 +41,8 @@ impl InternalAPI {
             shutdown_trigger,
         }
     }
+
+    /// Checks whether bitcoind is reachable.
     fn check_service_unavailable(&self) -> Result<(), Status> {
         if *(&*self.bitcoind_reachable.0.lock().unwrap()) {
             Ok(())
@@ -255,6 +259,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             n_registered_users: self.watcher.get_registered_users_count() as u32,
             n_watcher_appointments: self.watcher.get_appointments_count() as u32,
             n_responder_trackers: self.watcher.get_trackers_count() as u32,
+            bitcoind_reachable: self.check_service_unavailable().is_ok(),
         }))
     }
 

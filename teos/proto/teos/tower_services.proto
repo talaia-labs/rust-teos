@@ -8,10 +8,11 @@ import "google/protobuf/empty.proto";
 message GetTowerInfoResponse {
   // Response with information about the tower.
 
-  uint32 n_watcher_appointments = 1;
-  uint32 n_responder_trackers = 2;
-  uint32 n_registered_users = 3;
-  bytes tower_id = 4;
+  bytes tower_id = 1;
+  uint32 n_registered_users = 2;
+  uint32 n_watcher_appointments = 3;
+  uint32 n_responder_trackers = 4;
+  bool bitcoind_reachable = 5;
 }
 
 service PublicTowerServices {
