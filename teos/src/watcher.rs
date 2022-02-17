@@ -221,6 +221,22 @@ enum DeletionReason {
     Accepted,
 }
 
+/// Types of new appointments stored in the [Watcher].
+#[derive(Debug, PartialEq, Eq)]
+enum StoredAppointment {
+    New,
+    Update,
+    Collision,
+}
+
+/// Types of new triggered appointments handled by the [Watcher].
+#[derive(Debug, PartialEq, Eq)]
+enum TriggeredAppointment {
+    Accepted,
+    Rejected,
+    Invalid,
+}
+
 /// Component in charge of watching for triggers in the chain (aka channel breaches for lightning).
 #[derive(Debug)]
 pub struct Watcher {
@@ -342,87 +358,25 @@ impl Watcher {
             .add_update_appointment(user_id, uuid, &extended_appointment)
             .map_err(|_| AddAppointmentFailure::NotEnoughSlots)?;
 
-        let locator = extended_appointment.locator();
-        match self.locator_cache.lock().unwrap().get_tx(locator) {
+        // FIXME: There's an edge case here if store_triggered_appointment is called and bitcoind is unreachable.
+        // This will hang, the request will timeout but be accepted. However, the user will not be handed the receipt.
+        // This could be fixed adding a thread to take care of storing while the main thread returns the receipt.
+        // Not fixing this atm since working with threads that call self.method is surprisingly non-trivial.
+        match self
+            .locator_cache
+            .lock()
+            .unwrap()
+            .get_tx(extended_appointment.locator())
+        {
             // Appointments that were triggered in blocks held in the cache
             Some(dispute_tx) => {
-                log::info!("Trigger for locator {} found in cache", locator);
-                match cryptography::decrypt(
-                    &extended_appointment.encrypted_blob(),
-                    &dispute_tx.txid(),
-                ) {
-                    Ok(penalty_tx) => {
-                        // Data needs to be added the database straightaway since appointments are
-                        // FKs to trackers. If handle breach fails, data will be deleted later.
-                        self.dbm
-                            .lock()
-                            .unwrap()
-                            .store_appointment(uuid, &extended_appointment)
-                            .unwrap();
-
-                        let breach = Breach::new(dispute_tx.clone(), penalty_tx);
-                        let receipt = self.responder.handle_breach(uuid, breach, user_id);
-
-                        if receipt.delivered() {
-                            log::info!("Appointment went straight to the Responder");
-                        } else {
-                            // DISCUSS: We could either free the slots or keep it occupied as if this was misbehavior.
-                            // Keeping it for now.
-                            log::warn!(
-                                "Appointment bounced in the Responder. Reason: {:?}",
-                                receipt.reason()
-                            );
-
-                            self.dbm.lock().unwrap().remove_appointment(uuid);
-                        }
-                    }
-
-                    // DISCUSS: Check if this makes sense or if we should just drop the data altogether
-                    // If data inside the encrypted blob is invalid, the appointment is accepted but the data is dropped.
-                    // (same as with data that bounces in the Responder). This reduces the appointment slot count so it
-                    // could be used to discourage user misbehavior.
-                    Err(_) => log::info!("The appointment contained invalid data {}", locator),
-                }
+                self.store_triggered_appointment(uuid, &extended_appointment, user_id, dispute_tx);
             }
             // Regular appointments that have not been triggered (or, at least, not recently)
             None => {
-                self.appointments
-                    .lock()
-                    .unwrap()
-                    .insert(uuid, extended_appointment.get_summary());
-                let mut locator_uuid_map = self.locator_uuid_map.lock().unwrap();
-                if locator_uuid_map.contains_key(&locator) {
-                    // Either an update or an appointment from another user sharing the same locator
-                    if locator_uuid_map.get_mut(&locator).unwrap().insert(uuid) {
-                        log::debug!(
-                            "Adding an additional appointment to locator {}: {}",
-                            locator,
-                            uuid
-                        );
-                        self.dbm
-                            .lock()
-                            .unwrap()
-                            .store_appointment(uuid, &extended_appointment)
-                            .unwrap();
-                    } else {
-                        log::debug!("Update received for {}, locator map not modified", uuid);
-                        self.dbm
-                            .lock()
-                            .unwrap()
-                            .update_appointment(uuid, &extended_appointment);
-                    }
-                } else {
-                    // New appointment
-                    locator_uuid_map.insert(locator, HashSet::from_iter(vec![uuid]));
-
-                    self.dbm
-                        .lock()
-                        .unwrap()
-                        .store_appointment(uuid, &extended_appointment)
-                        .unwrap();
-                }
+                self.store_appointment(uuid, &extended_appointment);
             }
-        }
+        };
 
         let mut receipt = AppointmentReceipt::new(
             extended_appointment.user_signature,
@@ -431,6 +385,116 @@ impl Watcher {
         receipt.sign(&self.signing_key);
 
         Ok((receipt, available_slots, expiry))
+    }
+
+    /// Stores an appointment in the [Watcher] memory and into the database (or updates it if it already exists).
+    ///
+    /// Data is stored in `locator_uuid_map` and `appointments`.
+    fn store_appointment(
+        &self,
+        uuid: UUID,
+        appointment: &ExtendedAppointment,
+    ) -> StoredAppointment {
+        self.appointments
+            .lock()
+            .unwrap()
+            .insert(uuid, appointment.get_summary());
+        let mut locator_uuid_map = self.locator_uuid_map.lock().unwrap();
+        if locator_uuid_map.contains_key(&appointment.locator()) {
+            // Either an update or an appointment from another user sharing the same locator
+            if locator_uuid_map
+                .get_mut(&appointment.locator())
+                .unwrap()
+                .insert(uuid)
+            {
+                log::debug!(
+                    "Adding an additional appointment to locator {}: {}",
+                    appointment.locator(),
+                    uuid
+                );
+                self.dbm
+                    .lock()
+                    .unwrap()
+                    .store_appointment(uuid, &appointment)
+                    .unwrap();
+                StoredAppointment::Collision
+            } else {
+                log::debug!("Update received for {}, locator map not modified", uuid);
+                self.dbm
+                    .lock()
+                    .unwrap()
+                    .update_appointment(uuid, &appointment);
+                StoredAppointment::Update
+            }
+        } else {
+            // New appointment
+            locator_uuid_map.insert(appointment.locator(), HashSet::from_iter(vec![uuid]));
+
+            self.dbm
+                .lock()
+                .unwrap()
+                .store_appointment(uuid, &appointment)
+                .unwrap();
+            StoredAppointment::New
+        }
+    }
+
+    /// Stores and already triggered appointment in the database and hands it to the [Responder].
+    ///
+    /// If the appointment is rejected by the [Responder] (i.e. for being invalid), the data is wiped
+    /// from the database but the slot is not freed.
+    fn store_triggered_appointment(
+        &self,
+        uuid: UUID,
+        appointment: &ExtendedAppointment,
+        user_id: UserId,
+        dispute_tx: &Transaction,
+    ) -> TriggeredAppointment {
+        log::info!(
+            "Trigger for locator {} found in cache",
+            appointment.locator()
+        );
+        match cryptography::decrypt(&appointment.encrypted_blob(), &dispute_tx.txid()) {
+            Ok(penalty_tx) => {
+                // Data needs to be added the database straightaway since appointments are
+                // FKs to trackers. If handle breach fails, data will be deleted later.
+                self.dbm
+                    .lock()
+                    .unwrap()
+                    .store_appointment(uuid, &appointment)
+                    .unwrap();
+
+                let breach = Breach::new(dispute_tx.clone(), penalty_tx);
+                let receipt = self.responder.handle_breach(uuid, breach, user_id);
+
+                if receipt.delivered() {
+                    log::info!("Appointment went straight to the Responder");
+                    TriggeredAppointment::Accepted
+                } else {
+                    // DISCUSS: We could either free the slots or keep it occupied as if this was misbehavior.
+                    // Keeping it for now.
+                    log::warn!(
+                        "Appointment bounced in the Responder. Reason: {:?}",
+                        receipt.reason()
+                    );
+
+                    self.dbm.lock().unwrap().remove_appointment(uuid);
+                    TriggeredAppointment::Rejected
+                }
+            }
+
+            // DISCUSS: Check if this makes sense or if we should just drop the data altogether
+            // If data inside the encrypted blob is invalid, the appointment is accepted but the data is dropped.
+            // (same as with data that bounces in the Responder). This reduces the appointment slot count so it
+            // could be used to discourage user misbehavior.
+            Err(_) => {
+                log::info!(
+                    "The appointment contained invalid data {}",
+                    appointment.locator()
+                );
+                TriggeredAppointment::Invalid
+            }
+        }
     }
 
     /// Retrieves an [Appointment] from the tower.
@@ -1221,6 +1285,128 @@ mod tests {
         assert!(matches!(
             watcher.dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_store_appointment() {
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
+        let watcher = init_watcher(&mut chain).await;
+
+        // Register the user
+        let (_, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        watcher.register(user_id).unwrap();
+
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+
+        // Storing a new appointment should return New
+        assert_eq!(
+            watcher.store_appointment(uuid, &appointment),
+            StoredAppointment::New,
+        );
+        assert_eq!(
+            *watcher.appointments.lock().unwrap(),
+            HashMap::from_iter([(uuid, appointment.get_summary())])
+        );
+        assert_eq!(
+            *watcher.locator_uuid_map.lock().unwrap(),
+            HashMap::from_iter([(appointment.locator(), HashSet::from_iter([uuid]))])
+        );
+
+        // Adding an appointment with the same UUID should be seen as an updated
+        // The appointment data here does not matter much, just the UUID and the locator since they are tied to each other.
+        assert_eq!(
+            watcher.store_appointment(uuid, &appointment),
+            StoredAppointment::Update,
+        );
+        assert_eq!(
+            *watcher.appointments.lock().unwrap(),
+            HashMap::from_iter([(uuid, appointment.get_summary())])
+        );
+        assert_eq!(
+            *watcher.locator_uuid_map.lock().unwrap(),
+            HashMap::from_iter([(appointment.locator(), HashSet::from_iter([uuid]))])
+        );
+
+        // Adding the same appointment (same locator) with a different UUID should be seen as a collision.
+        // This means that a different user is sending an appointment with the same locator.
+        let new_uuid = generate_uuid();
+        assert_eq!(
+            watcher.store_appointment(new_uuid, &appointment),
+            StoredAppointment::Collision,
+        );
+        assert_eq!(
+            *watcher.appointments.lock().unwrap(),
+            HashMap::from_iter([
+                (uuid, appointment.get_summary()),
+                (new_uuid, appointment.get_summary())
+            ])
+        );
+        assert_eq!(
+            *watcher.locator_uuid_map.lock().unwrap(),
+            HashMap::from_iter([(appointment.locator(), HashSet::from_iter([uuid, new_uuid]))])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_store_triggered_appointment() {
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
+        let watcher = init_watcher(&mut chain).await;
+
+        // Register the user
+        let (_, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        watcher.register(user_id).unwrap();
+
+        let dispute_tx = get_random_tx();
+        let (uuid, appointment) =
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+
+        // Valid triggered appointments should be accepted by the Responder
+        assert_eq!(
+            watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx),
+            TriggeredAppointment::Accepted,
+        );
+        // In this case the appointment is kept in the Responder and, therefore, in the database
+        assert!(watcher.responder.has_tracker(uuid));
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            Ok(ExtendedAppointment { .. })
+        ));
+
+        // A properly formatted but invalid transaction should be rejected by the Responder
+        // Update the Responder with a new Carrier that will reject the transaction
+        *watcher.responder.get_carrier().lock().unwrap() = create_carrier(
+            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+        );
+        let dispute_tx = get_random_tx();
+        let (uuid, appointment) =
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+        assert_eq!(
+            watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx),
+            TriggeredAppointment::Rejected,
+        );
+        // In this case the appointment is not kept in the Responder nor in the database
+        assert!(!watcher.responder.has_tracker(uuid));
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            Err { .. }
+        ));
+
+        // Invalid triggered appointments should not be passed to the Responder
+        // Use a dispute_tx that does not match the appointment to replicate a decryption error
+        // (the same applies to invalid formatted transactions)
+        let uuid = generate_uuid();
+        assert_eq!(
+            watcher.store_triggered_appointment(uuid, &appointment, user_id, &get_random_tx()),
+            TriggeredAppointment::Invalid,
+        );
+        // The appointment is not kept anywhere
+        assert!(!watcher.responder.has_tracker(uuid));
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            Err { .. }
         ));
     }
 
