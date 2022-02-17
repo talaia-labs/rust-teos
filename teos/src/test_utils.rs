@@ -105,12 +105,7 @@ impl Blockchain {
         self
     }
 
-    pub fn with_height_and_txs(mut self, height: usize, tx_count: Option<u8>) -> Self {
-        let tx_count = match tx_count {
-            Some(x) => x,
-            None => 10,
-        };
-
+    pub fn with_height_and_txs(mut self, height: usize, tx_count: u8) -> Self {
         for _ in 1..=height {
             self.generate(Some((0..tx_count).map(|_| get_random_tx()).collect()));
         }
@@ -490,7 +485,7 @@ impl Default for ApiConfig {
 
 pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<InternalAPI> {
     let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
-    let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+    let mut chain = Blockchain::default().with_height(START_HEIGHT);
 
     let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
     let gk = Arc::new(Gatekeeper::new(

@@ -601,14 +601,14 @@ mod tests {
 
     fn init_responder(mocked_query: MockedServerQuery) -> Responder {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
         init_responder_with_chain_and_dbm(mocked_query, &chain, dbm)
     }
 
     #[test]
     fn test_new() {
         // A fresh responder has no associated data
-        let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let chain = Blockchain::default().with_height(START_HEIGHT);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let responder =
             init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm.clone());
@@ -1271,7 +1271,7 @@ mod tests {
     #[test]
     fn test_block_connected() {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let responder = init_responder_with_chain_and_dbm(
             MockedServerQuery::Confirmations(constants::IRREVOCABLY_RESOLVED + 1),
             &chain,

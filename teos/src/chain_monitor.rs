@@ -171,7 +171,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_best_tip_common() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
 
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
@@ -194,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_best_tip_better() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let new_tip = chain.tip();
         let old_tip = chain.at_height(START_HEIGHT - 1);
 
@@ -233,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_best_tip_worse() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let best_tip = chain.tip();
         chain.disconnect_tip();
 
@@ -269,7 +269,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_best_tip_reorg() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let old_best = chain.tip();
         // Reorg
         chain.disconnect_tip();

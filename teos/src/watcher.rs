@@ -1017,7 +1017,7 @@ mod tests {
     #[tokio::test]
     async fn test_new() {
         // A fresh watcher has no associated data
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let watcher = init_watcher_with_db(&mut chain, dbm.clone()).await;
         assert!(watcher.is_fresh());
@@ -1047,7 +1047,7 @@ mod tests {
         // register calls Gatekeeper::add_update_user and signs the UserInfo returned by it.
         // Not testing the update / rejection logic, since that's already covered in the Gatekeeper, just that the data makes
         // sense and the signature verifies.
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let watcher = init_watcher(&mut chain).await;
         let tower_pk = watcher.tower_id.0;
 
@@ -1071,7 +1071,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_appointment() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
         let tip_txs = chain.blocks.last().unwrap().txdata.clone();
         let watcher = init_watcher(&mut chain).await;
 
@@ -1412,7 +1412,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_appointment() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let watcher = init_watcher(&mut chain).await;
 
         let appointment = generate_dummy_appointment(None).inner;
@@ -1504,7 +1504,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_breaches() {
-        let mut chain = Blockchain::default().with_height_and_txs(12, None);
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
         let txs = chain.blocks.last().unwrap().txdata.clone();
         let watcher = init_watcher(&mut chain).await;
 
@@ -1536,7 +1536,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_breaches() {
-        let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 12);
         let txs = chain.blocks.last().unwrap().txdata.clone();
         let watcher = init_watcher(&mut chain).await;
 
@@ -1606,7 +1606,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_appointments_from_memory() {
-        let mut chain = Blockchain::default().with_height_and_txs(10, Some(12));
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let watcher = init_watcher(&mut chain).await;
 
         // Add some appointments both to memory and to the database
@@ -1657,7 +1657,7 @@ mod tests {
     async fn test_delete_appointments() {
         // TODO: This is an adaptation of Responder::test_delete_trackers, merge together once the method
         // is implemented using generics.
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let watcher = init_watcher(&mut chain).await;
 
         // Delete appointments removes data from the appointments and locator_uuid_map
@@ -1781,7 +1781,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_connected() {
-        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let watcher = init_watcher(&mut chain).await;
 
         // block_connected for the Watcher is used to keep track of what new transactions has been mined whose may be potential
