@@ -145,6 +145,7 @@ pub struct Config {
     pub subscription_duration: u32,
     pub expiry_delta: u32,
     pub min_to_self_delay: u16,
+    pub polling_delta: u16,
 
     // Internal API
     pub internal_api_bind: String,
@@ -250,6 +251,7 @@ impl Default for Config {
             subscription_duration: 4320,
             expiry_delta: 6,
             min_to_self_delay: 20,
+            polling_delta: 60,
             internal_api_bind: "127.0.0.1".into(),
             internal_api_port: 50051,
         }

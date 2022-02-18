@@ -50,7 +50,7 @@ where
         spv_client: SpvClient<'a, P, C, L>,
         last_known_block_header: ValidatedBlockHeader,
         dbm: Arc<Mutex<DBM>>,
-        polling_delta_sec: u64,
+        polling_delta_sec: u16,
         shutdown_signal: Listener,
         bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
     ) -> ChainMonitor<'a, P, C, L> {
@@ -58,7 +58,7 @@ where
             spv_client,
             last_known_block_header,
             dbm,
-            polling_delta: time::Duration::from_secs(polling_delta_sec),
+            polling_delta: time::Duration::from_secs(polling_delta_sec as u64),
             shutdown_signal,
             bitcoind_reachable,
         }

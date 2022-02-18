@@ -203,7 +203,7 @@ pub async fn main() {
         spv_client,
         tip,
         dbm,
-        1,
+        conf.polling_delta,
         shutdown_signal_cm,
         bitcoind_reachable.clone(),
     )
