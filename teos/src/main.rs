@@ -1,7 +1,7 @@
 use simple_logger::init_with_level;
 use std::fs;
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use structopt::StructOpt;
 use tokio::task;
 use tonic::transport::Server;
@@ -108,7 +108,7 @@ pub async fn main() {
     log::info!("tower_id: {}", tower_pk);
 
     // Initialize our bitcoind client
-    let bitcoin_cli = match BitcoindClient::new(
+    let (bitcoin_cli, bitcoind_reachable) = match BitcoindClient::new(
         &conf.btc_rpc_connect,
         conf.btc_rpc_port,
         &conf.btc_rpc_user,
@@ -116,7 +116,10 @@ pub async fn main() {
     )
     .await
     {
-        Ok(client) => Arc::new(client),
+        Ok(client) => (
+            Arc::new(client),
+            Arc::new((Mutex::new(true), Condvar::new())),
+        ),
         Err(e) => {
             log::error!("Failed to connect to bitcoind client: {}", e);
             return;
@@ -162,20 +165,23 @@ pub async fn main() {
         conf.expiry_delta,
         dbm.clone(),
     ));
-    let carrier = Carrier::new(rpc);
-    let responder = Arc::new(Responder::new(carrier, gatekeeper.clone(), dbm.clone(), tip).await);
-    let watcher = Arc::new(
-        Watcher::new(
-            gatekeeper.clone(),
-            responder.clone(),
-            last_n_blocks,
-            tip,
-            tower_sk,
-            UserId(tower_pk),
-            dbm.clone(),
-        )
-        .await,
-    );
+
+    let carrier = Carrier::new(rpc, bitcoind_reachable.clone());
+    let responder = Arc::new(Responder::new(
+        carrier,
+        gatekeeper.clone(),
+        dbm.clone(),
+        tip,
+    ));
+    let watcher = Arc::new(Watcher::new(
+        gatekeeper.clone(),
+        responder.clone(),
+        last_n_blocks,
+        tip,
+        tower_sk,
+        UserId(tower_pk),
+        dbm.clone(),
+    ));
 
     if watcher.is_fresh() & responder.is_fresh() & gatekeeper.is_fresh() {
         log::info!("Fresh bootstrap");
@@ -193,14 +199,26 @@ pub async fn main() {
     let listener = &(watcher.clone(), &(responder.clone(), gatekeeper));
     let cache = &mut UnboundedCache::new();
     let spv_client = SpvClient::new(tip, poller, cache, listener);
-    let mut chain_monitor = ChainMonitor::new(spv_client, tip, dbm, 1, shutdown_signal_cm).await;
+    let mut chain_monitor = ChainMonitor::new(
+        spv_client,
+        tip,
+        dbm,
+        1,
+        shutdown_signal_cm,
+        bitcoind_reachable.clone(),
+    )
+    .await;
 
     // Get all the components up to date if there's a backlog of blocks
     chain_monitor.poll_best_tip().await;
     log::info!("Bootstrap completed. Turning on interfaces");
 
     // Build interfaces
-    let rpc_api = Arc::new(InternalAPI::new(watcher.clone(), shutdown_trigger));
+    let rpc_api = Arc::new(InternalAPI::new(
+        watcher.clone(),
+        bitcoind_reachable.clone(),
+        shutdown_trigger,
+    ));
     let internal_rpc_api = rpc_api.clone();
 
     let rpc_api_addr = format!("{}:{}", conf.rpc_bind, conf.rpc_port)

@@ -1,6 +1,5 @@
-use futures::executor::block_on;
 use std::convert::TryInto;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use tonic::{Code, Request, Response, Status};
 use triggered::Trigger;
 
@@ -23,27 +22,49 @@ use teos_common::UserId;
 pub struct InternalAPI {
     /// A [Watcher] instance.
     watcher: Arc<Watcher>,
+    /// A flag that indicates wether bitcoind is reachable or not.
+    bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
+    /// A signal indicating the tower is shuting down.
     shutdown_trigger: Trigger,
 }
 
-impl<'a> InternalAPI {
+impl InternalAPI {
     /// Creates a new [InternalAPI] instance.
-    pub fn new(watcher: Arc<Watcher>, shutdown_trigger: Trigger) -> Self {
+    pub fn new(
+        watcher: Arc<Watcher>,
+        bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
+        shutdown_trigger: Trigger,
+    ) -> Self {
         Self {
             watcher,
+            bitcoind_reachable,
             shutdown_trigger,
+        }
+    }
+
+    /// Checks whether bitcoind is reachable.
+    fn check_service_unavailable(&self) -> Result<(), Status> {
+        if *(&*self.bitcoind_reachable.0.lock().unwrap()) {
+            Ok(())
+        } else {
+            log::error!("Bitcoind not reachable");
+            Err(Status::new(
+                Code::Unavailable,
+                "Service currently unavailable",
+            ))
         }
     }
 }
 
 /// Public tower API. Accessible by users.
 #[tonic::async_trait]
-impl<'a> PublicTowerServices for Arc<InternalAPI> {
+impl PublicTowerServices for Arc<InternalAPI> {
     /// Register endpoint. Part of the public API. Internally calls [Watcher::register].
     async fn register(
         &self,
         request: Request<msgs::RegisterRequest>,
     ) -> Result<Response<msgs::RegisterResponse>, Status> {
+        self.check_service_unavailable()?;
         let req_data = request.into_inner();
 
         let user_id = UserId::deserialize(&req_data.user_id).map_err(|_| {
@@ -64,7 +85,6 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
                 Code::ResourceExhausted,
                 "Subscription maximum slots count reached",
             )),
-            // FIXME: more errors are needed. e.g. ConnectionRefusedError.
         }
     }
 
@@ -73,6 +93,7 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
         &self,
         request: Request<msgs::AddAppointmentRequest>,
     ) -> Result<Response<msgs::AddAppointmentResponse>, Status> {
+        self.check_service_unavailable()?;
         let req_data = request.into_inner();
         let app_data = req_data.appointment.unwrap();
 
@@ -83,11 +104,10 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
         );
         let locator = appointment.locator;
 
-        // This is block_on because MutexGuard cannot be sent between threads safely.
-        match block_on(
-            self.watcher
-                .add_appointment(appointment, req_data.signature),
-        ) {
+        match self
+            .watcher
+            .add_appointment(appointment, req_data.signature)
+        {
             Ok((receipt, available_slots, subscription_expiry)) => {
                 Ok(Response::new(msgs::AddAppointmentResponse {
                     locator: locator.serialize(),
@@ -111,7 +131,6 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
                     Code::AlreadyExists,
                     "The provided appointment has already been triggered",
                 )),
-                // FIXME: more errors are needed. e.g. ConnectionRefusedError.
             },
         }
     }
@@ -121,6 +140,7 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
         &self,
         request: Request<msgs::GetAppointmentRequest>,
     ) -> Result<Response<msgs::GetAppointmentResponse>, Status> {
+        self.check_service_unavailable()?;
         let req_data = request.into_inner();
         let locator = Locator::deserialize(&req_data.locator).unwrap();
 
@@ -152,14 +172,17 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
                 }))
             }
             Err(e) => match e {
-                GetAppointmentFailure::AuthenticationFailure | GetAppointmentFailure::NotFound => {
+                GetAppointmentFailure::NotFound => {
                     Err(Status::new(Code::NotFound, "Appointment not found"))
                 }
+                GetAppointmentFailure::AuthenticationFailure => Err(Status::new(
+                    Code::Unauthenticated,
+                    "User cannot be authenticated",
+                )),
                 GetAppointmentFailure::SubscriptionExpired(x) => Err(Status::new(
                     Code::Unauthenticated,
                     format!("Your subscription expired at {}", x),
                 )),
-                // FIXME: more errors are needed. e.g. ConnectionRefusedError.
             },
         }
     }
@@ -169,6 +192,7 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
         &self,
         request: Request<msgs::GetSubscriptionInfoRequest>,
     ) -> Result<Response<msgs::GetSubscriptionInfoResponse>, Status> {
+        self.check_service_unavailable()?;
         let (subscription_info, locators) = self
             .watcher
             .get_subscription_info(&request.into_inner().signature)
@@ -181,7 +205,6 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
                     Code::Unauthenticated,
                     format!("Your subscription expired at {}", x),
                 ),
-                // FIXME: more errors are needed. e.g. ConnectionRefusedError.
             })?;
 
         Ok(Response::new(msgs::GetSubscriptionInfoResponse {
@@ -194,7 +217,7 @@ impl<'a> PublicTowerServices for Arc<InternalAPI> {
 
 /// Private tower API. Only accessible by the tower admin via RPC.
 #[tonic::async_trait]
-impl<'a> PrivateTowerServices for Arc<InternalAPI> {
+impl PrivateTowerServices for Arc<InternalAPI> {
     /// Get all appointments endpoint. Gets all appointments in the tower. Part of the private API.
     /// Internally calls [Watcher::get_all_watcher_appointments] and [Watcher::get_all_responder_trackers].
     async fn get_all_appointments(
@@ -236,6 +259,7 @@ impl<'a> PrivateTowerServices for Arc<InternalAPI> {
             n_registered_users: self.watcher.get_registered_users_count() as u32,
             n_watcher_appointments: self.watcher.get_appointments_count() as u32,
             n_responder_trackers: self.watcher.get_trackers_count() as u32,
+            bitcoind_reachable: self.check_service_unavailable().is_ok(),
         }))
     }
 
@@ -335,7 +359,6 @@ mod tests_private_api {
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
-            .await
             .unwrap();
 
         let response = internal_api
@@ -410,7 +433,6 @@ mod tests_private_api {
             internal_api
                 .watcher
                 .add_appointment(appointment.clone(), user_signature)
-                .await
                 .unwrap();
         }
 
@@ -498,7 +520,6 @@ mod tests_private_api {
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
-            .await
             .unwrap();
 
         let response = internal_api
@@ -629,6 +650,26 @@ mod tests_public_api {
             Err(status) => {
                 assert_eq!(status.code(), Code::ResourceExhausted);
                 assert_eq!(status.message(), "Subscription maximum slots count reached")
+            }
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_service_unavailable() {
+        let internal_api =
+            create_api_with_config(ApiConfig::new(u32::MAX, DURATION).bitcoind_unreachable()).await;
+
+        let (_, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk).serialize();
+
+        match internal_api
+            .register(Request::new(msgs::RegisterRequest { user_id }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unavailable);
+                assert_eq!(status.message(), "Service currently unavailable")
             }
             _ => panic!("Test should have returned Err"),
         }
@@ -772,6 +813,30 @@ mod tests_public_api {
     }
 
     #[tokio::test]
+    async fn test_add_appointment_service_unavailable() {
+        let internal_api =
+            create_api_with_config(ApiConfig::new(u32::MAX, DURATION).bitcoind_unreachable()).await;
+
+        let (user_sk, _) = get_random_keypair();
+        let appointment = generate_dummy_appointment(None).inner;
+        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+
+        match internal_api
+            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+                appointment: Some(appointment.clone().into()),
+                signature: user_signature.clone(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unavailable);
+                assert_eq!(status.message(), "Service currently unavailable")
+            }
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_get_appointment() {
         let internal_api = create_api().await;
 
@@ -785,7 +850,6 @@ mod tests_public_api {
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
-            .await
             .unwrap();
 
         // Get the appointment through the API
@@ -826,7 +890,7 @@ mod tests_public_api {
                 assert_eq!(status.code(), Code::NotFound);
                 assert_eq!(status.message(), "Appointment not found");
             }
-            _ => (),
+            _ => panic!("Test should have returned Err"),
         }
     }
 
@@ -853,7 +917,7 @@ mod tests_public_api {
                 assert_eq!(status.code(), Code::NotFound);
                 assert_eq!(status.message(), "Appointment not found");
             }
-            _ => (),
+            _ => panic!("Test should have returned Err"),
         }
     }
 
@@ -881,7 +945,30 @@ mod tests_public_api {
                 assert_eq!(status.code(), Code::Unauthenticated);
                 assert!(status.message().starts_with("Your subscription expired at"));
             }
-            _ => (),
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_service_unavailable() {
+        let internal_api =
+            create_api_with_config(ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()).await;
+
+        let (user_sk, _) = get_random_keypair();
+        let appointment = generate_dummy_appointment(None).inner;
+        let message = format!("get appointment {}", appointment.locator);
+        match internal_api
+            .get_appointment(Request::new(msgs::GetAppointmentRequest {
+                locator: appointment.locator.serialize(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unavailable);
+                assert_eq!(status.message(), "Service currently unavailable");
+            }
+            _ => panic!("Test should have returned Err"),
         }
     }
 
@@ -925,7 +1012,7 @@ mod tests_public_api {
                 assert_eq!(status.code(), Code::Unauthenticated);
                 assert_eq!(status.message(), "User not found. Have you registered?");
             }
-            _ => (),
+            _ => panic!("Test should have returned Err"),
         }
     }
 
@@ -949,7 +1036,28 @@ mod tests_public_api {
                 assert_eq!(status.code(), Code::Unauthenticated);
                 assert!(status.message().starts_with("Your subscription expired at"));
             }
-            _ => (),
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info_service_unavailable() {
+        let internal_api =
+            create_api_with_config(ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()).await;
+
+        let (user_sk, _) = get_random_keypair();
+        let message = format!("get subscription info");
+        match internal_api
+            .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
+                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unavailable);
+                assert_eq!(status.message(), "Service currently unavailable");
+            }
+            _ => panic!("Test should have returned Err"),
         }
     }
 }

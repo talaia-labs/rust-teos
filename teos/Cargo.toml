@@ -12,7 +12,6 @@ path = "src/cli.rs"
 
 [dependencies]
 # General
-futures = "0.3"
 hex = { version = "0.4.3", features = [ "serde" ] }
 home = "0.5.3"
 log = "0.4"

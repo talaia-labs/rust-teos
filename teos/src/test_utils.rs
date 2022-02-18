@@ -9,7 +9,7 @@
 
 use rand::Rng;
 use std::convert::TryInto;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 use jsonrpc_http_server::jsonrpc_core::error::ErrorCode as JsonRpcErrorCode;
@@ -66,6 +66,7 @@ pub(crate) struct Blockchain {
     without_blocks: Option<std::ops::RangeFrom<usize>>,
     without_headers: bool,
     malformed_headers: bool,
+    pub unreachable: Arc<Mutex<bool>>,
 }
 
 #[allow(dead_code)]
@@ -104,12 +105,7 @@ impl Blockchain {
         self
     }
 
-    pub fn with_height_and_txs(mut self, height: usize, tx_count: Option<u8>) -> Self {
-        let tx_count = match tx_count {
-            Some(x) => x,
-            None => 10,
-        };
-
+    pub fn with_height_and_txs(mut self, height: usize, tx_count: u8) -> Self {
         for _ in 1..=height {
             self.generate(Some((0..tx_count).map(|_| get_random_tx()).collect()));
         }
@@ -138,6 +134,13 @@ impl Blockchain {
         }
     }
 
+    pub fn unreachable(self) -> Self {
+        Self {
+            unreachable: Arc::new(Mutex::new(true)),
+            ..self
+        }
+    }
+
     pub fn fork_at_height(&self, height: usize) -> Self {
         assert!(height + 1 < self.blocks.len());
         let mut blocks = self.blocks.clone();
@@ -150,6 +153,7 @@ impl Blockchain {
         Self {
             blocks,
             without_blocks: None,
+            unreachable: self.unreachable.clone(),
             ..*self
         }
     }
@@ -270,6 +274,9 @@ impl BlockSource for Blockchain {
 
     fn get_best_block<'a>(&'a mut self) -> AsyncBlockSourceResult<'a, (BlockHash, Option<u32>)> {
         Box::pin(async move {
+            if *self.unreachable.lock().unwrap() {
+                return Err(BlockSourceError::transient("Connection refused"));
+            }
             match self.blocks.last() {
                 None => Err(BlockSourceError::transient("empty chain")),
                 Some(block) => {
@@ -402,21 +409,23 @@ pub fn create_carrier(query: MockedServerQuery) -> Carrier {
         MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
     };
     let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+    let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
     start_server(bitcoind_mock);
 
-    Carrier::new(bitcoin_cli)
+    Carrier::new(bitcoin_cli, bitcoind_reachable)
 }
 
-pub async fn create_responder(
+pub fn create_responder(
     tip: ValidatedBlockHeader,
     gatekeeper: Arc<Gatekeeper>,
     dbm: Arc<Mutex<DBM>>,
     server_url: &str,
 ) -> Responder {
     let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
-    let carrier = Carrier::new(bitcoin_cli);
+    let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+    let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
 
-    Responder::new(carrier, gatekeeper, dbm, tip).await
+    Responder::new(carrier, gatekeeper, dbm, tip)
 }
 
 pub(crate) async fn create_watcher(
@@ -441,17 +450,26 @@ pub(crate) async fn create_watcher(
         tower_id,
         dbm,
     )
-    .await
 }
-
+#[derive(Clone)]
 pub struct ApiConfig {
     slots: u32,
     duration: u32,
+    bitcoind_reachable: bool,
 }
 
 impl ApiConfig {
     pub fn new(slots: u32, duration: u32) -> Self {
-        Self { slots, duration }
+        Self {
+            slots,
+            duration,
+            bitcoind_reachable: true,
+        }
+    }
+
+    pub fn bitcoind_unreachable(&mut self) -> Self {
+        self.bitcoind_reachable = false;
+        self.clone()
     }
 }
 
@@ -460,13 +478,14 @@ impl Default for ApiConfig {
         Self {
             slots: SLOTS,
             duration: DURATION,
+            bitcoind_reachable: true,
         }
     }
 }
 
 pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<InternalAPI> {
     let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
-    let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, None);
+    let mut chain = Blockchain::default().with_height(START_HEIGHT);
 
     let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
     let gk = Arc::new(Gatekeeper::new(
@@ -476,8 +495,7 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
         EXPIRY_DELTA,
         dbm.clone(),
     ));
-    let responder =
-        create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
+    let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
     let watcher = create_watcher(
         &mut chain,
         Arc::new(responder),
@@ -487,8 +505,13 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
     )
     .await;
 
+    let bitcoind_reachable = Arc::new((Mutex::new(api_config.bitcoind_reachable), Condvar::new()));
     let (shutdown_trigger, _) = triggered::trigger();
-    Arc::new(InternalAPI::new(Arc::new(watcher), shutdown_trigger))
+    Arc::new(InternalAPI::new(
+        Arc::new(watcher),
+        bitcoind_reachable,
+        shutdown_trigger,
+    ))
 }
 
 pub(crate) async fn create_api() -> Arc<InternalAPI> {
