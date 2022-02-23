@@ -16,18 +16,18 @@ use lightning_block_sync::poll::{
 };
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
-use rusty_teos::api::http;
-use rusty_teos::api::internal::InternalAPI;
-use rusty_teos::bitcoin_cli::BitcoindClient;
-use rusty_teos::carrier::Carrier;
-use rusty_teos::chain_monitor::ChainMonitor;
-use rusty_teos::config::{self, Config, Opt};
-use rusty_teos::dbm::DBM;
-use rusty_teos::gatekeeper::Gatekeeper;
-use rusty_teos::protos::private_tower_services_server::PrivateTowerServicesServer;
-use rusty_teos::protos::public_tower_services_server::PublicTowerServicesServer;
-use rusty_teos::responder::Responder;
-use rusty_teos::watcher::Watcher;
+use teos::api::http;
+use teos::api::internal::InternalAPI;
+use teos::bitcoin_cli::BitcoindClient;
+use teos::carrier::Carrier;
+use teos::chain_monitor::ChainMonitor;
+use teos::config::{self, Config, Opt};
+use teos::dbm::DBM;
+use teos::gatekeeper::Gatekeeper;
+use teos::protos::private_tower_services_server::PrivateTowerServicesServer;
+use teos::protos::public_tower_services_server::PublicTowerServicesServer;
+use teos::responder::Responder;
+use teos::watcher::Watcher;
 
 use teos_common::cryptography::get_random_keypair;
 use teos_common::UserId;
