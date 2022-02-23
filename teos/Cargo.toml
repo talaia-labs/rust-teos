@@ -1,14 +1,18 @@
 [package]
-name = "rusty-teos"
+name = "teos"
 version = "0.0.1"
 authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
 license = "MIT"
 edition = "2018"
-default-run="rusty-teos"
+default-run="teosd"
 
 [[bin]]
 name = "teos-cli"
 path = "src/cli.rs"
+
+[[bin]]
+name = "teosd"
+path = "src/main.rs"
 
 [dependencies]
 # General

@@ -4,10 +4,10 @@ use std::str::FromStr;
 use structopt::StructOpt;
 use tonic::Request;
 
-use rusty_teos::cli_config::{Command, Config, Opt};
-use rusty_teos::config;
-use rusty_teos::protos as msgs;
-use rusty_teos::protos::private_tower_services_client::PrivateTowerServicesClient;
+use teos::cli_config::{Command, Config, Opt};
+use teos::config;
+use teos::protos as msgs;
+use teos::protos::private_tower_services_client::PrivateTowerServicesClient;
 use teos_common::UserId;
 
 #[tokio::main]
