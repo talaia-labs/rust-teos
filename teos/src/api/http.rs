@@ -2,7 +2,7 @@ use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 use std::convert::Infallible;
 use std::error::Error;
 use std::net::SocketAddr;
-use tonic::{transport::Channel, Code};
+use tonic::transport::Channel;
 use triggered::Listener;
 use warp::{http::StatusCode, reject, reply, Filter, Rejection, Reply};
 
@@ -77,18 +77,18 @@ fn with_grpc(
 fn match_status(s: &tonic::Status) -> (StatusCode, u8) {
     let mut status_code = StatusCode::BAD_REQUEST;
     let error_code = match s.code() {
-        Code::InvalidArgument => errors::WRONG_FIELD_FORMAT,
-        Code::NotFound => {
+        tonic::Code::InvalidArgument => errors::WRONG_FIELD_FORMAT,
+        tonic::Code::NotFound => {
             status_code = StatusCode::NOT_FOUND;
             errors::APPOINTMENT_NOT_FOUND
         }
-        Code::AlreadyExists => errors::APPOINTMENT_ALREADY_TRIGGERED,
-        Code::ResourceExhausted => errors::REGISTRATION_RESOURCE_EXHAUSTED,
-        Code::Unauthenticated => {
+        tonic::Code::AlreadyExists => errors::APPOINTMENT_ALREADY_TRIGGERED,
+        tonic::Code::ResourceExhausted => errors::REGISTRATION_RESOURCE_EXHAUSTED,
+        tonic::Code::Unauthenticated => {
             status_code = StatusCode::UNAUTHORIZED;
             errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
         }
-        Code::Unavailable => {
+        tonic::Code::Unavailable => {
             status_code = StatusCode::SERVICE_UNAVAILABLE;
             errors::SERVICE_UNAVAILABLE
         }
@@ -101,10 +101,38 @@ fn match_status(s: &tonic::Status) -> (StatusCode, u8) {
     (status_code, error_code)
 }
 
+fn parse_grpc_response<T: serde::Serialize>(
+    result: Result<tonic::Response<T>, tonic::Status>,
+) -> (reply::Json, StatusCode) {
+    match result {
+        Ok(r) => {
+            let inner = r.into_inner();
+            log::info!("Request succeeded");
+            log::debug!("Response: {}", serde_json::json!(inner));
+            (reply::json(&inner), StatusCode::OK)
+        }
+        Err(s) => {
+            let (status_code, error_code) = match_status(&s);
+            log::info!("Request failed, error_code={}", error_code);
+            log::debug!("Response: {}", serde_json::json!(s.message()));
+            (
+                reply::json(&ApiError::new(s.message().into(), error_code)),
+                status_code,
+            )
+        }
+    }
+}
+
 async fn register(
     req: msgs::RegisterRequest,
+    addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
+    match addr {
+        Some(a) => log::info!("Received register request from {}", a),
+        None => log::info!("Received register request from unknown address"),
+    }
+
     let user_id = req.user_id.clone();
     if user_id.is_empty() {
         return Err(ApiError::empty_field("user_id"));
@@ -117,24 +145,20 @@ async fn register(
         ));
     }
 
-    let (body, status) = match grpc_conn.register(req).await {
-        Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
-        Err(s) => {
-            let (status_code, error_code) = match_status(&s);
-            (
-                reply::json(&ApiError::new(s.message().into(), error_code)),
-                status_code,
-            )
-        }
-    };
-
+    let (body, status) = parse_grpc_response(grpc_conn.register(req).await);
     Ok(reply::with_status(body, status))
 }
 
 async fn add_appointment(
     req: msgs::AddAppointmentRequest,
+    addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
+    match addr {
+        Some(a) => log::info!("Received add_appointment request from {}", a),
+        None => log::info!("Received add_appointment request from unknown address"),
+    }
+
     if let Some(a) = &req.appointment {
         if a.locator.is_empty() {
             return Err(ApiError::empty_field("locator"));
@@ -153,24 +177,20 @@ async fn add_appointment(
         return Err(ApiError::empty_field("signature"));
     }
 
-    let (body, status) = match grpc_conn.add_appointment(req).await {
-        Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
-        Err(s) => {
-            let (status_code, error_code) = match_status(&s);
-            (
-                reply::json(&ApiError::new(s.message().into(), error_code)),
-                status_code,
-            )
-        }
-    };
-
+    let (body, status) = parse_grpc_response(grpc_conn.add_appointment(req).await);
     Ok(reply::with_status(body, status))
 }
 
 async fn get_appointment(
     req: msgs::GetAppointmentRequest,
+    addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
+    match addr {
+        Some(a) => log::info!("Received get_appointment request from {}", a),
+        None => log::info!("Received get_appointment request from unknown address"),
+    }
+
     if req.locator.is_empty() {
         return Err(ApiError::empty_field("locator"));
     }
@@ -185,39 +205,25 @@ async fn get_appointment(
         return Err(ApiError::empty_field("signature"));
     }
 
-    let (body, status) = match grpc_conn.get_appointment(req).await {
-        Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
-        Err(s) => {
-            let (status_code, error_code) = match_status(&s);
-            (
-                reply::json(&ApiError::new(s.message().into(), error_code)),
-                status_code,
-            )
-        }
-    };
-
+    let (body, status) = parse_grpc_response(grpc_conn.get_appointment(req).await);
     Ok(reply::with_status(body, status))
 }
 
 async fn get_subscription_info(
     req: msgs::GetSubscriptionInfoRequest,
+    addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
+    match addr {
+        Some(a) => log::info!("Received get_subscription_info request from {}", a),
+        None => log::info!("Received get_subscription_info request from unknown address"),
+    }
+
     if req.signature.is_empty() {
         return Err(ApiError::empty_field("signature"));
     }
 
-    let (body, status) = match grpc_conn.get_subscription_info(req).await {
-        Ok(r) => (reply::json(&r.into_inner()), StatusCode::OK),
-        Err(s) => {
-            let (status_code, error_code) = match_status(&s);
-            (
-                reply::json(&ApiError::new(s.message().into(), error_code)),
-                status_code,
-            )
-        }
-    };
-
+    let (body, status) = parse_grpc_response(grpc_conn.get_subscription_info(req).await);
     Ok(reply::with_status(body, status))
 }
 
@@ -227,18 +233,21 @@ fn router(
     let register = warp::post()
         .and(warp::path("register"))
         .and(warp::body::content_length_limit(REGISTER_BODY_LEN).and(warp::body::json()))
+        .and(warp::addr::remote())
         .and(with_grpc(grpc_conn.clone()))
         .and_then(register);
 
     let add_appointment = warp::post()
         .and(warp::path("add_appointment"))
         .and(warp::body::content_length_limit(ADD_APPOINTMENT_BODY_LEN).and(warp::body::json()))
+        .and(warp::addr::remote())
         .and(with_grpc(grpc_conn.clone()))
         .and_then(add_appointment);
 
     let get_appointment = warp::post()
         .and(warp::path("get_appointment"))
         .and(warp::body::content_length_limit(GET_APPOINTMENT_BODY_LEN).and(warp::body::json()))
+        .and(warp::addr::remote())
         .and(with_grpc(grpc_conn.clone()))
         .and_then(get_appointment);
 
@@ -248,6 +257,7 @@ fn router(
             warp::body::content_length_limit(GET_SUBSCRIPTION_INFO_BODY_LEN)
                 .and(warp::body::json()),
         )
+        .and(warp::addr::remote())
         .and(with_grpc(grpc_conn))
         .and_then(get_subscription_info);
 
