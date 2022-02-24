@@ -435,8 +435,6 @@ mod tests_failures {
         let (api_error, status) =
             check_api_error("/register", RequestBody::DoNotJsonify(""), server_addr).await;
         assert!(api_error.error.contains("expected struct"));
-        // FIXME: This may need finer catching since it's the same error as if a field cannot be deserialized from being of the wrong type.
-        // May not be worth the hassle though.
         assert_eq!(api_error.error_code, errors::WRONG_FIELD_TYPE);
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }

@@ -315,7 +315,8 @@ impl Responder {
     ///
     /// The confirmation count is not kept by the [Responder]. Instead, data is queried to `bitcoind` via the [Carrier].
     fn get_completed_trackers(&self) -> HashSet<UUID> {
-        // DISCUSS: Not using a checked_txs cache for now, check whether it may be necessary
+        // Cache of transaction that we've already queried to bitcoind, just in case multiple trackers share the same penalty
+        let mut checked_txs = HashMap::new();
         let mut completed_trackers = HashSet::new();
 
         let trackers = self.trackers.lock().unwrap();
@@ -324,11 +325,17 @@ impl Responder {
         for uuid in trackers.keys() {
             let penalty_txid = trackers[uuid].penalty_txid;
             if !unconfirmed_txs.contains(&penalty_txid) {
-                if let Some(confirmations) = carrier.get_confirmations(&penalty_txid) {
-                    if confirmations > constants::IRREVOCABLY_RESOLVED {
-                        completed_trackers.insert(*uuid);
-                    }
+                let confirmations = if let Some(confirmations) = checked_txs.get(&penalty_txid) {
+                    *confirmations
+                } else {
+                    carrier.get_confirmations(&penalty_txid).unwrap()
                 };
+
+                if confirmations > constants::IRREVOCABLY_RESOLVED {
+                    completed_trackers.insert(*uuid);
+                }
+
+                checked_txs.insert(penalty_txid, confirmations);
             }
         }
 
@@ -377,8 +384,7 @@ impl Responder {
             let receipt = carrier.send_transaction(&penalty_tx);
 
             if !receipt.delivered() {
-                // DISCUSS: Check is this can actually happen. Feels like it may if the original tx
-                // is RBF and it has been already replaced by a higher fee variant.
+                // This may if the original tx is RBF and it has been already replaced by a higher fee variant.
                 log::warn!(
                     "Transaction rebroadcast failed: {} (reason: {:?})",
                     penalty_tx.txid(),
