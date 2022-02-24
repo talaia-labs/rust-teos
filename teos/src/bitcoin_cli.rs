@@ -60,7 +60,7 @@ impl BlockSource for &BitcoindClient<'_> {
     }
 
     /// Get the best block known by our node.
-    fn get_best_block<'a>(&'a mut self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
+    fn get_best_block(&mut self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
         Box::pin(async move {
             let mut rpc = self.bitcoind_rpc_client.lock().await;
             rpc.get_best_block().await
@@ -107,7 +107,7 @@ impl<'a> BitcoindClient<'a> {
         &self,
     ) -> Result<(BlockHash, Option<u32>), std::io::Error> {
         let mut rpc = self.bitcoind_rpc_client.lock().await;
-        rpc.call_method::<(BlockHash, Option<u32>)>("getblockchaininfo", &vec![])
+        rpc.call_method::<(BlockHash, Option<u32>)>("getblockchaininfo", &[])
             .await
     }
 

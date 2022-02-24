@@ -1,4 +1,3 @@
-use std::convert::TryInto;
 use std::sync::{Arc, Condvar, Mutex};
 use tonic::{Code, Request, Response, Status};
 use triggered::Trigger;
@@ -44,7 +43,7 @@ impl InternalAPI {
 
     /// Checks whether bitcoind is reachable.
     fn check_service_unavailable(&self) -> Result<(), Status> {
-        if *(&*self.bitcoind_reachable.0.lock().unwrap()) {
+        if *self.bitcoind_reachable.0.lock().unwrap() {
             Ok(())
         } else {
             log::error!("Bitcoind not reachable");
@@ -99,7 +98,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
 
         let appointment = Appointment::new(
             Locator::deserialize(&app_data.locator).unwrap(),
-            app_data.encrypted_blob.try_into().unwrap(),
+            app_data.encrypted_blob,
             app_data.to_self_delay,
         );
         let locator = appointment.locator;
@@ -326,6 +325,8 @@ mod tests_private_helpers {
 #[cfg(test)]
 mod tests_private_api {
     use super::*;
+    use std::collections::HashSet;
+    use std::iter::FromIterator;
 
     use crate::extended_appointment::UUID;
     use crate::test_utils::{
@@ -460,23 +461,23 @@ mod tests_private_api {
     #[tokio::test]
     async fn test_get_users() {
         let internal_api = create_api().await;
-        let mut users = Vec::new();
+        let mut users = HashSet::new();
 
         // Add a couple of users
         for _ in 0..2 {
             let (_, user_pk) = get_random_keypair();
             let user_id = UserId(user_pk);
             internal_api.watcher.register(user_id).unwrap();
-            users.push(user_id.serialize());
+            users.insert(user_id.serialize());
         }
 
-        let mut response = internal_api
+        let response = internal_api
             .get_users(Request::new(()))
             .await
             .unwrap()
             .into_inner();
 
-        assert_eq!(response.user_ids.sort(), users.sort());
+        assert_eq!(HashSet::from_iter(response.user_ids), users);
     }
 
     #[tokio::test]
@@ -981,7 +982,7 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         // Get the subscription info though the API
-        let message = format!("get subscription info");
+        let message = "get subscription info".to_string();
         let response = internal_api
             .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
@@ -1001,7 +1002,7 @@ mod tests_public_api {
         let (user_sk, _) = get_random_keypair();
 
         // Try to get the subscription info though the API
-        let message = format!("get subscription info");
+        let message = "get subscription info".to_string();
         match internal_api
             .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
@@ -1025,7 +1026,7 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         // Try to get the subscription info though the API
-        let message = format!("get subscription info");
+        let message = "get subscription info".to_string();
         match internal_api
             .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
@@ -1046,7 +1047,7 @@ mod tests_public_api {
             create_api_with_config(ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()).await;
 
         let (user_sk, _) = get_random_keypair();
-        let message = format!("get subscription info");
+        let message = "get subscription info".to_string();
         match internal_api
             .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),

@@ -38,7 +38,7 @@ impl std::str::FromStr for UserId {
             .map_err(|_| {
                 "Provided public key does not match expected format (33-byte hex string)".into()
             })
-            .map(|pk| Self(pk))
+            .map(Self)
     }
 }
 

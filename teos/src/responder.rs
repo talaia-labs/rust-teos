@@ -65,12 +65,12 @@ impl TransactionTracker {
     }
 }
 
-impl Into<msgs::Tracker> for TransactionTracker {
-    fn into(self) -> msgs::Tracker {
+impl From<TransactionTracker> for msgs::Tracker {
+    fn from(t: TransactionTracker) -> Self {
         msgs::Tracker {
-            dispute_txid: self.dispute_tx.txid().to_vec(),
-            penalty_txid: self.penalty_tx.txid().to_vec(),
-            penalty_rawtx: self.penalty_tx.serialize(),
+            dispute_txid: t.dispute_tx.txid().to_vec(),
+            penalty_txid: t.penalty_tx.txid().to_vec(),
+            penalty_rawtx: t.penalty_tx.serialize(),
         }
     }
 }
@@ -262,7 +262,7 @@ impl Responder {
 
     /// Checks if any of the unconfirmed tracked transaction has received a confirmation. If so, it is removed from [self.unconfirmed_txs](Self::unconfirmed_txs).
     /// Otherwise, its unconfirmed count is increased by one.
-    fn check_confirmations(&self, txs: &Vec<Transaction>) {
+    fn check_confirmations(&self, txs: &[Transaction]) {
         // A confirmation has been received
         let mut unconfirmed_txs = self.unconfirmed_txs.lock().unwrap();
         for tx in txs.iter() {
@@ -324,13 +324,11 @@ impl Responder {
         for uuid in trackers.keys() {
             let penalty_txid = trackers[uuid].penalty_txid;
             if !unconfirmed_txs.contains(&penalty_txid) {
-                carrier
-                    .get_confirmations(&penalty_txid)
-                    .map(|confirmations| {
-                        if confirmations > constants::IRREVOCABLY_RESOLVED {
-                            completed_trackers.insert(*uuid);
-                        }
-                    });
+                if let Some(confirmations) = carrier.get_confirmations(&penalty_txid) {
+                    if confirmations > constants::IRREVOCABLY_RESOLVED {
+                        completed_trackers.insert(*uuid);
+                    }
+                };
             }
         }
 
@@ -348,7 +346,7 @@ impl Responder {
             .get_outdated_appointments(block_height)
             .intersection(&trackers.keys().cloned().collect())
         {
-            if unconfirmed_txs.contains(&trackers[&uuid].penalty_txid) {
+            if unconfirmed_txs.contains(&trackers[uuid].penalty_txid) {
                 outdated_trackers.insert(*uuid);
             }
         }
@@ -454,7 +452,7 @@ impl Responder {
         self.dbm
             .lock()
             .unwrap()
-            .batch_remove_appointments(&uuids, &updated_users);
+            .batch_remove_appointments(uuids, updated_users);
     }
 }
 
@@ -596,7 +594,7 @@ mod tests {
         dbm: Arc<Mutex<DBM>>,
     ) -> Responder {
         let gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
-        create_responder(&chain, Arc::new(gk), dbm.clone(), mocked_query)
+        create_responder(chain, Arc::new(gk), dbm, mocked_query)
     }
 
     fn init_responder(mocked_query: MockedServerQuery) -> Responder {
@@ -643,7 +641,7 @@ mod tests {
         let breach = get_random_breach();
         let penalty_txid = breach.penalty_tx.txid();
 
-        let r = responder.handle_breach(uuid, breach.clone(), user_id);
+        let r = responder.handle_breach(uuid, breach, user_id);
 
         assert!(r.delivered());
         assert!(responder.trackers.lock().unwrap().contains_key(&uuid));
@@ -687,7 +685,7 @@ mod tests {
         let breach = get_random_breach();
         let penalty_txid = breach.penalty_tx.txid();
 
-        let r = responder.handle_breach(uuid, breach.clone(), user_id);
+        let r = responder.handle_breach(uuid, breach, user_id);
 
         assert!(!r.delivered());
         assert!(!responder.trackers.lock().unwrap().contains_key(&uuid));
@@ -808,7 +806,7 @@ mod tests {
         store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
 
         let breach = get_random_breach();
-        responder.add_tracker(uuid, breach.clone(), user_id, 0);
+        responder.add_tracker(uuid, breach, user_id, 0);
 
         assert!(responder.has_tracker(uuid));
 
@@ -952,7 +950,7 @@ mod tests {
 
         // Let's add a tracker first
         let breach = get_random_breach();
-        responder.add_tracker(uuid, breach.clone(), user_id, 1);
+        responder.add_tracker(uuid, breach, user_id, 1);
 
         // A tracker is completed when it has passed constants::IRREVOCABLY_RESOLVED confirmations
         // Not completed yet
@@ -1062,14 +1060,14 @@ mod tests {
                     .missed_confirmations
                     .lock()
                     .unwrap()
-                    .insert(penalty_txid.clone(), CONFIRMATIONS_BEFORE_RETRY);
+                    .insert(penalty_txid, CONFIRMATIONS_BEFORE_RETRY);
                 need_rebroadcast.push(penalty_txid);
             } else {
                 responder
                     .missed_confirmations
                     .lock()
                     .unwrap()
-                    .insert(penalty_txid.clone(), CONFIRMATIONS_BEFORE_RETRY - 1);
+                    .insert(penalty_txid, CONFIRMATIONS_BEFORE_RETRY - 1);
                 dont_need_rebroadcast.push(penalty_txid);
             }
         }
@@ -1348,12 +1346,11 @@ mod tests {
         let mut penalties = Vec::new();
         let mut uuids = Vec::new();
         let target_block_height = (chain.blocks.len() + 1) as u32;
-        for i in 11..21 {
+        for user_id in users.iter().take(21).skip(11) {
             let pair = [generate_uuid(), generate_uuid()].to_vec();
-            let user_id = users[i];
 
             for uuid in pair.iter() {
-                let (_, appointment) = generate_dummy_appointment_with_user(user_id, None);
+                let (_, appointment) = generate_dummy_appointment_with_user(*user_id, None);
                 responder
                     .dbm
                     .lock()
@@ -1363,13 +1360,13 @@ mod tests {
 
                 let breach = get_random_breach();
                 penalties.push(breach.penalty_tx.txid());
-                responder.add_tracker(*uuid, breach, user_id, 0);
+                responder.add_tracker(*uuid, breach, *user_id, 0);
             }
 
             uuids.extend(pair.clone());
             responder
                 .gatekeeper
-                .add_outdated_user(user_id, target_block_height, Some(pair));
+                .add_outdated_user(*user_id, target_block_height, Some(pair));
         }
 
         // CONFIRMATIONS SETUP

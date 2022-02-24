@@ -97,7 +97,7 @@ impl Gatekeeper {
         expiry_delta: u32,
         dbm: Arc<Mutex<DBM>>,
     ) -> Self {
-        let registered_users = dbm.lock().unwrap().load_all_users().clone();
+        let registered_users = dbm.lock().unwrap().load_all_users();
         Gatekeeper {
             last_known_block_header: Mutex::new(*last_known_block_header.deref()),
             subscription_slots,
@@ -130,11 +130,7 @@ impl Gatekeeper {
 
     /// Gets the data held by the tower about a given user.
     pub fn get_user_info(&self, user_id: UserId) -> Option<UserInfo> {
-        self.registered_users
-            .lock()
-            .unwrap()
-            .get(&user_id)
-            .map(|x| x.clone())
+        self.registered_users.lock().unwrap().get(&user_id).cloned()
     }
 
     /// Authenticates a user.
@@ -172,7 +168,7 @@ impl Gatekeeper {
                     .checked_add(self.subscription_slots)
                     .ok_or(MaxSlotsReached)?;
                 user_info.subscription_expiry = block_count + self.subscription_duration;
-                self.dbm.lock().unwrap().update_user(user_id, &user_info);
+                self.dbm.lock().unwrap().update_user(user_id, user_info);
 
                 user_info
             }
@@ -222,7 +218,7 @@ impl Gatekeeper {
             user_info.appointments.insert(uuid, required_slots);
             user_info.available_slots = (user_info.available_slots as i64 - diff) as u32;
 
-            self.dbm.lock().unwrap().update_user(user_id, &user_info);
+            self.dbm.lock().unwrap().update_user(user_id, user_info);
 
             Ok(user_info.available_slots)
         } else {
@@ -290,13 +286,12 @@ impl Gatekeeper {
 
         for (uuid, user_id) in appointments {
             // Remove the appointment from the appointment list and update the available slots
-            registered_users.get_mut(&user_id).map(|user_info| {
-                user_info
-                    .appointments
-                    .remove(uuid)
-                    .map(|x| user_info.available_slots += x);
+            if let Some(user_info) = registered_users.get_mut(user_id) {
+                if let Some(x) = user_info.appointments.remove(uuid) {
+                    user_info.available_slots += x;
+                }
                 updated_users.insert(*user_id, user_info.clone());
-            });
+            };
         }
 
         updated_users
@@ -378,8 +373,8 @@ mod tests {
             let mut registered_users = self.registered_users.lock().unwrap();
             let mut user = registered_users.get_mut(&user_id).unwrap();
             user.subscription_expiry = outdates_at - self.expiry_delta;
-            if appointments.is_some() {
-                for uuid in appointments.unwrap().iter() {
+            if let Some(uuids) = appointments {
+                for uuid in uuids.iter() {
                     user.appointments.insert(*uuid, 1);
                 }
             }
@@ -780,13 +775,13 @@ mod tests {
         // And after
         gatekeeper.delete_appointments_from_memory(&all_appointments);
         for (uuid, user_id) in to_be_deleted.iter() {
-            assert!(!gatekeeper.registered_users.lock().unwrap()[&user_id]
+            assert!(!gatekeeper.registered_users.lock().unwrap()[user_id]
                 .appointments
                 .contains_key(uuid));
 
             // The slot count is back to default
             assert_eq!(
-                gatekeeper.registered_users.lock().unwrap()[&user_id].available_slots,
+                gatekeeper.registered_users.lock().unwrap()[user_id].available_slots,
                 gatekeeper.subscription_slots
             );
         }
@@ -811,22 +806,22 @@ mod tests {
         let user2_id = get_random_user_id();
         let user3_id = get_random_user_id();
 
-        for user_id in vec![user1_id, user2_id, user3_id] {
-            gatekeeper.add_outdated_user(user_id, chain.tip().height + 1, None)
+        for user_id in &[user1_id, user2_id, user3_id] {
+            gatekeeper.add_outdated_user(*user_id, chain.tip().height + 1, None)
         }
 
         // Connect a new block. Outdated users are deleted
         gatekeeper.block_connected(chain.blocks.last().unwrap(), chain.tip().height + 1);
 
         // Check that users have been removed from registered_users and the database
-        for user in vec![user1_id, user2_id, user3_id] {
+        for user_id in &[user1_id, user2_id, user3_id] {
             assert!(!gatekeeper
                 .registered_users
                 .lock()
                 .unwrap()
-                .contains_key(&user));
+                .contains_key(user_id));
             assert!(matches!(
-                gatekeeper.dbm.lock().unwrap().load_user(user),
+                gatekeeper.dbm.lock().unwrap().load_user(*user_id),
                 Err(DBError::NotFound)
             ));
         }
