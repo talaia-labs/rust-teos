@@ -97,11 +97,6 @@ pub struct Opt {
     #[structopt(long, default_value = "~/.teos")]
     pub data_dir: String,
 
-    // FIXME: Not currently used
-    /// Runs teos in background as a daemon
-    #[structopt(short, long)]
-    pub daemon: bool,
-
     /// Runs teos in debug mode
     #[structopt(long)]
     pub debug: bool,
@@ -136,7 +131,6 @@ pub struct Config {
     pub btc_rpc_port: u16,
 
     // Flags
-    pub daemon: bool,
     pub debug: bool,
     pub overwrite_key: bool,
 
@@ -183,7 +177,6 @@ impl Config {
             self.btc_rpc_port = options.btc_rpc_port.unwrap();
         }
 
-        self.daemon |= options.daemon;
         self.debug |= options.debug;
         self.overwrite_key = options.overwrite_key;
     }
@@ -244,7 +237,7 @@ impl Default for Config {
             btc_rpc_password: String::new(),
             btc_rpc_connect: "localhost".into(),
             btc_rpc_port: 0,
-            daemon: false,
+
             debug: false,
             overwrite_key: false,
             subscription_slots: 10000,
@@ -275,7 +268,7 @@ mod tests {
                 btc_rpc_connect: None,
                 btc_rpc_port: None,
                 data_dir: String::from("~/.teos"),
-                daemon: false,
+
                 debug: false,
                 overwrite_key: false,
             }

@@ -14,7 +14,6 @@ btc_rpc_connect = "localhost"
 btc_rpc_port = 8442
 
 # Flags
-daemon = false
 debug = false
 overwrite_key = false
 
