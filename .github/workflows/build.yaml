@@ -1,0 +1,34 @@
+name: Continuous Integration Checks
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ ubuntu-latest ]
+        toolchain: [ stable ]
+        include:
+          - toolchain: stable
+          - toolchain: stable
+            platform: macos-latest
+          - toolchain: stable
+            platform: windows-latest
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v2
+      - name: Install Rust ${{ matrix.toolchain }} toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          override: true
+          profile: minimal
+      - name: Build on Rust ${{ matrix.toolchain }}
+        run: |
+          cargo build --verbose --color always
+      - name: Test on Rust ${{ matrix.toolchain }}
+        run: |
+          cargo test --verbose --color always
