@@ -316,7 +316,7 @@ mod tests_private_helpers {
     use super::*;
 
     impl InternalAPI {
-        pub fn get_watcher(&self) -> &Watcher {
+        pub(crate) fn get_watcher(&self) -> &Watcher {
             &self.watcher
         }
     }

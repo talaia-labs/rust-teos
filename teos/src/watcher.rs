@@ -163,7 +163,7 @@ impl LocatorCache {
 /// using the resulting dispute transaction id to decipher the encrypted blob of an ongoing [Appointment].
 /// Breaches are passed to the [Responder] once created.
 #[derive(Debug, Clone)]
-pub struct Breach {
+pub(crate) struct Breach {
     /// Transaction that triggered the breach.
     pub dispute_tx: Transaction,
     /// Transaction that will be used as a response to the breach.
@@ -183,7 +183,7 @@ impl Breach {
 /// Packs the reasons why trying to add an appointment may fail.
 // TODO: It may be nice to create richer errors so the API can return richer rejection
 #[derive(Debug)]
-pub enum AddAppointmentFailure {
+pub(crate) enum AddAppointmentFailure {
     AuthenticationFailure,
     NotEnoughSlots,
     SubscriptionExpired(u32),
@@ -192,7 +192,7 @@ pub enum AddAppointmentFailure {
 
 /// Packs the reasons why trying to query an appointment may fail.
 #[derive(Debug)]
-pub enum GetAppointmentFailure {
+pub(crate) enum GetAppointmentFailure {
     AuthenticationFailure,
     SubscriptionExpired(u32),
     NotFound,
@@ -200,7 +200,7 @@ pub enum GetAppointmentFailure {
 
 /// Packs the reasons why trying to query a subscription info may fail.
 #[derive(Debug)]
-pub enum GetSubscriptionInfoFailure {
+pub(crate) enum GetSubscriptionInfoFailure {
     AuthenticationFailure,
     SubscriptionExpired(u32),
 }
@@ -210,7 +210,7 @@ pub enum GetSubscriptionInfoFailure {
 /// Either an [Appointment] or a [TransactionTracker] can be
 /// returned depending on whether the appointment can be found in the [Watcher] or in the [Responder].
 #[derive(Debug)]
-pub enum AppointmentInfo {
+pub(crate) enum AppointmentInfo {
     Appointment(Appointment),
     Tracker(TransactionTracker),
 }
@@ -304,7 +304,7 @@ impl Watcher {
 
     /// Registers a new user within the [Watcher]. This request is passed to the [Gatekeeper], who is in
     /// charge of managing users.
-    pub fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
+    pub(crate) fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let mut receipt = self.gatekeeper.add_update_user(user_id)?;
         receipt.sign(&self.signing_key);
 
@@ -323,7 +323,7 @@ impl Watcher {
     /// monitored by the [Watcher]. An [ExtendedAppointment] (constructed from the [Appointment]) will be persisted on disk.
     /// In case the locator for the given appointment can be found in the cache (meaning the appointment has been
     /// triggered recently) the data will be passed to the [Responder] straightaway (modulo it being valid).
-    pub fn add_appointment(
+    pub(crate) fn add_appointment(
         &self,
         appointment: Appointment,
         user_signature: String,
@@ -505,7 +505,7 @@ impl Watcher {
     /// - The user subscription has not expired
     /// - The appointment belongs to the user
     /// - The appointment exists within the system (either in the [Watcher] or the [Responder])
-    pub fn get_appointment(
+    pub(crate) fn get_appointment(
         &self,
         locator: Locator,
         user_signature: &str,
@@ -693,42 +693,42 @@ impl Watcher {
     }
 
     /// Ges the number of users currently registered with the tower.
-    pub fn get_registered_users_count(&self) -> usize {
+    pub(crate) fn get_registered_users_count(&self) -> usize {
         self.gatekeeper.get_registered_users_count()
     }
 
     /// Gets the total number of appointments stored in the [Watcher].
-    pub fn get_appointments_count(&self) -> usize {
+    pub(crate) fn get_appointments_count(&self) -> usize {
         self.appointments.lock().unwrap().len()
     }
 
     /// Gets the total number of trackers in the [Responder].
-    pub fn get_trackers_count(&self) -> usize {
+    pub(crate) fn get_trackers_count(&self) -> usize {
         self.responder.get_trackers_count()
     }
 
     /// Gets all the appointments stored in the [Watcher] (from the database).
-    pub fn get_all_watcher_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
+    pub(crate) fn get_all_watcher_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
         self.dbm.lock().unwrap().load_all_appointments()
     }
 
     /// Gets all the trackers stored in the [Responder] (from the database).
-    pub fn get_all_responder_trackers(&self) -> HashMap<UUID, TransactionTracker> {
+    pub(crate) fn get_all_responder_trackers(&self) -> HashMap<UUID, TransactionTracker> {
         self.dbm.lock().unwrap().load_all_trackers()
     }
 
     /// Gets the list of all registered user ids.
-    pub fn get_user_ids(&self) -> Vec<UserId> {
+    pub(crate) fn get_user_ids(&self) -> Vec<UserId> {
         self.gatekeeper.get_user_ids()
     }
 
     /// Gets the data held by the tower about a given user.
-    pub fn get_user_info(&self, user_id: UserId) -> Option<UserInfo> {
+    pub(crate) fn get_user_info(&self, user_id: UserId) -> Option<UserInfo> {
         self.gatekeeper.get_user_info(user_id)
     }
 
     /// Gets information about a user's subscription.
-    pub fn get_subscription_info(
+    pub(crate) fn get_subscription_info(
         &self,
         signature: &str,
     ) -> Result<(UserInfo, Vec<Locator>), GetSubscriptionInfoFailure> {
@@ -903,7 +903,7 @@ mod tests {
     impl Eq for Watcher {}
 
     impl Watcher {
-        pub fn add_random_tracker_to_responder(&self, uuid: UUID) {
+        pub(crate) fn add_random_tracker_to_responder(&self, uuid: UUID) {
             self.responder.add_random_tracker(uuid);
         }
     }

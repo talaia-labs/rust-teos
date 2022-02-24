@@ -15,7 +15,7 @@ use bitcoincore_rpc::{
 
 /// Contains data regarding an attempt of broadcasting a transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeliveryReceipt {
+pub(crate) struct DeliveryReceipt {
     /// Whether the [Transaction] has been accepted by the network.
     delivered: bool,
     /// Whether the [Transaction] was already confirmed.
@@ -77,7 +77,7 @@ impl Carrier {
 
     /// Clears the receipts cached by the [Carrier]. Should be called periodically to prevent it from
     /// growing unbounded.
-    pub fn clear_receipts(&mut self) {
+    pub(crate) fn clear_receipts(&mut self) {
         if !self.issued_receipts.is_empty() {
             self.issued_receipts = HashMap::new()
         }
@@ -102,7 +102,7 @@ impl Carrier {
     /// Sends a [Transaction] to the Bitcoin network.
     ///
     /// Returns a [DeliveryReceipt] indicating whether the transaction could be delivered or not.
-    pub fn send_transaction(&mut self, tx: &Transaction) -> DeliveryReceipt {
+    pub(crate) fn send_transaction(&mut self, tx: &Transaction) -> DeliveryReceipt {
         self.hang_until_bitcoind_reachable();
 
         if let Some(receipt) = self.issued_receipts.get(&tx.txid()) {
@@ -174,8 +174,9 @@ impl Carrier {
         receipt
     }
 
+    #[allow(dead_code)]
     /// Queries a [Transaction] from our node. Returns it if found, [None] otherwise.
-    pub fn get_transaction(&self, txid: &Txid) -> Option<Transaction> {
+    pub(crate) fn get_transaction(&self, txid: &Txid) -> Option<Transaction> {
         self.hang_until_bitcoind_reachable();
 
         match self.bitcoin_cli.get_raw_transaction(txid, None) {
@@ -211,7 +212,7 @@ impl Carrier {
     }
 
     /// Queries the confirmation count of a given [Transaction]. Returns it if the transaction can be found, [None] otherwise.
-    pub fn get_confirmations(&self, txid: &Txid) -> Option<u32> {
+    pub(crate) fn get_confirmations(&self, txid: &Txid) -> Option<u32> {
         self.hang_until_bitcoind_reachable();
 
         match self.bitcoin_cli.get_raw_transaction_info(txid, None) {

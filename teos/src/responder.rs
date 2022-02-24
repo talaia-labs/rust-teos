@@ -26,7 +26,7 @@ const CONFIRMATIONS_BEFORE_RETRY: u8 = 6;
 
 /// Minimal data required in memory to keep track of transaction trackers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrackerSummary {
+pub(crate) struct TrackerSummary {
     /// Identifier of the user who arranged the appointment.
     user_id: UserId,
     /// Transaction id the [Responder] is keeping track of.
@@ -37,7 +37,7 @@ pub struct TrackerSummary {
 ///
 /// It is analogous to [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) for the [`Watcher`](crate::watcher::Watcher).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TransactionTracker {
+pub(crate) struct TransactionTracker {
     /// Matches the corresponding [Breach] `dispute_tx` field.
     pub dispute_tx: Transaction,
     /// Matches the corresponding [Breach] penalty_tx field.
@@ -151,7 +151,7 @@ impl Responder {
     }
 
     /// Gets the total number of trackers in the responder.
-    pub fn get_trackers_count(&self) -> usize {
+    pub(crate) fn get_trackers_count(&self) -> usize {
         self.trackers.lock().unwrap().len()
     }
 
@@ -159,7 +159,12 @@ impl Responder {
     ///
     /// Breaches can either be added to the [Responder] in the form of a [TransactionTracker] if the [penalty transaction](Breach::penalty_tx)
     /// is accepted by the `bitcoind` or rejected otherwise.
-    pub fn handle_breach(&self, uuid: UUID, breach: Breach, user_id: UserId) -> DeliveryReceipt {
+    pub(crate) fn handle_breach(
+        &self,
+        uuid: UUID,
+        breach: Breach,
+        user_id: UserId,
+    ) -> DeliveryReceipt {
         let mut carrier = self.carrier.lock().unwrap();
 
         // Do not add already added trackers. This can only happen if handle_breach is called twice with the same data, which can only happen
@@ -224,7 +229,7 @@ impl Responder {
     }
 
     /// Checks whether a given tracker can be found in the [Responder].
-    pub fn has_tracker(&self, uuid: UUID) -> bool {
+    pub(crate) fn has_tracker(&self, uuid: UUID) -> bool {
         // Has tracker should return true as long as the given tracker is hold by the Responder.
         // If the tracker is partially kept, the function will log and the return will be false.
         // This may point out that some partial data deletion is happening, which must be fixed.
@@ -252,7 +257,7 @@ impl Responder {
     /// Gets a tracker from the [Responder] if found. [None] otherwise.
     ///
     /// The [TransactionTracker] is queried to the [DBM].
-    pub fn get_tracker(&self, uuid: UUID) -> Option<TransactionTracker> {
+    pub(crate) fn get_tracker(&self, uuid: UUID) -> Option<TransactionTracker> {
         if self.trackers.lock().unwrap().contains_key(&uuid) {
             self.dbm.lock().unwrap().load_tracker(uuid).ok()
         } else {
@@ -549,15 +554,15 @@ mod tests {
     impl Eq for Responder {}
 
     impl Responder {
-        pub fn get_trackers(&self) -> &Mutex<HashMap<UUID, TrackerSummary>> {
+        pub(crate) fn get_trackers(&self) -> &Mutex<HashMap<UUID, TrackerSummary>> {
             &self.trackers
         }
 
-        pub fn get_carrier(&self) -> &Mutex<Carrier> {
+        pub(crate) fn get_carrier(&self) -> &Mutex<Carrier> {
             &self.carrier
         }
 
-        pub fn add_random_tracker(&self, uuid: UUID) {
+        pub(crate) fn add_random_tracker(&self, uuid: UUID) {
             let user_id = get_random_user_id();
             let tracker = get_random_tracker(user_id);
 

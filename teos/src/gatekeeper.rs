@@ -18,7 +18,7 @@ use crate::extended_appointment::{compute_appointment_slots, ExtendedAppointment
 
 /// Data regarding a user subscription with the tower.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserInfo {
+pub(crate) struct UserInfo {
     /// Number of appointment slots available for a given user.
     pub(crate) available_slots: u32,
     /// Block height where the user subscription will expire.
@@ -53,17 +53,17 @@ impl UserInfo {
 
 /// Error raised if the user cannot be authenticated.
 #[derive(Debug, PartialEq)]
-pub struct AuthenticationFailure<'a>(&'a str);
+pub(crate) struct AuthenticationFailure<'a>(&'a str);
 
 /// Error raised if the user subscription has not enough slots to fit a new appointment.
 #[derive(Debug, PartialEq)]
-pub struct NotEnoughSlots;
+pub(crate) struct NotEnoughSlots;
 
 /// Error raised if the user subscription slots limit has been reached.
 ///
 /// This is currently set to [u32::MAX].
 #[derive(Debug, PartialEq)]
-pub struct MaxSlotsReached;
+pub(crate) struct MaxSlotsReached;
 
 /// Component in charge of managing access to the tower resources.
 ///
@@ -114,12 +114,12 @@ impl Gatekeeper {
     }
 
     /// Ges the number of users currently registered to the tower.
-    pub fn get_registered_users_count(&self) -> usize {
+    pub(crate) fn get_registered_users_count(&self) -> usize {
         self.registered_users.lock().unwrap().len()
     }
 
     /// Gets the list of all registered user ids.
-    pub fn get_user_ids(&self) -> Vec<UserId> {
+    pub(crate) fn get_user_ids(&self) -> Vec<UserId> {
         self.registered_users
             .lock()
             .unwrap()
@@ -129,7 +129,7 @@ impl Gatekeeper {
     }
 
     /// Gets the data held by the tower about a given user.
-    pub fn get_user_info(&self, user_id: UserId) -> Option<UserInfo> {
+    pub(crate) fn get_user_info(&self, user_id: UserId) -> Option<UserInfo> {
         self.registered_users.lock().unwrap().get(&user_id).cloned()
     }
 
@@ -137,7 +137,7 @@ impl Gatekeeper {
     ///
     /// User authentication is performed using ECRecover against fixed messages (one for each command).
     /// Notice all interaction with the tower should be guarded by this.
-    pub fn authenticate_user(
+    pub(crate) fn authenticate_user(
         &self,
         message: &[u8],
         signature: &str,
@@ -155,7 +155,10 @@ impl Gatekeeper {
     }
 
     /// Adds a new user to the tower (or updates its subscription if already registered).
-    pub fn add_update_user(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
+    pub(crate) fn add_update_user(
+        &self,
+        user_id: UserId,
+    ) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let block_count = self.last_known_block_header.lock().unwrap().height;
 
         // TODO: For now, new calls to `add_update_user` add subscription_slots to the current count and reset the expiry time
@@ -197,7 +200,7 @@ impl Gatekeeper {
     }
 
     /// Adds an appointment to a given user, or updates it if already present in the system (and belonging to the requester).
-    pub fn add_update_appointment(
+    pub(crate) fn add_update_appointment(
         &self,
         user_id: UserId,
         uuid: UUID,
@@ -227,7 +230,7 @@ impl Gatekeeper {
     }
 
     /// Checks whether a subscription has expired.
-    pub fn has_subscription_expired(
+    pub(crate) fn has_subscription_expired(
         &self,
         user_id: UserId,
     ) -> Result<(bool, u32), AuthenticationFailure<'_>> {
@@ -245,7 +248,7 @@ impl Gatekeeper {
 
     /// Gets a map of outdated users. Outdated users are those whose subscription has expired and the renewal grace period
     /// has already passed ([expiry_delta](Self::expiry_delta)).
-    pub fn get_outdated_users(&self, block_height: u32) -> HashMap<UserId, HashSet<UUID>> {
+    pub(crate) fn get_outdated_users(&self, block_height: u32) -> HashMap<UserId, HashSet<UUID>> {
         let registered_users = self.registered_users.lock().unwrap().clone();
         registered_users
             .into_iter()
@@ -255,7 +258,7 @@ impl Gatekeeper {
     }
 
     /// Gets a set of outdated user ids.
-    pub fn get_outdated_user_ids(&self, block_height: u32) -> HashSet<UserId> {
+    pub(crate) fn get_outdated_user_ids(&self, block_height: u32) -> HashSet<UserId> {
         self.get_outdated_users(block_height)
             .keys()
             .cloned()
@@ -263,7 +266,7 @@ impl Gatekeeper {
     }
 
     /// Get a map of outdated appointments (from any user).
-    pub fn get_outdated_appointments(&self, block_height: u32) -> HashSet<UUID> {
+    pub(crate) fn get_outdated_appointments(&self, block_height: u32) -> HashSet<UUID> {
         HashSet::from_iter(
             self.get_outdated_users(block_height)
                 .into_values()
@@ -277,7 +280,7 @@ impl Gatekeeper {
     /// Notice appointments are only de-linked from users, but not actually removed. This is because the [Gatekeeper]
     /// does not actually hold any [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) data,
     /// just references to them.
-    pub fn delete_appointments_from_memory(
+    pub(crate) fn delete_appointments_from_memory(
         &self,
         appointments: &HashMap<UUID, UserId>,
     ) -> HashMap<UserId, UserInfo> {
@@ -359,11 +362,11 @@ mod tests {
     impl Eq for Gatekeeper {}
 
     impl Gatekeeper {
-        pub fn get_registered_users(&self) -> &Mutex<HashMap<UserId, UserInfo>> {
+        pub(crate) fn get_registered_users(&self) -> &Mutex<HashMap<UserId, UserInfo>> {
             &self.registered_users
         }
 
-        pub fn add_outdated_user(
+        pub(crate) fn add_outdated_user(
             &self,
             user_id: UserId,
             outdates_at: u32,

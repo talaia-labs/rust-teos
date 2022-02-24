@@ -319,7 +319,7 @@ mod test_helpers {
     use crate::protos::public_tower_services_server::PublicTowerServicesServer;
     use crate::test_utils::{create_api_with_config, ApiConfig};
 
-    pub enum RequestBody<'a> {
+    pub(crate) enum RequestBody<'a> {
         Jsonify(&'a str),
         DoNotJsonify(&'a str),
         Json(Value),

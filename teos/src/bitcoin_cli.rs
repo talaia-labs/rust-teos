@@ -68,6 +68,8 @@ impl BlockSource for &BitcoindClient<'_> {
     }
 }
 
+// TODO: This is not being used atm since we're using bitcoincore-rpc.
+// Not deleting it since wd should need it once both get merged.
 impl<'a> BitcoindClient<'a> {
     /// Creates a new [BitcoindClient] instance.
     pub async fn new(

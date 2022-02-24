@@ -60,7 +60,7 @@ fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
 }
 
 #[tokio::main]
-pub async fn main() {
+async fn main() {
     let opt = Opt::from_args();
     let path = config::data_dir_absolute_path(opt.data_dir.clone());
 

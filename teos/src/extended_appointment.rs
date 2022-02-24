@@ -12,7 +12,7 @@ use teos_common::UserId;
 
 /// Unique identifier used to identify appointments.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct UUID([u8; 20]);
+pub(crate) struct UUID([u8; 20]);
 
 impl UUID {
     /// Creates a new [UUID].
@@ -49,7 +49,7 @@ impl std::fmt::Display for UUID {
 /// Notice [ExtendedAppointment]s are not kept in memory but persisted on disk. The [Watcher](crate::watcher::Watcher)
 /// keeps [AppointmentSummary] instead.
 #[derive(Debug, Eq, PartialEq, Clone)]
-pub struct ExtendedAppointment {
+pub(crate) struct ExtendedAppointment {
     /// The underlying appointment extended by [ExtendedAppointment].
     pub inner: Appointment,
     /// The user this [Appointment] belongs to.
@@ -65,7 +65,7 @@ pub struct ExtendedAppointment {
 /// Contains the minimal amount of data the [Watcher](crate::watcher::Watcher) needs to keep in memory in order to
 /// watch for breaches.
 #[derive(Debug, Eq, PartialEq, Clone)]
-pub struct AppointmentSummary {
+pub(crate) struct AppointmentSummary {
     /// The [Appointment] locator.
     pub locator: Locator,
     /// The user this [Appointment] belongs to.
@@ -125,7 +125,7 @@ impl From<Appointment> for msgs::Appointment {
 /// Computes the number of slots an appointment takes from a user subscription.
 ///
 /// This is based on the [encrypted_blob](Appointment::encrypted_blob) size and the slot size that was defined by the [Gatekeeper](crate::gatekeeper::Gatekeeper).
-pub fn compute_appointment_slots(blob_size: usize, blob_max_size: usize) -> u32 {
+pub(crate) fn compute_appointment_slots(blob_size: usize, blob_max_size: usize) -> u32 {
     (blob_size as f32 / blob_max_size as f32).ceil() as u32
 }
 
