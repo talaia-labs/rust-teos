@@ -17,7 +17,7 @@ async fn main() {
 
     // Create data dir if it does not exist
     fs::create_dir_all(&path).unwrap_or_else(|e| {
-        eprint!("Cannot create data dir: {:?}\n", e);
+        eprintln!("Cannot create data dir: {:?}", e);
         std::process::exit(1);
     });
 
@@ -32,9 +32,9 @@ async fn main() {
         PrivateTowerServicesClient::connect(format!("http://{}:{}", conf.rpc_bind, conf.rpc_port))
             .await
             .unwrap_or_else(|e| {
-                eprint!("Cannot connect to the tower. Connection refused\n");
+                eprintln!("Cannot connect to the tower. Connection refused");
                 if conf.debug {
-                    eprint!("{:?}\n", e);
+                    eprintln!("{:?}", e);
                 }
                 std::process::exit(1);
             });

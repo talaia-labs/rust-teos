@@ -5,7 +5,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use structopt::StructOpt;
 use tokio::task;
 use tonic::transport::Server;
-use triggered;
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
@@ -67,7 +66,7 @@ pub async fn main() {
 
     // Create data dir if it does not exist
     fs::create_dir_all(&path).unwrap_or_else(|e| {
-        eprint!("Cannot create data dir: {:?}\n", e);
+        eprintln!("Cannot create data dir: {:?}", e);
         std::process::exit(1);
     });
 
@@ -75,7 +74,7 @@ pub async fn main() {
     let mut conf = config::from_file::<Config>(path.join("teos.toml"));
     conf.patch_with_options(opt);
     conf.verify().unwrap_or_else(|e| {
-        eprint!("{}\n", e);
+        eprintln!("{}", e);
         std::process::exit(1);
     });
 

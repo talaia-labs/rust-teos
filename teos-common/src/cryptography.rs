@@ -1,4 +1,4 @@
-//! Cryptography module, used in the interction between users and towers.
+//! Cryptography module, used in the interaction between users and towers.
 
 use rand::distributions::Uniform;
 use rand::Rng;
@@ -47,7 +47,7 @@ pub fn encrypt(
 ) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
     // Defaults is [0; 12]
     let nonce = Nonce::default();
-    let _k = sha256::Hash::hash(&secret);
+    let _k = sha256::Hash::hash(secret);
     let key = Key::from_slice(&_k);
 
     let cypher = ChaCha20Poly1305::new(key);
@@ -61,18 +61,16 @@ pub fn encrypt(
 /// - `[0; 12]` as IV.
 ///
 ///  The result is expected to be a penalty transaction.
-pub fn decrypt(encrypted_blob: &Vec<u8>, secret: &Txid) -> Result<Transaction, DecryptingError> {
+pub fn decrypt(encrypted_blob: &[u8], secret: &Txid) -> Result<Transaction, DecryptingError> {
     // Defaults is [0; 12]
     let nonce = Nonce::default();
-    let _k = sha256::Hash::hash(&secret);
+    let _k = sha256::Hash::hash(secret);
     let key = Key::from_slice(&_k);
 
     let cypher = ChaCha20Poly1305::new(key);
 
     match cypher.decrypt(&nonce, encrypted_blob.as_ref()) {
-        Ok(tx_bytes) => {
-            Transaction::deserialize(&tx_bytes).map_err(|e| (DecryptingError::Encode(e)))
-        }
+        Ok(tx_bytes) => Transaction::deserialize(&tx_bytes).map_err(DecryptingError::Encode),
         Err(e) => Err(DecryptingError::AED(e)),
     }
 }
@@ -93,9 +91,8 @@ pub fn get_random_keypair() -> (SecretKey, PublicKey) {
     let raw_sk = get_random_bytes(32);
 
     loop {
-        match SecretKey::from_slice(&raw_sk) {
-            Ok(sk) => return (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
-            Err(_) => (),
+        if let Ok(sk) = SecretKey::from_slice(&raw_sk) {
+            return (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk));
         }
     }
 }
@@ -125,6 +122,6 @@ mod tests {
 
         let encrypted_blob = Vec::from_hex(ENC_BLOB).unwrap();
         let txid = Txid::from_hex(HEX_TXID).unwrap();
-        assert_eq!(decrypt(&&encrypted_blob, &txid).unwrap(), expected_tx);
+        assert_eq!(decrypt(&encrypted_blob, &txid).unwrap(), expected_tx);
     }
 }

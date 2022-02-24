@@ -170,7 +170,7 @@ impl Blockchain {
         BlockHeaderData {
             chainwork: self.blocks[0].header.work() + Uint256::from_u64(height as u64).unwrap(),
             height: height as u32,
-            header: self.blocks[height].header.clone(),
+            header: self.blocks[height].header,
         }
     }
 
@@ -272,7 +272,7 @@ impl BlockSource for Blockchain {
         })
     }
 
-    fn get_best_block<'a>(&'a mut self) -> AsyncBlockSourceResult<'a, (BlockHash, Option<u32>)> {
+    fn get_best_block(&mut self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
         Box::pin(async move {
             if *self.unreachable.lock().unwrap() {
                 return Err(BlockSourceError::transient("Connection refused"));
@@ -373,7 +373,7 @@ pub fn get_random_tracker(user_id: UserId) -> TransactionTracker {
 pub fn store_appointment_and_fks_to_db(dbm: &DBM, uuid: UUID, appointment: &ExtendedAppointment) {
     dbm.store_user(appointment.user_id, &UserInfo::new(21, 42))
         .unwrap();
-    dbm.store_appointment(uuid, &appointment).unwrap();
+    dbm.store_appointment(uuid, appointment).unwrap();
 }
 
 pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<ValidatedBlock> {

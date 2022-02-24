@@ -79,7 +79,7 @@ impl Config {
             self.rpc_port = options.rpc_port.unwrap();
         }
 
-        self.debug = self.debug | options.debug;
+        self.debug |= options.debug;
     }
 }
 

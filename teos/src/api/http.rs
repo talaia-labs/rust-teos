@@ -57,7 +57,7 @@ impl ApiError {
     }
 }
 
-pub fn serialize_vec_bytes<S>(v: &Vec<Vec<u8>>, s: S) -> Result<S::Ok, S::Error>
+pub fn serialize_vec_bytes<S>(v: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -261,13 +261,11 @@ fn router(
         .and(with_grpc(grpc_conn))
         .and_then(get_subscription_info);
 
-    let routes = register
+    register
         .or(add_appointment)
         .or(get_appointment)
         .or(get_subscription_info)
-        .recover(|x| handle_rejection(x));
-
-    routes
+        .recover(handle_rejection)
 }
 
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {

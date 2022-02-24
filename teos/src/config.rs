@@ -8,11 +8,11 @@ use std::str::FromStr;
 use structopt::StructOpt;
 
 pub fn data_dir_absolute_path(data_dir: String) -> PathBuf {
-    if data_dir.starts_with("~") {
-        if data_dir.starts_with("~/") {
-            home::home_dir().unwrap().join(&data_dir[2..])
+    if let Some(a) = data_dir.strip_prefix('~') {
+        if let Some(b) = data_dir.strip_prefix("~/") {
+            home::home_dir().unwrap().join(b)
         } else {
-            home::home_dir().unwrap().join(&data_dir[1..])
+            home::home_dir().unwrap().join(a)
         }
     } else {
         PathBuf::from(&data_dir)
@@ -183,8 +183,8 @@ impl Config {
             self.btc_rpc_port = options.btc_rpc_port.unwrap();
         }
 
-        self.daemon = self.daemon | options.daemon;
-        self.debug = self.debug | options.debug;
+        self.daemon |= options.daemon;
+        self.debug |= options.debug;
         self.overwrite_key = options.overwrite_key;
     }
 
@@ -312,19 +312,23 @@ mod tests {
     #[test]
     fn test_config_default_verify_overwrite_required() {
         // Tests that setting a some btc_rpc_user and btc_rpc_password results in a Config object that verifies
-        let mut config = Config::default();
-        config.btc_rpc_user = "user".to_owned();
-        config.btc_rpc_password = "password".to_owned();
+        let mut config = Config {
+            btc_rpc_user: "user".to_owned(),
+            btc_rpc_password: "password".to_owned(),
+            ..Default::default()
+        };
         config.verify().unwrap();
     }
 
     #[test]
     fn test_config_verify_wrong_network() {
         // Tests that setting a wrong network will make verify fail
-        let mut config = Config::default();
-        config.btc_rpc_user = "user".to_owned();
-        config.btc_rpc_password = "password".to_owned();
-        config.btc_network = "wrong_network".to_owned();
+        let mut config = Config {
+            btc_rpc_user: "user".to_owned(),
+            btc_rpc_password: "password".to_owned(),
+            btc_network: "wrong_network".to_owned(),
+            ..Default::default()
+        };
         assert!(matches!(config.verify(), Err(ConfigError { .. })));
     }
 }

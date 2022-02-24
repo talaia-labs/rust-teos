@@ -25,7 +25,7 @@ impl Locator {
 
     /// Builds a locator from its byte representation.
     pub fn deserialize(data: &[u8]) -> Result<Self, TryFromSliceError> {
-        data.try_into().map(|x| Self(x))
+        data.try_into().map(Self)
     }
 }
 

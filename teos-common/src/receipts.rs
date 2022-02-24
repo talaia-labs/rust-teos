@@ -82,7 +82,7 @@ impl AppointmentReceipt {
 
     pub fn serialize(&self) -> Vec<u8> {
         let mut ser = Vec::new();
-        ser.extend_from_slice(&self.user_signature.as_bytes());
+        ser.extend_from_slice(self.user_signature.as_bytes());
         ser.extend_from_slice(&self.start_block.to_be_bytes());
 
         ser

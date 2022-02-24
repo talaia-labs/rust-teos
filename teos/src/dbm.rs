@@ -763,7 +763,7 @@ mod tests {
 
         // Appointment only
         assert!(matches!(
-            dbm.store_appointment(uuid, &appointment.clone()),
+            dbm.store_appointment(uuid, &appointment),
             Ok { .. }
         ));
 
@@ -777,13 +777,10 @@ mod tests {
         // Appointment + Tracker
         dbm.store_user(appointment.user_id, &info).unwrap();
         assert!(matches!(
-            dbm.store_appointment(uuid, &appointment.clone()),
+            dbm.store_appointment(uuid, &appointment),
             Ok { .. }
         ));
-        assert!(matches!(
-            dbm.store_tracker(uuid, &tracker.clone()),
-            Ok { .. }
-        ));
+        assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
         dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id]));
         assert!(matches!(
@@ -866,7 +863,7 @@ mod tests {
         ));
 
         // Modify the appointment and update it
-        let mut modified_appointment = appointment.clone();
+        let mut modified_appointment = appointment;
         modified_appointment.inner.encrypted_blob.reverse();
 
         // Not all fields are updatable, create another appointment modifying fields that cannot be
@@ -982,7 +979,7 @@ mod tests {
 
         // Appointment only
         assert!(matches!(
-            dbm.store_appointment(uuid, &appointment.clone()),
+            dbm.store_appointment(uuid, &appointment),
             Ok { .. }
         ));
 
@@ -994,13 +991,10 @@ mod tests {
 
         // Appointment + Tracker
         assert!(matches!(
-            dbm.store_appointment(uuid, &appointment.clone()),
+            dbm.store_appointment(uuid, &appointment),
             Ok { .. }
         ));
-        assert!(matches!(
-            dbm.store_tracker(uuid, &tracker.clone()),
-            Ok { .. }
-        ));
+        assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
         dbm.batch_remove_appointments(
             &HashSet::from_iter(vec![uuid]),

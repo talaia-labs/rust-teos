@@ -1,6 +1,5 @@
 //! Logic related to appointments handled by the tower.
 
-use hex;
 use std::array::TryFromSliceError;
 use std::convert::TryInto;
 use std::fmt;
@@ -34,7 +33,7 @@ impl UUID {
 
     /// Builds a [UUID] from its byte representation.
     pub fn deserialize(data: &[u8]) -> Result<Self, TryFromSliceError> {
-        data.try_into().map(|x| Self(x))
+        data.try_into().map(Self)
     }
 }
 
@@ -113,12 +112,12 @@ impl ExtendedAppointment {
     }
 }
 
-impl Into<msgs::Appointment> for Appointment {
-    fn into(self) -> msgs::Appointment {
-        msgs::Appointment {
-            locator: self.locator.serialize(),
-            encrypted_blob: self.encrypted_blob.clone(),
-            to_self_delay: self.to_self_delay,
+impl From<Appointment> for msgs::Appointment {
+    fn from(a: Appointment) -> Self {
+        Self {
+            locator: a.locator.serialize(),
+            encrypted_blob: a.encrypted_blob.clone(),
+            to_self_delay: a.to_self_delay,
         }
     }
 }
