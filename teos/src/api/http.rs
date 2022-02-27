@@ -794,9 +794,10 @@ mod tests_methods {
         // Add the appointment to the Responder so it counts as triggered
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
-        internal_api
-            .get_watcher()
-            .add_random_tracker_to_responder(UUID::new(appointment.locator, UserId(user_pk)));
+        internal_api.get_watcher().add_random_tracker_to_responder(
+            UUID::new(appointment.locator, UserId(user_pk)),
+            Some(1),
+        );
 
         // Try to add it via the http API
         assert_eq!(

@@ -903,8 +903,8 @@ mod tests {
     impl Eq for Watcher {}
 
     impl Watcher {
-        pub(crate) fn add_random_tracker_to_responder(&self, uuid: UUID) {
-            self.responder.add_random_tracker(uuid);
+        pub(crate) fn add_random_tracker_to_responder(&self, uuid: UUID, height: Option<u32>) {
+            self.responder.add_random_tracker(uuid, height);
         }
     }
 
@@ -1141,7 +1141,7 @@ mod tests {
             .unwrap();
 
         let breach = get_random_breach();
-        watcher.responder.add_tracker(uuid, breach, user_id, 0);
+        watcher.responder.add_tracker(uuid, breach, user_id, None);
         let receipt = watcher.add_appointment(triggered_appointment.inner, signature);
 
         assert!(matches!(
@@ -1462,9 +1462,9 @@ mod tests {
 
         // Add data to the Responder
         let breach = get_random_breach();
-        let tracker = TransactionTracker::new(breach.clone(), user_id);
+        let tracker = TransactionTracker::new(breach.clone(), user_id, None);
 
-        watcher.responder.add_tracker(uuid, breach, user_id, 0);
+        watcher.responder.add_tracker(uuid, breach, user_id, None);
 
         let tracker_message = format!("get appointment {}", appointment.locator);
         let tracker_signature = cryptography::sign(tracker_message.as_bytes(), &user_sk).unwrap();

@@ -194,8 +194,8 @@ impl Blockchain {
         cache
     }
 
-    pub async fn get_block_count(&self) -> usize {
-        self.blocks.len()
+    pub fn get_block_count(&self) -> usize {
+        self.blocks.len() - 1
     }
 
     pub fn generate(&mut self, txs: Option<Vec<Transaction>>) -> Block {
@@ -366,9 +366,9 @@ pub(crate) fn get_random_breach() -> Breach {
     Breach::new(dispute_tx, penalty_tx)
 }
 
-pub(crate) fn get_random_tracker(user_id: UserId) -> TransactionTracker {
+pub(crate) fn get_random_tracker(user_id: UserId, height: Option<u32>) -> TransactionTracker {
     let breach = get_random_breach();
-    TransactionTracker::new(breach, user_id)
+    TransactionTracker::new(breach, user_id, height)
 }
 
 pub(crate) fn store_appointment_and_fks_to_db(
@@ -401,16 +401,12 @@ pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<V
 
 pub(crate) enum MockedServerQuery {
     Regular,
-    Confirmations(u32),
     Error(i64),
 }
 
 pub(crate) fn create_carrier(query: MockedServerQuery) -> Carrier {
     let bitcoind_mock = match query {
         MockedServerQuery::Regular => BitcoindMock::new(MockOptions::empty()),
-        MockedServerQuery::Confirmations(x) => {
-            BitcoindMock::new(MockOptions::with_confirmations(x))
-        }
         MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
     };
     let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
@@ -529,35 +525,41 @@ pub(crate) struct BitcoindMock {
 
 pub(crate) struct MockOptions {
     error_code: Option<i64>,
-    confirmations: Option<u32>,
+    block_hash: Option<BlockHash>,
+    height: Option<usize>,
 }
 
 impl MockOptions {
-    pub fn new(error_code: Option<i64>, confirmations: Option<u32>) -> Self {
+    pub fn new(error_code: i64, block_hash: BlockHash, height: usize) -> Self {
         Self {
-            error_code,
-            confirmations,
+            error_code: Some(error_code),
+            block_hash: Some(block_hash),
+            height: Some(height),
         }
     }
 
     pub fn empty() -> Self {
         Self {
             error_code: None,
-            confirmations: None,
+            block_hash: None,
+            height: None,
         }
     }
 
     pub fn with_error(error_code: i64) -> Self {
         Self {
             error_code: Some(error_code),
-            confirmations: None,
+            block_hash: None,
+            height: None,
         }
     }
 
-    pub fn with_confirmations(confirmations: u32) -> Self {
+    #[allow(dead_code)]
+    pub fn with_block(block_hash: BlockHash, height: usize) -> Self {
         Self {
             error_code: None,
-            confirmations: Some(confirmations),
+            block_hash: Some(block_hash),
+            height: Some(height),
         }
     }
 }
@@ -566,25 +568,19 @@ impl BitcoindMock {
     pub fn new(options: MockOptions) -> Self {
         let mut io = IoHandler::default();
 
-        match options.error_code {
-            Some(x) => {
-                io.add_sync_method("error", move |_params: Params| {
-                    Err(JsonRpcError::new(JsonRpcErrorCode::ServerError(x)))
-                });
-                io.add_alias("sendrawtransaction", "error");
+        if let Some(error) = options.error_code {
+            io.add_sync_method("error", move |_params: Params| {
+                Err(JsonRpcError::new(JsonRpcErrorCode::ServerError(error)))
+            });
+            io.add_alias("sendrawtransaction", "error");
+        } else {
+            BitcoindMock::add_sendrawtransaction(&mut io);
+        }
 
-                // So we can test a sendrawtransaction error b/c the tx is already on the mempool
-                // and query the confirmation count
-                match options.confirmations {
-                    Some(c) => {
-                        BitcoindMock::add_getrawtransaction(&mut io, c);
-                    }
-                    None => io.add_alias("getrawtransaction", "error"),
-                }
-            }
-            None => {
-                BitcoindMock::add_sendrawtransaction(&mut io);
-                BitcoindMock::add_getrawtransaction(&mut io, options.confirmations.unwrap_or(0));
+        if let Some(block_hash) = options.block_hash {
+            BitcoindMock::add_getrawtransaction(&mut io, block_hash.to_string());
+            if let Some(height) = options.height {
+                BitcoindMock::add_getblockheader(&mut io, block_hash.to_string(), height);
             }
         }
 
@@ -605,14 +601,34 @@ impl BitcoindMock {
         });
     }
 
-    fn add_getrawtransaction(io: &mut IoHandler, confirmations: u32) {
+    fn add_getrawtransaction(io: &mut IoHandler, block_hash: String) {
         io.add_sync_method("getrawtransaction", move |_params: Params|  {
             match _params {
                 Params::Array(x) => match x[1] {
                     Value::Bool(x) => {
                         if x {
-                            Ok(serde_json::json!({"confirmations": confirmations, "hex": TX_HEX, "txid": TXID_HEX,
-                            "hash": TXID_HEX, "size": 0, "vsize": 0, "version": 1, "locktime": 0, "vin": [], "vout": [] }))
+                            Ok(serde_json::json!({"hex": TX_HEX, "txid": TXID_HEX, "hash": TXID_HEX, "size": 0, 
+                            "vsize": 0, "version": 1, "locktime": 0, "vin": [], "vout": [], "blockhash": block_hash }))
+                        } else {
+                            Ok(Value::String(TX_HEX.to_owned()))
+                        }
+                    }
+                    _ => panic!("Boolean param not found"),
+                },
+                _ => panic!("No params found"),
+            }
+        })
+    }
+
+    fn add_getblockheader(io: &mut IoHandler, block_hash: String, height: usize) {
+        io.add_sync_method("getblockheader", move |_params: Params|  {
+            match _params {
+                Params::Array(x) => match x[1] {
+                    Value::Bool(x) => {
+                        if x {
+                            Ok(serde_json::json!({"hash": block_hash, "confirmations": 1, "height": height, "version": 1, 
+                            "merkleroot": "4eca41cf0fa551346842eb317564a403e39553444790a65f949f95bc18d24643", "time": 1645719068, "nonce": 2, "bits": "207fffff", 
+                            "difficulty": 0.0, "chainwork": "0000000000000000000000000000000000000000000000000000000000001146", "nTx": 1}))
                         } else {
                             Ok(Value::String(TX_HEX.to_owned()))
                         }
