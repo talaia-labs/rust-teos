@@ -34,9 +34,9 @@ warp = "0.3.2"
 # Bitcoin and Lightning
 bitcoin = { version = "0.27", features = [ "base64" ] }
 bitcoincore-rpc = "0.14.0"
-lightning = { version = "0.0.104", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
-lightning-net-tokio = { version = "0.0.104", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main" }
-lightning-block-sync = { version = "0.0.104", git = "https://github.com/rust-bitcoin/rust-lightning", branch = "main", features = [ "rpc-client" ] }
+lightning = "0.0.104"
+lightning-net-tokio = "0.0.104"
+lightning-block-sync = { version = "0.0.104", features = [ "rpc-client" ] }
 
 # Local
 teos-common = { path = "../teos-common" }
