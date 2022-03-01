@@ -21,13 +21,14 @@ use teos_common::UserId;
 
 use crate::extended_appointment::{compute_appointment_slots, ExtendedAppointment, UUID};
 use crate::gatekeeper::UserInfo;
-use crate::responder::TransactionTracker;
+use crate::responder::{ConfirmationStatus, TransactionTracker};
 
 /// Packs the errors than can raise when interacting with the underlying database.
 #[derive(Debug)]
 pub enum Error {
     AlreadyExists,
     MissingForeignKey,
+    MissingField,
     NotFound,
     Unknown(SqliteError),
 }
@@ -90,7 +91,8 @@ impl DBM {
                 UUID INT PRIMARY KEY,
                 dispute_tx BLOB NOT NULL,
                 penalty_tx BLOB NOT NULL,
-                height INT,
+                height INT NOT NULL,
+                confirmed BOOL NOT NULL,
                 FOREIGN KEY(UUID)
                     REFERENCES appointments(UUID)
                     ON DELETE CASCADE
@@ -455,15 +457,18 @@ impl DBM {
         uuid: UUID,
         tracker: &TransactionTracker,
     ) -> Result<(), Error> {
+        let (height, confirmed) = tracker.status.to_db_data().ok_or(Error::MissingField)?;
+
         let query =
-            "INSERT INTO trackers (UUID, dispute_tx, penalty_tx, height) VALUES (?1, ?2, ?3, ?4)";
+            "INSERT INTO trackers (UUID, dispute_tx, penalty_tx, height, confirmed) VALUES (?1, ?2, ?3, ?4, ?5)";
         match self.store_data(
             query,
             params![
                 uuid.serialize(),
                 tracker.dispute_tx.serialize(),
                 tracker.penalty_tx.serialize(),
-                tracker.height,
+                height,
+                confirmed,
             ],
         ) {
             Ok(x) => {
@@ -488,14 +493,15 @@ impl DBM {
             let dispute_tx = deserialize::<Transaction>(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
             let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
-            let height: Option<u32> = row.get(3).unwrap();
-            let raw_userid: Vec<u8> = row.get(4).unwrap();
+            let height: u32 = row.get(3).unwrap();
+            let confirmed: bool = row.get(4).unwrap();
+            let raw_userid: Vec<u8> = row.get(5).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 
             Ok(TransactionTracker {
                 dispute_tx,
                 penalty_tx,
-                height,
+                status: ConfirmationStatus::from_db_data(height, confirmed),
                 user_id,
             })
         })
@@ -518,8 +524,9 @@ impl DBM {
             let dispute_tx = deserialize::<Transaction>(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
             let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
-            let height: Option<u32> = row.get(3).unwrap();
-            let raw_userid: Vec<u8> = row.get(4).unwrap();
+            let height: u32 = row.get(3).unwrap();
+            let confirmed: bool = row.get(4).unwrap();
+            let raw_userid: Vec<u8> = row.get(5).unwrap();
             let user_id = UserId::deserialize(&raw_userid).unwrap();
 
             trackers.insert(
@@ -527,7 +534,7 @@ impl DBM {
                 TransactionTracker {
                     dispute_tx,
                     penalty_tx,
-                    height,
+                    status: ConfirmationStatus::from_db_data(height, confirmed),
                     user_id,
                 },
             );
@@ -764,7 +771,8 @@ mod tests {
         let mut dbm = DBM::in_memory().unwrap();
         let uuid = generate_uuid();
         let appointment = generate_dummy_appointment(None);
-        let tracker = get_random_tracker(appointment.user_id, None);
+        // The confirmation status doesn't really matter here, it can be any of {ConfirmedIn, InMempoolSince}.
+        let tracker = get_random_tracker(appointment.user_id, ConfirmationStatus::ConfirmedIn(100));
 
         // Add the user and link an appointment (this is usually done once the appointment)
         // is added after the user creation, but for the test purpose it can be done all at once.
@@ -915,7 +923,8 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         dbm.store_appointment(uuid, &appointment).unwrap();
 
-        let tracker = get_random_tracker(user_id, Some(100));
+        // The confirmation status doesn't really matter here, it can be any of {ConfirmedIn, InMempoolSince}.
+        let tracker = get_random_tracker(user_id, ConfirmationStatus::InMempoolSince(100));
         dbm.store_tracker(uuid, &tracker).unwrap();
 
         // We should get all the appointments back except from the triggered one
@@ -980,7 +989,8 @@ mod tests {
         let mut dbm = DBM::in_memory().unwrap();
         let uuid = generate_uuid();
         let appointment = generate_dummy_appointment(None);
-        let tracker = get_random_tracker(appointment.user_id, None);
+        // The confirmation status doesn't really matter here, it can be any of {ConfirmedIn, InMempoolSince}.
+        let tracker = get_random_tracker(appointment.user_id, ConfirmationStatus::ConfirmedIn(21));
 
         let info = UserInfo::new(21, 42);
 
@@ -1063,7 +1073,8 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         dbm.store_appointment(uuid, &appointment).unwrap();
 
-        let tracker = get_random_tracker(user_id, Some(21));
+        // The confirmation status doesn't really matter here, it can be any of {ConfirmedIn, InMempoolSince}.
+        let tracker = get_random_tracker(user_id, ConfirmationStatus::ConfirmedIn(21));
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
         assert_eq!(dbm.load_tracker(uuid).unwrap(), tracker);
     }
@@ -1079,7 +1090,8 @@ mod tests {
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
         dbm.store_appointment(uuid, &appointment).unwrap();
 
-        let tracker = get_random_tracker(user_id, Some(42));
+        // The confirmation status doesn't really matter here, it can be any of {ConfirmedIn, InMempoolSince}.
+        let tracker = get_random_tracker(user_id, ConfirmationStatus::InMempoolSince(42));
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
         // Try to store it again, but it shouldn't go through
@@ -1095,7 +1107,9 @@ mod tests {
 
         let uuid = generate_uuid();
         let user_id = get_random_user_id();
-        let tracker = get_random_tracker(user_id, None);
+
+        // The confirmation status doesn't really matter here, it can be any of {ConfirmedIn, InMempoolSince}.
+        let tracker = get_random_tracker(user_id, ConfirmationStatus::InMempoolSince(42));
 
         assert!(matches!(
             dbm.store_tracker(uuid, &tracker),
@@ -1124,7 +1138,8 @@ mod tests {
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
             dbm.store_appointment(uuid, &appointment).unwrap();
 
-            let tracker = get_random_tracker(user_id, None);
+            // The confirmation status doesn't really matter here, it can be any of {ConfirmedIn, InMempoolSince}.
+            let tracker = get_random_tracker(user_id, ConfirmationStatus::InMempoolSince(42));
             dbm.store_tracker(uuid, &tracker).unwrap();
             trackers.insert(uuid, tracker);
         }

@@ -387,7 +387,7 @@ mod tests_private_api {
         let appointment = generate_dummy_appointment(None).inner;
         internal_api
             .watcher
-            .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id), Some(1));
+            .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
 
         let response = internal_api
             .get_all_appointments(Request::new(()))
@@ -442,7 +442,7 @@ mod tests_private_api {
             let appointment = generate_dummy_appointment(None).inner;
             internal_api
                 .watcher
-                .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id), Some(1));
+                .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
         }
 
         let response = internal_api
@@ -794,7 +794,7 @@ mod tests_public_api {
         let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
         internal_api
             .watcher
-            .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id), Some(1));
+            .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
 
         match internal_api
             .add_appointment(Request::new(msgs::AddAppointmentRequest {
