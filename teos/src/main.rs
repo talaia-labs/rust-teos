@@ -1,6 +1,7 @@
 use simple_logger::init_with_level;
 use std::fs;
 use std::ops::{Deref, DerefMut};
+use std::str::FromStr;
 use std::sync::{Arc, Condvar, Mutex};
 use structopt::StructOpt;
 use tokio::task;
@@ -85,7 +86,15 @@ async fn main() {
         init_with_level(log::Level::Info).unwrap()
     }
 
-    let dbm = Arc::new(Mutex::new(DBM::new(path.join("teos_db.sql3")).unwrap()));
+    // Create network dir
+    let path_network = path.join(conf.btc_network.clone());
+    fs::create_dir_all(&path_network).unwrap_or_else(|e| {
+        eprintln!("Cannot create network dir: {:?}", e);
+        std::process::exit(1);
+    });
+    let dbm = Arc::new(Mutex::new(
+        DBM::new(path_network.join("teos_db.sql3")).unwrap(),
+    ));
 
     // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
     // key straightaway
@@ -153,7 +162,7 @@ async fn main() {
     };
     log::info!("Last known block: {}", tip.header.block_hash());
 
-    let mut poller = ChainPoller::new(&mut derefed, Network::Bitcoin);
+    let mut poller = ChainPoller::new(&mut derefed, Network::from_str(&conf.btc_network).unwrap());
     let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
 
     // Build components
