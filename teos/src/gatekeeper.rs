@@ -2,11 +2,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
-use std::ops::Deref;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lightning::chain;
-use lightning_block_sync::{poll::ValidatedBlockHeader, BlockHeaderData};
 
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
 use teos_common::cryptography;
@@ -75,7 +74,7 @@ pub(crate) struct MaxSlotsReached;
 #[derive(Debug)]
 pub struct Gatekeeper {
     /// last known block header by the [Gatekeeper].
-    last_known_block_header: Mutex<BlockHeaderData>,
+    last_known_block_height: AtomicU32,
     /// Number of slots new subscriptions get by default.
     subscription_slots: u32,
     /// Expiry time new subscription get by default, in blocks (starting from the block the subscription is requested).
@@ -91,7 +90,7 @@ pub struct Gatekeeper {
 impl Gatekeeper {
     /// Creates a new [Gatekeeper] instance.
     pub fn new(
-        last_known_block_header: ValidatedBlockHeader,
+        last_known_block_height: u32,
         subscription_slots: u32,
         subscription_duration: u32,
         expiry_delta: u32,
@@ -99,7 +98,7 @@ impl Gatekeeper {
     ) -> Self {
         let registered_users = dbm.lock().unwrap().load_all_users();
         Gatekeeper {
-            last_known_block_header: Mutex::new(*last_known_block_header.deref()),
+            last_known_block_height: AtomicU32::new(last_known_block_height),
             subscription_slots,
             subscription_duration,
             expiry_delta,
@@ -159,7 +158,7 @@ impl Gatekeeper {
         &self,
         user_id: UserId,
     ) -> Result<RegistrationReceipt, MaxSlotsReached> {
-        let block_count = self.last_known_block_header.lock().unwrap().height;
+        let block_count = self.last_known_block_height.load(Ordering::Acquire);
 
         // TODO: For now, new calls to `add_update_user` add subscription_slots to the current count and reset the expiry time
         let mut registered_users = self.registered_users.lock().unwrap();
@@ -238,7 +237,7 @@ impl Gatekeeper {
             Err(AuthenticationFailure("User not found.")),
             |user_info| {
                 Ok((
-                    self.last_known_block_header.lock().unwrap().height
+                    self.last_known_block_height.load(Ordering::Acquire)
                         >= user_info.subscription_expiry,
                     user_info.subscription_expiry,
                 ))
@@ -316,19 +315,17 @@ impl chain::Listen for Gatekeeper {
             .retain(|id, _| !outdated_users.contains(id));
         self.dbm.lock().unwrap().batch_remove_users(&outdated_users);
 
-        // Update last known block
-        *self.last_known_block_header.lock().unwrap() = BlockHeaderData {
-            header: block.header,
-            height,
-            chainwork: block.header.work(),
-        };
+        // Update last known block height
+        self.last_known_block_height
+            .store(height, Ordering::Release);
     }
 
-    /// FIXME: To be implemented.
-    /// This will handle reorgs on the [Gatekeeper].
-    #[allow(unused_variables)]
+    /// Handles reorgs in the [Gatekeeper]. Simply updates the last_known_block_height.
     fn block_disconnected(&self, header: &bitcoin::BlockHeader, height: u32) {
-        todo!()
+        log::warn!("Block disconnected: {}", header.block_hash());
+        // There's nothing to be done here but updating the last known block
+        self.last_known_block_height
+            .store(height - 1, Ordering::Release);
     }
 }
 
@@ -355,8 +352,8 @@ mod tests {
                 && self.subscription_duration == other.subscription_duration
                 && self.expiry_delta == other.expiry_delta
                 && *self.registered_users.lock().unwrap() == *other.registered_users.lock().unwrap()
-                && *self.last_known_block_header.lock().unwrap()
-                    == *other.last_known_block_header.lock().unwrap()
+                && self.last_known_block_height.load(Ordering::Relaxed)
+                    == other.last_known_block_height.load(Ordering::Relaxed)
         }
     }
     impl Eq for Gatekeeper {}
@@ -385,9 +382,8 @@ mod tests {
     }
 
     fn init_gatekeeper(chain: &Blockchain) -> Gatekeeper {
-        let tip = chain.tip();
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        Gatekeeper::new(tip, SLOTS, DURATION, EXPIRY_DELTA, dbm)
+        Gatekeeper::new(chain.get_block_count(), SLOTS, DURATION, EXPIRY_DELTA, dbm)
     }
 
     #[test]
@@ -396,7 +392,13 @@ mod tests {
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
 
-        let gatekeeper = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm.clone());
+        let gatekeeper = Gatekeeper::new(
+            chain.get_block_count(),
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+            dbm.clone(),
+        );
         assert!(gatekeeper.is_fresh());
 
         // If we add some users and appointments to the system and create a new Gatekeeper reusing the same db
@@ -419,7 +421,8 @@ mod tests {
         }
 
         // Create a new GK reusing the same DB and check that the data is loaded
-        let another_gk = Gatekeeper::new(chain.tip(), SLOTS, DURATION, EXPIRY_DELTA, dbm);
+        let another_gk =
+            Gatekeeper::new(chain.get_block_count(), SLOTS, DURATION, EXPIRY_DELTA, dbm);
         assert!(!another_gk.is_fresh());
         assert_eq!(gatekeeper, another_gk);
     }
@@ -474,7 +477,9 @@ mod tests {
 
         // Let generate a new block and add the user again to check that both the slots and expiry are updated.
         chain.generate(None);
-        *gatekeeper.last_known_block_header.lock().unwrap() = *chain.tip().deref();
+        gatekeeper
+            .last_known_block_height
+            .store(chain.get_block_count(), Ordering::Relaxed);
         let updated_receipt = gatekeeper.add_update_user(user_id).unwrap();
 
         assert_eq!(
@@ -801,7 +806,7 @@ mod tests {
     fn test_block_connected() {
         // block_connected in the Gatekeeper is used to keep track of time in order to manage the users' subscription expiry.
         // Remove users that get outdated at the new block's height from registered_users and the database.
-        let chain = Blockchain::default().with_height(START_HEIGHT);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let gatekeeper = init_gatekeeper(&chain);
 
         // Check that users are outdated when the expected height if hit
@@ -814,7 +819,7 @@ mod tests {
         }
 
         // Connect a new block. Outdated users are deleted
-        gatekeeper.block_connected(chain.blocks.last().unwrap(), chain.tip().height + 1);
+        gatekeeper.block_connected(&chain.generate(None), chain.get_block_count());
 
         // Check that users have been removed from registered_users and the database
         for user_id in &[user1_id, user2_id, user3_id] {
@@ -831,8 +836,25 @@ mod tests {
 
         // Check that the last_known_block_header has been properly updated
         assert_eq!(
-            gatekeeper.last_known_block_header.lock().unwrap().header,
-            chain.tip().header
+            gatekeeper.last_known_block_height.load(Ordering::Relaxed),
+            chain.get_block_count()
+        );
+    }
+
+    #[test]
+    fn test_block_disconnected() {
+        // Block disconnected simply updates the last known block
+        let chain = Blockchain::default().with_height(START_HEIGHT);
+        let gatekeeper = init_gatekeeper(&chain);
+        let height = chain.get_block_count();
+
+        let last_known_block_header = chain.tip();
+        let prev_block_header = chain.at_height((height - 1) as usize);
+
+        gatekeeper.block_disconnected(&last_known_block_header.header, height);
+        assert_eq!(
+            gatekeeper.last_known_block_height.load(Ordering::Relaxed),
+            prev_block_header.height
         );
     }
 }

@@ -9,6 +9,7 @@
 
 use rand::Rng;
 use std::convert::TryInto;
+use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -45,12 +46,9 @@ use crate::api::internal::InternalAPI;
 use crate::carrier::Carrier;
 use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
-use crate::gatekeeper::Gatekeeper;
-use crate::gatekeeper::UserInfo;
-use crate::responder::Responder;
-use crate::responder::TransactionTracker;
-use crate::watcher::Breach;
-use crate::watcher::Watcher;
+use crate::gatekeeper::{Gatekeeper, UserInfo};
+use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
+use crate::watcher::{Breach, Watcher};
 
 pub(crate) static TX_HEX: &str =  "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff54038e830a1b4d696e656420627920416e74506f6f6c373432c2005b005e7a0ae3fabe6d6d7841cd582ead8ea5dd8e3de1173cae6fcd2a53c7362ebb7fb6f815604fe07cbe0200000000000000ac0e060005f90000ffffffff04d9476026000000001976a91411dbe48cc6b617f9c6adaf4d9ed5f625b1c7cb5988ac0000000000000000266a24aa21a9ed7248c6efddd8d99bfddd7f499f0b915bffa8253003cc934df1ff14a81301e2340000000000000000266a24b9e11b6d7054937e13f39529d6ad7e685e9dd4efa426f247d5f5a5bed58cdddb2d0fa60100000000000000002b6a2952534b424c4f434b3a054a68aa5368740e8b3e3c67bce45619c2cfd07d4d4f0936a5612d2d0034fa0a0120000000000000000000000000000000000000000000000000000000000000000000000000";
 pub(crate) static TXID_HEX: &str =
@@ -194,8 +192,8 @@ impl Blockchain {
         cache
     }
 
-    pub async fn get_block_count(&self) -> usize {
-        self.blocks.len()
+    pub fn get_block_count(&self) -> u32 {
+        (self.blocks.len() - 1) as u32
     }
 
     pub fn generate(&mut self, txs: Option<Vec<Transaction>>) -> Block {
@@ -366,9 +364,12 @@ pub(crate) fn get_random_breach() -> Breach {
     Breach::new(dispute_tx, penalty_tx)
 }
 
-pub(crate) fn get_random_tracker(user_id: UserId) -> TransactionTracker {
+pub(crate) fn get_random_tracker(
+    user_id: UserId,
+    status: ConfirmationStatus,
+) -> TransactionTracker {
     let breach = get_random_breach();
-    TransactionTracker::new(breach, user_id)
+    TransactionTracker::new(breach, user_id, status)
 }
 
 pub(crate) fn store_appointment_and_fks_to_db(
@@ -401,23 +402,19 @@ pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<V
 
 pub(crate) enum MockedServerQuery {
     Regular,
-    Confirmations(u32),
     Error(i64),
 }
 
-pub(crate) fn create_carrier(query: MockedServerQuery) -> Carrier {
+pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> Carrier {
     let bitcoind_mock = match query {
         MockedServerQuery::Regular => BitcoindMock::new(MockOptions::empty()),
-        MockedServerQuery::Confirmations(x) => {
-            BitcoindMock::new(MockOptions::with_confirmations(x))
-        }
         MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
     };
     let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
     let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
     start_server(bitcoind_mock);
 
-    Carrier::new(bitcoin_cli, bitcoind_reachable)
+    Carrier::new(bitcoin_cli, bitcoind_reachable, height)
 }
 
 pub(crate) fn create_responder(
@@ -428,9 +425,9 @@ pub(crate) fn create_responder(
 ) -> Responder {
     let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
     let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
-    let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable);
+    let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, tip.deref().height);
 
-    Responder::new(carrier, gatekeeper, dbm, tip)
+    Responder::new(carrier, gatekeeper, dbm)
 }
 
 pub(crate) async fn create_watcher(
@@ -440,7 +437,6 @@ pub(crate) async fn create_watcher(
     bitcoind_mock: BitcoindMock,
     dbm: Arc<Mutex<DBM>>,
 ) -> Watcher {
-    let tip = chain.tip();
     let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
     start_server(bitcoind_mock);
@@ -450,7 +446,7 @@ pub(crate) async fn create_watcher(
         gatekeeper,
         responder,
         last_n_blocks,
-        tip,
+        chain.get_block_count(),
         tower_sk,
         tower_id,
         dbm,
@@ -494,7 +490,7 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
 
     let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
     let gk = Arc::new(Gatekeeper::new(
-        chain.tip(),
+        chain.get_block_count(),
         api_config.slots,
         api_config.duration,
         EXPIRY_DELTA,
@@ -529,35 +525,41 @@ pub(crate) struct BitcoindMock {
 
 pub(crate) struct MockOptions {
     error_code: Option<i64>,
-    confirmations: Option<u32>,
+    block_hash: Option<BlockHash>,
+    height: Option<usize>,
 }
 
 impl MockOptions {
-    pub fn new(error_code: Option<i64>, confirmations: Option<u32>) -> Self {
+    pub fn new(error_code: i64, block_hash: BlockHash, height: usize) -> Self {
         Self {
-            error_code,
-            confirmations,
+            error_code: Some(error_code),
+            block_hash: Some(block_hash),
+            height: Some(height),
         }
     }
 
     pub fn empty() -> Self {
         Self {
             error_code: None,
-            confirmations: None,
+            block_hash: None,
+            height: None,
         }
     }
 
     pub fn with_error(error_code: i64) -> Self {
         Self {
             error_code: Some(error_code),
-            confirmations: None,
+            block_hash: None,
+            height: None,
         }
     }
 
-    pub fn with_confirmations(confirmations: u32) -> Self {
+    #[allow(dead_code)]
+    pub fn with_block(block_hash: BlockHash, height: usize) -> Self {
         Self {
             error_code: None,
-            confirmations: Some(confirmations),
+            block_hash: Some(block_hash),
+            height: Some(height),
         }
     }
 }
@@ -566,25 +568,19 @@ impl BitcoindMock {
     pub fn new(options: MockOptions) -> Self {
         let mut io = IoHandler::default();
 
-        match options.error_code {
-            Some(x) => {
-                io.add_sync_method("error", move |_params: Params| {
-                    Err(JsonRpcError::new(JsonRpcErrorCode::ServerError(x)))
-                });
-                io.add_alias("sendrawtransaction", "error");
+        if let Some(error) = options.error_code {
+            io.add_sync_method("error", move |_params: Params| {
+                Err(JsonRpcError::new(JsonRpcErrorCode::ServerError(error)))
+            });
+            io.add_alias("sendrawtransaction", "error");
+        } else {
+            BitcoindMock::add_sendrawtransaction(&mut io);
+        }
 
-                // So we can test a sendrawtransaction error b/c the tx is already on the mempool
-                // and query the confirmation count
-                match options.confirmations {
-                    Some(c) => {
-                        BitcoindMock::add_getrawtransaction(&mut io, c);
-                    }
-                    None => io.add_alias("getrawtransaction", "error"),
-                }
-            }
-            None => {
-                BitcoindMock::add_sendrawtransaction(&mut io);
-                BitcoindMock::add_getrawtransaction(&mut io, options.confirmations.unwrap_or(0));
+        if let Some(block_hash) = options.block_hash {
+            BitcoindMock::add_getrawtransaction(&mut io, block_hash.to_string());
+            if let Some(height) = options.height {
+                BitcoindMock::add_getblockheader(&mut io, block_hash.to_string(), height);
             }
         }
 
@@ -605,14 +601,34 @@ impl BitcoindMock {
         });
     }
 
-    fn add_getrawtransaction(io: &mut IoHandler, confirmations: u32) {
+    fn add_getrawtransaction(io: &mut IoHandler, block_hash: String) {
         io.add_sync_method("getrawtransaction", move |_params: Params|  {
             match _params {
                 Params::Array(x) => match x[1] {
                     Value::Bool(x) => {
                         if x {
-                            Ok(serde_json::json!({"confirmations": confirmations, "hex": TX_HEX, "txid": TXID_HEX,
-                            "hash": TXID_HEX, "size": 0, "vsize": 0, "version": 1, "locktime": 0, "vin": [], "vout": [] }))
+                            Ok(serde_json::json!({"hex": TX_HEX, "txid": TXID_HEX, "hash": TXID_HEX, "size": 0, 
+                            "vsize": 0, "version": 1, "locktime": 0, "vin": [], "vout": [], "blockhash": block_hash }))
+                        } else {
+                            Ok(Value::String(TX_HEX.to_owned()))
+                        }
+                    }
+                    _ => panic!("Boolean param not found"),
+                },
+                _ => panic!("No params found"),
+            }
+        })
+    }
+
+    fn add_getblockheader(io: &mut IoHandler, block_hash: String, height: usize) {
+        io.add_sync_method("getblockheader", move |_params: Params|  {
+            match _params {
+                Params::Array(x) => match x[1] {
+                    Value::Bool(x) => {
+                        if x {
+                            Ok(serde_json::json!({"hash": block_hash, "confirmations": 1, "height": height, "version": 1, 
+                            "merkleroot": "4eca41cf0fa551346842eb317564a403e39553444790a65f949f95bc18d24643", "time": 1645719068, "nonce": 2, "bits": "207fffff", 
+                            "difficulty": 0.0, "chainwork": "0000000000000000000000000000000000000000000000000000000000001146", "nTx": 1}))
                         } else {
                             Ok(Value::String(TX_HEX.to_owned()))
                         }

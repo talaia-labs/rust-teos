@@ -6,15 +6,14 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::iter::FromIterator;
-use std::ops::Deref;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bitcoin::hash_types::BlockHash;
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::{Block, BlockHeader, Transaction};
 use lightning::chain;
-use lightning_block_sync::poll::{ValidatedBlock, ValidatedBlockHeader};
-use lightning_block_sync::BlockHeaderData;
+use lightning_block_sync::poll::ValidatedBlock;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
@@ -24,7 +23,7 @@ use teos_common::UserId;
 use crate::dbm::DBM;
 use crate::extended_appointment::{AppointmentSummary, ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, MaxSlotsReached, UserInfo};
-use crate::responder::{Responder, TransactionTracker};
+use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
 
 /// Data structure used to cache locators computed from parsed blocks.
 ///
@@ -85,7 +84,6 @@ impl LocatorCache {
             cache.update(block.header, &locator_tx_map);
         }
 
-        cache.blocks.reverse();
         cache
     }
 
@@ -124,24 +122,21 @@ impl LocatorCache {
         }
     }
 
-    #[allow(dead_code)]
-    /// FIXME: Currently dead code. Fixes the cache by removing reorged blocks and adding the new valid ones.
-    /// This should be called within Watcher::block_disconnected).
+    /// Fixes the [LocatorCache] removing disconnected data.
     fn fix(&mut self, header: &BlockHeader) {
-        for locator in self.tx_in_block[&header.block_hash()].iter() {
-            self.cache.remove(locator);
-        }
-        self.tx_in_block.remove(&header.block_hash());
-
-        //DISCUSS: Given blocks are disconnected in order by bitcoind we should always get them in order.
-        // Log if that's not the case so we can revisit this and fix it.
-        match self.blocks.pop() {
-            Some(h) => {
-                if h != header.block_hash() {
-                    log::error!("Disconnected block does not match the oldest block stored in the LocatorCache ({} != {})", header.block_hash(), h)
-                };
+        if let Some(locators) = self.tx_in_block.remove(&header.block_hash()) {
+            for locator in locators.iter() {
+                self.cache.remove(locator);
             }
-            None => log::warn!("The cache is already empty"),
+
+            // Blocks should be disconnected from last backwards. Log if that's not the case so we can revisit this and fix it.
+            if let Some(h) = self.blocks.pop() {
+                if h != header.block_hash() {
+                    log::error!("Disconnected block does not match the oldest block stored in the LocatorCache ({} != {})", header.block_hash(), h);
+                }
+            }
+        } else {
+            log::warn!("The cache is already empty");
         }
     }
 
@@ -251,8 +246,8 @@ pub struct Watcher {
     responder: Arc<Responder>,
     /// A [Gatekeeper] instance. Data regarding users is requested to it.
     gatekeeper: Arc<Gatekeeper>,
-    /// The last known block header.
-    last_known_block_header: Mutex<BlockHeaderData>,
+    /// The last known block height.
+    last_known_block_height: AtomicU32,
     /// The tower signing key. Used to sign messages going to users.
     signing_key: SecretKey,
     /// The tower identifier.
@@ -267,7 +262,7 @@ impl Watcher {
         gatekeeper: Arc<Gatekeeper>,
         responder: Arc<Responder>,
         last_n_blocks: Vec<ValidatedBlock>,
-        last_known_block_header: ValidatedBlockHeader,
+        last_known_block_height: u32,
         signing_key: SecretKey,
         tower_id: UserId,
         dbm: Arc<Mutex<DBM>>,
@@ -290,7 +285,7 @@ impl Watcher {
             locator_cache: Mutex::new(LocatorCache::new(last_n_blocks)),
             responder,
             gatekeeper,
-            last_known_block_header: Mutex::new(*last_known_block_header.deref()),
+            last_known_block_height: AtomicU32::new(last_known_block_height),
             signing_key,
             tower_id,
             dbm,
@@ -344,7 +339,7 @@ impl Watcher {
             appointment,
             user_id,
             user_signature,
-            self.last_known_block_header.lock().unwrap().height,
+            self.last_known_block_height.load(Ordering::Acquire),
         );
 
         let uuid = UUID::new(extended_appointment.locator(), user_id);
@@ -465,22 +460,20 @@ impl Watcher {
                     .store_appointment(uuid, appointment)
                     .unwrap();
 
-                let breach = Breach::new(dispute_tx.clone(), penalty_tx);
-                let receipt = self.responder.handle_breach(uuid, breach, user_id);
-
-                if receipt.delivered() {
-                    log::info!("Appointment went straight to the Responder");
-                    TriggeredAppointment::Accepted
-                } else {
+                if let ConfirmationStatus::Rejected(reason) = self.responder.handle_breach(
+                    uuid,
+                    Breach::new(dispute_tx.clone(), penalty_tx),
+                    user_id,
+                ) {
                     // DISCUSS: We could either free the slots or keep it occupied as if this was misbehavior.
                     // Keeping it for now.
-                    log::warn!(
-                        "Appointment bounced in the Responder. Reason: {:?}",
-                        receipt.reason()
-                    );
+                    log::warn!("Appointment bounced in the Responder. Reason: {:?}", reason);
 
                     self.dbm.lock().unwrap().remove_appointment(uuid);
                     TriggeredAppointment::Rejected
+                } else {
+                    log::info!("Appointment went straight to the Responder");
+                    TriggeredAppointment::Accepted
                 }
             }
 
@@ -821,16 +814,14 @@ impl chain::Listen for Watcher {
                     uuid
                 );
 
-                let receipt = self.responder.handle_breach(
+                if let ConfirmationStatus::Rejected(_) = self.responder.handle_breach(
                     uuid,
                     breach,
                     self.appointments.lock().unwrap()[&uuid].user_id,
-                );
-
-                if receipt.delivered() {
-                    delivered_appointments.insert(uuid);
-                } else {
+                ) {
                     appointments_to_delete.insert(uuid);
+                } else {
+                    delivered_appointments.insert(uuid);
                 }
             }
 
@@ -857,27 +848,29 @@ impl chain::Listen for Watcher {
         }
 
         // Update last known block
-        *self.last_known_block_header.lock().unwrap() = BlockHeaderData {
-            header: block.header,
-            height,
-            chainwork: block.header.work(),
-        };
+        self.last_known_block_height
+            .store(height, Ordering::Release);
     }
 
-    #[allow(unused_variables)]
-    /// FIXME: To be implemented.
-    /// This will handle reorgs on the [Watcher].
+    /// Handle reorgs in the [Watcher].
+    ///
+    /// Fixes the [LocatorCache] by removing the disconnected data and updates the last_known_block_height.
     fn block_disconnected(&self, header: &BlockHeader, height: u32) {
-        todo!()
+        log::warn!("Block disconnected: {}", header.block_hash());
+        self.locator_cache.lock().unwrap().fix(header);
+        self.last_known_block_height
+            .store(height - 1, Ordering::Release);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::Deref;
     use std::sync::{Arc, Mutex};
 
     use crate::dbm::{Error as DBError, DBM};
+    use crate::responder::ConfirmationStatus;
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, create_responder, create_watcher, generate_dummy_appointment,
@@ -896,15 +889,17 @@ mod tests {
         fn eq(&self, other: &Self) -> bool {
             *self.appointments.lock().unwrap() == *other.appointments.lock().unwrap()
                 && *self.locator_uuid_map.lock().unwrap() == *other.locator_uuid_map.lock().unwrap()
-                && *self.last_known_block_header.lock().unwrap()
-                    == *other.last_known_block_header.lock().unwrap()
+                && self.last_known_block_height.load(Ordering::Relaxed)
+                    == other.last_known_block_height.load(Ordering::Relaxed)
         }
     }
     impl Eq for Watcher {}
 
     impl Watcher {
         pub(crate) fn add_random_tracker_to_responder(&self, uuid: UUID) {
-            self.responder.add_random_tracker(uuid);
+            // The confirmation status can be whatever here. Using the most common.
+            self.responder
+                .add_random_tracker(uuid, ConfirmationStatus::ConfirmedIn(100));
         }
     }
 
@@ -917,7 +912,7 @@ mod tests {
         let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
 
         let gk = Arc::new(Gatekeeper::new(
-            chain.tip(),
+            chain.get_block_count(),
             SLOTS,
             DURATION,
             EXPIRY_DELTA,
@@ -982,19 +977,20 @@ mod tests {
         let mut last_n_blocks = get_last_n_blocks(&mut chain, 7).await;
 
         // Safe the last block to use it for an update and the first to check eviction
-        let last_block = last_n_blocks.pop().unwrap();
-        let first_block = last_n_blocks.get(0).unwrap().deref().clone();
+        // Notice that the list of blocks is ordered from last to first.
+        let last_block = last_n_blocks.remove(0);
+        let first_block = last_n_blocks.last().unwrap().deref().clone();
 
         // Init the cache with the 6 block before the last
         let mut cache = LocatorCache::new(last_n_blocks);
 
         // Update the cache with the last block
         let locator_tx_map = last_block
-            .deref()
             .txdata
             .iter()
             .map(|tx| (Locator::new(tx.txid()), tx.clone()))
             .collect();
+
         cache.update(last_block.deref().header, &locator_tx_map);
 
         // Check that the new data is in the cache
@@ -1013,6 +1009,57 @@ mod tests {
             assert!(!cache.cache.contains_key(&Locator::new(tx.txid())));
         }
         assert!(!cache.tx_in_block.contains_key(&first_block.block_hash()));
+    }
+
+    #[tokio::test]
+    async fn test_cache_fix() {
+        let cache_size = 6;
+        let mut chain = Blockchain::default().with_height_and_txs(cache_size * 2, 42);
+
+        let last_n_blocks = get_last_n_blocks(&mut chain, cache_size).await;
+
+        // Init the cache with the 6 block before the last
+        let mut cache = LocatorCache::new(last_n_blocks);
+
+        // LocatorCache::fix removes the last connected block and removes all the associated data
+        for i in 0..cache_size {
+            let header = chain
+                .at_height(chain.get_block_count() as usize - i)
+                .deref()
+                .header;
+            let locators = cache.tx_in_block.get(&header.block_hash()).unwrap().clone();
+
+            // Make sure there's data regarding the target block in the cache before fixing it
+            assert_eq!(cache.blocks.len(), cache.size - i);
+            assert!(cache.blocks.contains(&header.block_hash()));
+            assert!(!locators.is_empty());
+            for locator in locators.iter() {
+                assert!(cache.cache.contains_key(locator));
+            }
+
+            cache.fix(&header);
+
+            // Check that the block data is not in the cache anymore
+            assert_eq!(cache.blocks.len(), cache.size - i - 1);
+            assert!(!cache.blocks.contains(&header.block_hash()));
+            assert!(cache.tx_in_block.get(&header.block_hash()).is_none());
+            for locator in locators.iter() {
+                assert!(!cache.cache.contains_key(locator));
+            }
+        }
+
+        // At this point the cache should be empty, fixing it further shouldn't do anything
+        for i in cache_size..cache_size * 2 {
+            assert!(cache.cache.is_empty());
+            assert!(cache.blocks.is_empty());
+            assert!(cache.tx_in_block.is_empty());
+
+            let header = chain
+                .at_height(chain.get_block_count() as usize - i)
+                .deref()
+                .header;
+            cache.fix(&header);
+        }
     }
 
     #[tokio::test]
@@ -1141,7 +1188,12 @@ mod tests {
             .unwrap();
 
         let breach = get_random_breach();
-        watcher.responder.add_tracker(uuid, breach, user_id, 0);
+        watcher.responder.add_tracker(
+            uuid,
+            breach,
+            user_id,
+            ConfirmationStatus::InMempoolSince(chain.get_block_count()),
+        );
         let receipt = watcher.add_appointment(triggered_appointment.inner, signature);
 
         assert!(matches!(
@@ -1209,6 +1261,7 @@ mod tests {
         // Update the Responder with a new Carrier
         *watcher.responder.get_carrier().lock().unwrap() = create_carrier(
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+            chain.tip().deref().height,
         );
 
         let dispute_tx = &tip_txs[tip_txs.len() - 2];
@@ -1380,6 +1433,7 @@ mod tests {
         // Update the Responder with a new Carrier that will reject the transaction
         *watcher.responder.get_carrier().lock().unwrap() = create_carrier(
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+            chain.tip().deref().height,
         );
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
@@ -1462,9 +1516,18 @@ mod tests {
 
         // Add data to the Responder
         let breach = get_random_breach();
-        let tracker = TransactionTracker::new(breach.clone(), user_id);
+        let tracker = TransactionTracker::new(
+            breach.clone(),
+            user_id,
+            ConfirmationStatus::InMempoolSince(chain.get_block_count()),
+        );
 
-        watcher.responder.add_tracker(uuid, breach, user_id, 0);
+        watcher.responder.add_tracker(
+            uuid,
+            breach,
+            user_id,
+            ConfirmationStatus::InMempoolSince(chain.get_block_count()),
+        );
 
         let tracker_message = format!("get appointment {}", appointment.locator);
         let tracker_signature = cryptography::sign(tracker_message.as_bytes(), &user_sk).unwrap();
@@ -1795,13 +1858,13 @@ mod tests {
         // If the Watcher is not watching any appointment, block_connected will only be used to keep track of the last known block
         // by the Watcher.
         assert_eq!(
-            watcher.last_known_block_header.lock().unwrap().header,
-            chain.tip().header
+            watcher.last_known_block_height.load(Ordering::Relaxed),
+            chain.get_block_count()
         );
-        watcher.block_connected(&chain.generate(None), chain.blocks.len() as u32);
+        watcher.block_connected(&chain.generate(None), chain.get_block_count() as u32);
         assert_eq!(
-            watcher.last_known_block_header.lock().unwrap().header,
-            chain.tip().header
+            watcher.last_known_block_height.load(Ordering::Relaxed),
+            chain.get_block_count()
         );
 
         // If there are appointments to watch, the Watcher will:
@@ -1839,7 +1902,7 @@ mod tests {
             .unwrap()
             .get_mut(&user_id)
             .unwrap()
-            .subscription_expiry = (chain.blocks.len() as u32) - EXPIRY_DELTA + 1;
+            .subscription_expiry = chain.get_block_count() - EXPIRY_DELTA + 1;
 
         // Both appointments can be found before mining a block, only the user's 2 can be found afterwards
         for uuid in &[uuid1, uuid2] {
@@ -1859,7 +1922,7 @@ mod tests {
                 .contains_key(&uuid2)
         );
 
-        watcher.block_connected(&chain.generate(None), chain.blocks.len() as u32);
+        watcher.block_connected(&chain.generate(None), chain.get_block_count());
 
         assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid1));
         assert!(!watcher.locator_uuid_map.lock().unwrap()[&appointment.locator()].contains(&uuid1));
@@ -1898,7 +1961,7 @@ mod tests {
 
         watcher.block_connected(
             &chain.generate(Some(vec![dispute_tx])),
-            chain.blocks.len() as u32,
+            chain.get_block_count(),
         );
 
         // Data should have been moved to the Responder and kept in the Gatekeeper, since it is still part of the system.
@@ -1935,11 +1998,12 @@ mod tests {
         // Set the carrier response
         *watcher.responder.get_carrier().lock().unwrap() = create_carrier(
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+            chain.tip().deref().height,
         );
 
         watcher.block_connected(
             &chain.generate(Some(vec![dispute_tx])),
-            chain.blocks.len() as u32,
+            chain.get_block_count(),
         );
 
         // Data should not be in the Responder, in the Watcher nor in the Gatekeeper
@@ -1979,7 +2043,7 @@ mod tests {
 
         watcher.block_connected(
             &chain.generate(Some(vec![dispute_tx])),
-            chain.blocks.len() as u32,
+            chain.get_block_count(),
         );
 
         // Data has been wiped since it was invalid
@@ -1999,5 +2063,35 @@ mod tests {
             watcher.dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)
         ));
+    }
+
+    #[tokio::test]
+    async fn test_block_disconnected() {
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
+        let start_height = START_HEIGHT as u32;
+        let watcher = init_watcher(&mut chain).await;
+
+        // block_disconnected for the Watcher fixes the locator cache by removing the disconnected block
+        // and updates the last_known_block_height to the previous block height
+        let last_block_header = chain.tip().deref().header;
+        assert!(watcher
+            .locator_cache
+            .lock()
+            .unwrap()
+            .blocks
+            .contains(&last_block_header.block_hash()));
+
+        watcher.block_disconnected(&last_block_header, start_height);
+
+        assert_eq!(
+            watcher.last_known_block_height.load(Ordering::Relaxed),
+            start_height - 1
+        );
+        assert!(!watcher
+            .locator_cache
+            .lock()
+            .unwrap()
+            .blocks
+            .contains(&last_block_header.block_hash()));
     }
 }

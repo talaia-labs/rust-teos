@@ -167,25 +167,20 @@ async fn main() {
 
     // Build components
     let gatekeeper = Arc::new(Gatekeeper::new(
-        tip,
+        tip.height,
         conf.subscription_slots,
         conf.subscription_duration,
         conf.expiry_delta,
         dbm.clone(),
     ));
 
-    let carrier = Carrier::new(rpc, bitcoind_reachable.clone());
-    let responder = Arc::new(Responder::new(
-        carrier,
-        gatekeeper.clone(),
-        dbm.clone(),
-        tip,
-    ));
+    let carrier = Carrier::new(rpc, bitcoind_reachable.clone(), tip.deref().height);
+    let responder = Arc::new(Responder::new(carrier, gatekeeper.clone(), dbm.clone()));
     let watcher = Arc::new(Watcher::new(
         gatekeeper.clone(),
         responder.clone(),
         last_n_blocks,
-        tip,
+        tip.height,
         tower_sk,
         UserId(tower_pk),
         dbm.clone(),
@@ -204,7 +199,7 @@ async fn main() {
 
     // The ordering here actually matters. Listeners are called by order, and we want the gatekeeper to be called
     // last, so both the Watcher and the Responder can query the necessary data from it during data deletion.
-    let listener = &(watcher.clone(), &(responder.clone(), gatekeeper));
+    let listener = &(watcher.clone(), &(responder, gatekeeper));
     let cache = &mut UnboundedCache::new();
     let spv_client = SpvClient::new(tip, poller, cache, listener);
     let mut chain_monitor = ChainMonitor::new(
@@ -223,7 +218,7 @@ async fn main() {
 
     // Build interfaces
     let rpc_api = Arc::new(InternalAPI::new(
-        watcher.clone(),
+        watcher,
         bitcoind_reachable.clone(),
         shutdown_trigger,
     ));
