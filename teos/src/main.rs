@@ -17,8 +17,8 @@ use lightning_block_sync::poll::{
 };
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
-use teos::api::http;
 use teos::api::internal::InternalAPI;
+use teos::api::{http, tor};
 use teos::bitcoin_cli::BitcoindClient;
 use teos::carrier::Carrier;
 use teos::chain_monitor::ChainMonitor;
@@ -201,6 +201,7 @@ async fn main() {
     let shutdown_signal_internal_rpc_api = shutdown_signal_rpc_api.clone();
     let shutdown_signal_http = shutdown_signal_rpc_api.clone();
     let shutdown_signal_cm = shutdown_signal_rpc_api.clone();
+    let shutdown_signal_tor = shutdown_signal_rpc_api.clone();
 
     // The ordering here actually matters. Listeners are called by order, and we want the gatekeeper to be called
     // last, so both the Watcher and the Responder can query the necessary data from it during data deletion.
@@ -265,11 +266,31 @@ async fn main() {
         internal_rpc_api_uri,
         shutdown_signal_http,
     ));
+
+    // Add Tor Onion Service for public API
+    let mut tor_task = Option::None;
+    if conf.tor_support {
+        log::info!("Starting up hidden tor service");
+        let tor_control_port = conf.tor_control_port;
+        let api_port = conf.api_port;
+        let onion_port = conf.onion_hidden_service_port;
+
+        tor_task = Some(task::spawn(async move {
+            tor::expose_onion_service(tor_control_port, api_port, onion_port, shutdown_signal_tor)
+                .await
+                .unwrap();
+        }));
+    }
+
     chain_monitor.monitor_chain().await;
 
     // Wait until shutdown
     http_api_task.await.unwrap();
     private_api_task.await.unwrap();
     public_api_task.await.unwrap();
-    log::info!("Shutting down tower")
+    if conf.tor_support {
+        tor_task.unwrap().await.unwrap();
+    }
+
+    log::info!("Shutting down tower");
 }

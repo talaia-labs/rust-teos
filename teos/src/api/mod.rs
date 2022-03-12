@@ -1,5 +1,6 @@
 pub mod http;
 pub mod internal;
+pub mod tor;
 
 pub mod serde_status {
     use serde::de::{self, Deserializer};

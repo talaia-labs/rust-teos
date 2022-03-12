@@ -1,6 +1,9 @@
 # API
 api_bind = "127.0.0.1"
 api_port = 9814
+tor_control_port = 9051
+onion_hidden_service_port = 2121
+tor_support = false
 
 # RPC
 rpc_bind = "127.0.0.1"

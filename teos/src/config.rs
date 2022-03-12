@@ -104,6 +104,18 @@ pub struct Opt {
     /// Overwrites the tower secret key. THIS IS IRREVERSIBLE AND WILL CHANGE YOUR TOWER ID
     #[structopt(long)]
     pub overwrite_key: bool,
+
+    /// If set, creates a tor endpoint to serve API data. This endpoint is additional to the clearnet HTTP API
+    #[structopt(long)]
+    pub tor_support: bool,
+
+    /// tor control port [default: 9051]
+    #[structopt(long)]
+    pub tor_control_port: Option<u16>,
+
+    /// Port for the onion hidden service to listen on [default: 2121]
+    #[structopt(long)]
+    pub onion_hidden_service_port: Option<u16>,
 }
 
 /// Holds all configuration options.
@@ -144,6 +156,11 @@ pub struct Config {
     // Internal API
     pub internal_api_bind: String,
     pub internal_api_port: u32,
+
+    // Tor
+    pub tor_support: bool,
+    pub tor_control_port: u16,
+    pub onion_hidden_service_port: u16,
 }
 
 impl Config {
@@ -176,7 +193,14 @@ impl Config {
         if options.btc_rpc_port.is_some() {
             self.btc_rpc_port = options.btc_rpc_port.unwrap();
         }
+        if options.tor_control_port.is_some() {
+            self.tor_control_port = options.tor_control_port.unwrap();
+        }
+        if options.onion_hidden_service_port.is_some() {
+            self.onion_hidden_service_port = options.onion_hidden_service_port.unwrap();
+        }
 
+        self.tor_support |= options.tor_support;
         self.debug |= options.debug;
         self.overwrite_key = options.overwrite_key;
     }
@@ -230,6 +254,9 @@ impl Default for Config {
         Self {
             api_bind: "127.0.0.1".into(),
             api_port: 9814,
+            tor_support: false,
+            tor_control_port: 9051,
+            onion_hidden_service_port: 2121,
             rpc_bind: "127.0.0.1".into(),
             rpc_port: 8814,
             btc_network: "bitcoin".into(),
@@ -260,6 +287,9 @@ mod tests {
             Self {
                 api_bind: None,
                 api_port: None,
+                tor_support: false,
+                tor_control_port: None,
+                onion_hidden_service_port: None,
                 rpc_bind: None,
                 rpc_port: None,
                 btc_network: None,
@@ -323,5 +353,17 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(config.verify(), Err(ConfigError { .. })));
+    }
+
+    #[test]
+    fn test_config_verify_tor_set() {
+        let mut config = Config {
+            btc_rpc_user: "user".to_owned(),
+            btc_rpc_password: "password".to_owned(),
+            tor_support: true,
+            ..Default::default()
+        };
+
+        config.verify().unwrap()
     }
 }

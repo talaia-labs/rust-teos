@@ -30,6 +30,7 @@ tonic = "0.6"
 tokio = { version = "1.5", features = [ "rt-multi-thread" ] }
 triggered = "0.1.2"
 warp = "0.3.2"
+torut = "0.2.1"
 
 # Bitcoin and Lightning
 bitcoin = { version = "0.27", features = [ "base64" ] }
