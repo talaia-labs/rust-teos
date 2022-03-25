@@ -1,5 +1,6 @@
 use simple_logger::init_with_level;
 use std::fs;
+use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::sync::{Arc, Condvar, Mutex};
@@ -129,7 +130,11 @@ async fn main() {
             Arc::new((Mutex::new(true), Condvar::new())),
         ),
         Err(e) => {
-            log::error!("Failed to connect to bitcoind client: {}", e);
+            let e_msg = match e.kind() {
+                ErrorKind::InvalidData => "invalid btcrpcuser or btcrpcpassword".into(),
+                _ => e.to_string(),
+            };
+            log::error!("Failed to connect to bitcoind. Error: {}", e_msg);
             return;
         }
     };
