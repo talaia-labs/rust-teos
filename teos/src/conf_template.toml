@@ -11,7 +11,7 @@ btc_network = "bitcoin"
 btc_rpc_user = "CSW"
 btc_rpc_password = "NotSatoshi"
 btc_rpc_connect = "localhost"
-btc_rpc_port = 8442
+btc_rpc_port = 8332
 
 # Flags
 debug = false

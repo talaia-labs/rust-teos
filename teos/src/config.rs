@@ -203,10 +203,10 @@ impl Config {
                 // overwritten at this point.
                 if self.btc_rpc_port == 0 {
                     self.btc_rpc_port = match network {
-                        Network::Testnet => 18333,
-                        Network::Signet => 38333,
+                        Network::Testnet => 18332,
+                        Network::Signet => 38332,
                         Network::Regtest => 18443,
-                        _ => 8442,
+                        _ => 8332,
                     }
                 }
                 Ok(())
