@@ -7,9 +7,9 @@ use triggered::Listener;
 use warp::{http::StatusCode, reject, reply, Filter, Rejection, Reply};
 
 use teos_common::appointment::LOCATOR_LEN;
+use teos_common::protos as common_msgs;
 use teos_common::{errors, USER_ID_LEN};
 
-use crate::protos as msgs;
 use crate::protos::public_tower_services_client::PublicTowerServicesClient;
 
 // TODO: Limit the body length for /add_appointment should not be needed, since slots are consumed proportionally to it.
@@ -124,7 +124,7 @@ fn parse_grpc_response<T: serde::Serialize>(
 }
 
 async fn register(
-    req: msgs::RegisterRequest,
+    req: common_msgs::RegisterRequest,
     addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
@@ -150,7 +150,7 @@ async fn register(
 }
 
 async fn add_appointment(
-    req: msgs::AddAppointmentRequest,
+    req: common_msgs::AddAppointmentRequest,
     addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
@@ -182,7 +182,7 @@ async fn add_appointment(
 }
 
 async fn get_appointment(
-    req: msgs::GetAppointmentRequest,
+    req: common_msgs::GetAppointmentRequest,
     addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
@@ -210,7 +210,7 @@ async fn get_appointment(
 }
 
 async fn get_subscription_info(
-    req: msgs::GetSubscriptionInfoRequest,
+    req: common_msgs::GetSubscriptionInfoRequest,
     addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
@@ -637,15 +637,16 @@ mod tests_methods {
     #[tokio::test]
     async fn test_register() {
         let server_addr = run_tower_in_background().await;
-        let response = request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
-            "/register",
-            msgs::RegisterRequest {
-                user_id: get_random_user_id().serialize(),
-            },
-            server_addr,
-        )
-        .await;
-        assert!(matches!(response, Ok(msgs::RegisterResponse { .. })));
+        let response =
+            request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
+                "/register",
+                common_msgs::RegisterRequest {
+                    user_id: get_random_user_id().serialize(),
+                },
+                server_addr,
+            )
+            .await;
+        assert!(matches!(response, Ok(common_msgs::RegisterResponse { .. })));
     }
 
     #[tokio::test]
@@ -655,9 +656,9 @@ mod tests_methods {
         let user_id = get_random_user_id();
 
         // Register once, this should go trough and set slots to the limit
-        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
+        request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
             "/register",
-            msgs::RegisterRequest {
+            common_msgs::RegisterRequest {
                 user_id: user_id.serialize(),
             },
             server_addr,
@@ -669,7 +670,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/register",
-                RequestBody::Json(serde_json::json!(msgs::RegisterRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
                     user_id: user_id.serialize(),
                 })),
                 server_addr,
@@ -697,7 +698,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/register",
-                RequestBody::Json(serde_json::json!(msgs::RegisterRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
                     user_id: user_id.serialize(),
                 })),
                 server_addr,
@@ -719,9 +720,9 @@ mod tests_methods {
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
+        request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
             "/register",
-            msgs::RegisterRequest {
+            common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -733,9 +734,12 @@ mod tests_methods {
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
 
-        let response = request_to_api::<msgs::AddAppointmentRequest, msgs::AddAppointmentResponse>(
+        let response = request_to_api::<
+            common_msgs::AddAppointmentRequest,
+            common_msgs::AddAppointmentResponse,
+        >(
             "/add_appointment",
-            msgs::AddAppointmentRequest {
+            common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.into()),
                 signature,
             },
@@ -743,7 +747,10 @@ mod tests_methods {
         )
         .await;
 
-        assert!(matches!(response, Ok(msgs::AddAppointmentResponse { .. })));
+        assert!(matches!(
+            response,
+            Ok(common_msgs::AddAppointmentResponse { .. })
+        ));
     }
 
     #[tokio::test]
@@ -756,7 +763,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/add_appointment",
-                RequestBody::Json(serde_json::json!(msgs::AddAppointmentRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::AddAppointmentRequest {
                     appointment: Some(appointment.into()),
                     signature,
                 })),
@@ -781,9 +788,9 @@ mod tests_methods {
 
         // Register
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
+        request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
             "/register",
-            msgs::RegisterRequest {
+            common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -802,7 +809,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/add_appointment",
-                RequestBody::Json(serde_json::json!(msgs::AddAppointmentRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::AddAppointmentRequest {
                     appointment: Some(appointment.into()),
                     signature,
                 })),
@@ -832,7 +839,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/add_appointment",
-                RequestBody::Json(serde_json::json!(msgs::AddAppointmentRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::AddAppointmentRequest {
                     appointment: Some(appointment.into()),
                     signature,
                 })),
@@ -855,9 +862,9 @@ mod tests_methods {
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
+        request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
             "/register",
-            msgs::RegisterRequest {
+            common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -869,9 +876,9 @@ mod tests_methods {
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
 
-        request_to_api::<msgs::AddAppointmentRequest, msgs::AddAppointmentResponse>(
+        request_to_api::<common_msgs::AddAppointmentRequest, common_msgs::AddAppointmentResponse>(
             "/add_appointment",
-            msgs::AddAppointmentRequest {
+            common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
                 signature,
             },
@@ -881,9 +888,12 @@ mod tests_methods {
         .unwrap();
 
         // Get it back
-        let response = request_to_api::<msgs::GetAppointmentRequest, msgs::GetAppointmentResponse>(
+        let response = request_to_api::<
+            common_msgs::GetAppointmentRequest,
+            common_msgs::GetAppointmentResponse,
+        >(
             "/get_appointment",
-            msgs::GetAppointmentRequest {
+            common_msgs::GetAppointmentRequest {
                 locator: appointment.locator.serialize(),
                 signature: cryptography::sign(
                     format!("get appointment {}", appointment.locator).as_bytes(),
@@ -895,7 +905,10 @@ mod tests_methods {
         )
         .await;
 
-        assert!(matches!(response, Ok(msgs::GetAppointmentResponse { .. })));
+        assert!(matches!(
+            response,
+            Ok(common_msgs::GetAppointmentResponse { .. })
+        ));
     }
 
     #[tokio::test]
@@ -910,7 +923,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_appointment",
-                RequestBody::Json(serde_json::json!(msgs::GetAppointmentRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
                     locator: appointment.locator.serialize(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
@@ -937,9 +950,9 @@ mod tests_methods {
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
+        request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
             "/register",
-            msgs::RegisterRequest {
+            common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -953,7 +966,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_appointment",
-                RequestBody::Json(serde_json::json!(msgs::GetAppointmentRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
                     locator: appointment.locator.serialize(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
@@ -988,7 +1001,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_appointment",
-                RequestBody::Json(serde_json::json!(msgs::GetAppointmentRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
                     locator: appointment.locator.serialize(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
@@ -1015,9 +1028,9 @@ mod tests_methods {
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
-        request_to_api::<msgs::RegisterRequest, msgs::RegisterResponse>(
+        request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
             "/register",
-            msgs::RegisterRequest {
+            common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
             server_addr,
@@ -1026,20 +1039,22 @@ mod tests_methods {
         .unwrap();
 
         // Get the subscription info
-        let response =
-            request_to_api::<msgs::GetSubscriptionInfoRequest, msgs::GetSubscriptionInfoResponse>(
-                "/get_subscription_info",
-                msgs::GetSubscriptionInfoRequest {
-                    signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
-                        .unwrap(),
-                },
-                server_addr,
-            )
-            .await;
+        let response = request_to_api::<
+            common_msgs::GetSubscriptionInfoRequest,
+            common_msgs::GetSubscriptionInfoResponse,
+        >(
+            "/get_subscription_info",
+            common_msgs::GetSubscriptionInfoRequest {
+                signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
+                    .unwrap(),
+            },
+            server_addr,
+        )
+        .await;
 
         assert!(matches!(
             response,
-            Ok(msgs::GetSubscriptionInfoResponse { .. })
+            Ok(common_msgs::GetSubscriptionInfoResponse { .. })
         ));
     }
 
@@ -1053,7 +1068,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_subscription_info",
-                RequestBody::Json(serde_json::json!(msgs::GetSubscriptionInfoRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
                     signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
                         .unwrap(),
                 })),
@@ -1081,7 +1096,7 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 "/get_subscription_info",
-                RequestBody::Json(serde_json::json!(msgs::GetSubscriptionInfoRequest {
+                RequestBody::Json(serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
                     signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
                         .unwrap(),
                 })),

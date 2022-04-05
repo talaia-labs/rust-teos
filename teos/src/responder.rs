@@ -9,13 +9,13 @@ use bitcoin::{BlockHeader, Transaction, Txid};
 use lightning::chain;
 
 use teos_common::constants;
+use teos_common::protos as common_msgs;
 use teos_common::UserId;
 
 use crate::carrier::Carrier;
 use crate::dbm::DBM;
 use crate::extended_appointment::UUID;
 use crate::gatekeeper::{Gatekeeper, UserInfo};
-use crate::protos as msgs;
 use crate::watcher::Breach;
 
 /// Number of missed confirmations to wait before rebroadcasting a transaction.
@@ -108,9 +108,9 @@ impl TransactionTracker {
     }
 }
 
-impl From<TransactionTracker> for msgs::Tracker {
+impl From<TransactionTracker> for common_msgs::Tracker {
     fn from(t: TransactionTracker) -> Self {
-        msgs::Tracker {
+        common_msgs::Tracker {
             dispute_txid: t.dispute_tx.txid().to_vec(),
             penalty_txid: t.penalty_tx.txid().to_vec(),
             penalty_rawtx: consensus::serialize(&t.penalty_tx),

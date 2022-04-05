@@ -6,7 +6,6 @@ use std::fmt;
 
 use bitcoin::hashes::{ripemd160, Hash};
 
-use crate::protos as msgs;
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::UserId;
 
@@ -109,16 +108,6 @@ impl ExtendedAppointment {
         AppointmentSummary {
             locator: self.locator(),
             user_id: self.user_id,
-        }
-    }
-}
-
-impl From<Appointment> for msgs::Appointment {
-    fn from(a: Appointment) -> Self {
-        Self {
-            locator: a.locator.serialize(),
-            encrypted_blob: a.encrypted_blob.clone(),
-            to_self_delay: a.to_self_delay,
         }
     }
 }

@@ -2,11 +2,16 @@
 //!
 //! Functionality shared between users and towers.
 
+pub mod protos {
+    tonic::include_proto!("common.teos.v2");
+}
+
 pub mod appointment;
 pub mod constants;
 pub mod cryptography;
 pub mod errors;
 pub mod receipts;
+pub mod ser;
 
 use std::fmt;
 

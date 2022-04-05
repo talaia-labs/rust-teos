@@ -1,0 +1,22 @@
+syntax = "proto3";
+package teos.v2;
+
+import "common/teos/v2/appointment.proto";
+
+message GetAppointmentsRequest {
+  // Request the information of appointments with specific locator.
+
+  bytes locator = 1;
+}
+
+message GetAppointmentsResponse {
+  // Response with the information of all appointments with a specific locator.
+
+  repeated common.teos.v2.AppointmentData appointments = 1;
+}
+
+message GetAllAppointmentsResponse {
+  // Response with data about all the appointments in the tower. 
+  
+  repeated common.teos.v2.AppointmentData appointments = 1;
+}

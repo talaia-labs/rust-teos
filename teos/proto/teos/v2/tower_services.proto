@@ -3,7 +3,10 @@ package teos.v2;
 
 import "appointment.proto";
 import "user.proto";
+import "common/teos/v2/appointment.proto";
+import "common/teos/v2/user.proto";
 import "google/protobuf/empty.proto";
+
 
 message GetTowerInfoResponse {
   // Response with information about the tower.
@@ -18,10 +21,10 @@ message GetTowerInfoResponse {
 service PublicTowerServices {
   // Public tower services, only reachable from the public API.
 
-  rpc register(RegisterRequest) returns (RegisterResponse) {}
-  rpc add_appointment(AddAppointmentRequest) returns (AddAppointmentResponse) {}
-  rpc get_appointment(GetAppointmentRequest) returns (GetAppointmentResponse) {}
-  rpc get_subscription_info(GetSubscriptionInfoRequest) returns (GetSubscriptionInfoResponse) {}
+  rpc register(common.teos.v2.RegisterRequest) returns (common.teos.v2.RegisterResponse) {}
+  rpc add_appointment(common.teos.v2.AddAppointmentRequest) returns (common.teos.v2.AddAppointmentResponse) {}
+  rpc get_appointment(common.teos.v2.GetAppointmentRequest) returns (common.teos.v2.GetAppointmentResponse) {}
+  rpc get_subscription_info(common.teos.v2.GetSubscriptionInfoRequest) returns (common.teos.v2.GetSubscriptionInfoResponse) {}
 }
 
 service PrivateTowerServices {

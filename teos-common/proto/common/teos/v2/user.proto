@@ -1,0 +1,31 @@
+syntax = "proto3";
+package common.teos.v2;
+
+message RegisterRequest {
+    // Requests a user registration with the tower. Contains the user id in the form of a compressed ECDSA public key.
+  
+    bytes user_id = 1;
+  }
+  
+  message RegisterResponse {
+    // Response to a RegisterRequest, contains the registration information alongside the tower signature of the agreement.
+  
+    bytes user_id = 1;
+    uint32 available_slots = 2;
+    uint32 subscription_expiry = 3;
+    string subscription_signature = 4;
+  }
+
+  message GetSubscriptionInfoRequest {
+    // Request to get a specific user's subscription info.
+
+    string signature = 1;
+}
+
+message GetSubscriptionInfoResponse {
+  // Response with the information the tower has about a specific user
+
+  uint32 available_slots = 1;
+  uint32 subscription_expiry = 2;
+  repeated bytes locators = 3;
+}

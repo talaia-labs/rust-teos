@@ -8,7 +8,10 @@ edition = "2018"
 
 [dependencies]
 # General
-hex = "0.4.3"
+hex = { version = "0.4.3", features = [ "serde" ] }
+prost = "0.9"
+serde = "1.0.130"
+tonic = "0.6"
 
 # Crypto
 rand = "0.8.4"
@@ -17,3 +20,6 @@ chacha20poly1305 = "0.8.0"
 # Bitcoin and Lightning
 bitcoin = "0.27"
 lightning = "0.0.105"
+
+[build-dependencies]
+tonic-build = "0.6"

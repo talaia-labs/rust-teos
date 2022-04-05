@@ -6,6 +6,8 @@ use std::{convert::TryInto, fmt};
 
 use bitcoin::Txid;
 
+use crate::protos as msgs;
+
 pub const LOCATOR_LEN: usize = 16;
 
 /// User identifier for appointments.
@@ -123,5 +125,15 @@ impl Appointment {
         result.extend(&self.encrypted_blob);
         result.extend(self.to_self_delay.to_be_bytes().to_vec());
         result
+    }
+}
+
+impl From<Appointment> for msgs::Appointment {
+    fn from(a: Appointment) -> Self {
+        Self {
+            locator: a.locator.serialize(),
+            encrypted_blob: a.encrypted_blob.clone(),
+            to_self_delay: a.to_self_delay,
+        }
     }
 }
