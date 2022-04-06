@@ -1,3 +1,20 @@
+use std::collections::HashSet;
+
+use serde::{ser::SerializeSeq, Serializer};
+
+use crate::appointment::Locator;
+
+pub fn serialize_locators<S>(hs: &HashSet<Locator>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut seq = s.serialize_seq(Some(hs.len()))?;
+    for element in hs.iter() {
+        seq.serialize_element(&hex::encode(element))?;
+    }
+    seq.end()
+}
+
 pub mod serde_status {
     use serde::de::{self, Deserializer};
     use serde::ser::Serializer;

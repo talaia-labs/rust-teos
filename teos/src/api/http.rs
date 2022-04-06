@@ -641,7 +641,7 @@ mod tests_methods {
             request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
                 "/register",
                 common_msgs::RegisterRequest {
-                    user_id: get_random_user_id().serialize(),
+                    user_id: get_random_user_id().to_vec(),
                 },
                 server_addr,
             )
@@ -659,7 +659,7 @@ mod tests_methods {
         request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
             "/register",
             common_msgs::RegisterRequest {
-                user_id: user_id.serialize(),
+                user_id: user_id.to_vec(),
             },
             server_addr,
         )
@@ -671,7 +671,7 @@ mod tests_methods {
             check_api_error(
                 "/register",
                 RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
-                    user_id: user_id.serialize(),
+                    user_id: user_id.to_vec(),
                 })),
                 server_addr,
             )
@@ -699,7 +699,7 @@ mod tests_methods {
             check_api_error(
                 "/register",
                 RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
-                    user_id: user_id.serialize(),
+                    user_id: user_id.to_vec(),
                 })),
                 server_addr,
             )
@@ -732,7 +732,7 @@ mod tests_methods {
 
         // Then try to add an appointment
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         let response = request_to_api::<
             common_msgs::AddAppointmentRequest,
@@ -758,7 +758,7 @@ mod tests_methods {
         let server_addr = run_tower_in_background().await;
         let (user_sk, _) = cryptography::get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         assert_eq!(
             check_api_error(
@@ -800,7 +800,7 @@ mod tests_methods {
 
         // Add the appointment to the Responder so it counts as triggered
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         internal_api
             .get_watcher()
             .add_random_tracker_to_responder(UUID::new(appointment.locator, UserId(user_pk)));
@@ -834,7 +834,7 @@ mod tests_methods {
         .await;
         let (user_sk, _) = cryptography::get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         assert_eq!(
             check_api_error(
@@ -874,7 +874,7 @@ mod tests_methods {
 
         // Add an appointment
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         request_to_api::<common_msgs::AddAppointmentRequest, common_msgs::AddAppointmentResponse>(
             "/add_appointment",
@@ -894,7 +894,7 @@ mod tests_methods {
         >(
             "/get_appointment",
             common_msgs::GetAppointmentRequest {
-                locator: appointment.locator.serialize(),
+                locator: appointment.locator.to_vec(),
                 signature: cryptography::sign(
                     format!("get appointment {}", appointment.locator).as_bytes(),
                     &user_sk,
@@ -924,7 +924,7 @@ mod tests_methods {
             check_api_error(
                 "/get_appointment",
                 RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
-                    locator: appointment.locator.serialize(),
+                    locator: appointment.locator.to_vec(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
                         &user_sk,
@@ -967,7 +967,7 @@ mod tests_methods {
             check_api_error(
                 "/get_appointment",
                 RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
-                    locator: appointment.locator.serialize(),
+                    locator: appointment.locator.to_vec(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
                         &user_sk,
@@ -1002,7 +1002,7 @@ mod tests_methods {
             check_api_error(
                 "/get_appointment",
                 RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
-                    locator: appointment.locator.serialize(),
+                    locator: appointment.locator.to_vec(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
                         &user_sk,

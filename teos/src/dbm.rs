@@ -157,7 +157,7 @@ impl DBM {
         match self.store_data(
             query,
             params![
-                user_id.serialize(),
+                user_id.to_vec(),
                 user_info.available_slots,
                 user_info.subscription_expiry,
             ],
@@ -182,7 +182,7 @@ impl DBM {
             params![
                 user_info.available_slots,
                 user_info.subscription_expiry,
-                user_id.serialize(),
+                user_id.to_vec(),
             ],
         ) {
             Ok(_) => {
@@ -200,12 +200,12 @@ impl DBM {
             .connection
             .prepare("SELECT UUID, encrypted_blob FROM appointments WHERE user_id=(?)")
             .unwrap();
-        let mut rows = stmt.query([user_id.serialize()]).unwrap();
+        let mut rows = stmt.query([user_id.to_vec()]).unwrap();
 
         let mut appointments = HashMap::new();
         while let Ok(Some(inner_row)) = rows.next() {
             let raw_uuid: Vec<u8> = inner_row.get(0).unwrap();
-            let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
+            let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
             let e_blob: Vec<u8> = inner_row.get(1).unwrap();
 
             appointments.insert(
@@ -225,7 +225,7 @@ impl DBM {
 
         while let Ok(Some(row)) = rows.next() {
             let raw_userid: Vec<u8> = row.get(0).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
             let slots = row.get(1).unwrap();
             let expiry = row.get(2).unwrap();
 
@@ -244,7 +244,7 @@ impl DBM {
         let tx = self.connection.transaction().unwrap();
         let iter = users
             .iter()
-            .map(|uuid| uuid.serialize())
+            .map(|uuid| uuid.to_vec())
             .collect::<Vec<Vec<u8>>>();
 
         for chunk in iter.chunks(limit) {
@@ -278,13 +278,13 @@ impl DBM {
         match self.store_data(
             query,
             params![
-                uuid.serialize(),
-                appointment.locator().serialize(),
+                uuid.to_vec(),
+                appointment.locator().to_vec(),
                 appointment.encrypted_blob(),
                 appointment.to_self_delay(),
                 appointment.user_signature,
                 appointment.start_block,
-                appointment.user_id.serialize(),
+                appointment.user_id.to_vec(),
             ],
         ) {
             Ok(x) => {
@@ -310,7 +310,7 @@ impl DBM {
                 appointment.to_self_delay(),
                 appointment.user_signature,
                 appointment.start_block,
-                uuid.serialize(),
+                uuid.to_vec(),
             ],
         ) {
             Ok(_) => {
@@ -324,7 +324,7 @@ impl DBM {
 
     /// Loads an [Appointment] from the database.
     pub(crate) fn load_appointment(&self, uuid: UUID) -> Result<ExtendedAppointment, Error> {
-        let key = uuid.serialize();
+        let key = uuid.to_vec();
         let mut stmt = self
             .connection
             .prepare("SELECT * FROM appointments WHERE UUID=(?)")
@@ -332,9 +332,9 @@ impl DBM {
 
         stmt.query_row([key], |row| {
             let raw_locator: Vec<u8> = row.get(1).unwrap();
-            let locator = Locator::deserialize(&raw_locator).unwrap();
+            let locator = Locator::from_slice(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(6).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             let appointment = Appointment::new(locator, row.get(2).unwrap(), row.get(3).unwrap());
             Ok(ExtendedAppointment::new(
@@ -363,18 +363,18 @@ impl DBM {
         let mut stmt = self.connection.prepare(&sql).unwrap();
 
         let mut rows = if let Some(locator) = locator {
-            stmt.query([locator.serialize()]).unwrap()
+            stmt.query([locator.to_vec()]).unwrap()
         } else {
             stmt.query([]).unwrap()
         };
 
         while let Ok(Some(row)) = rows.next() {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
-            let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
+            let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
             let raw_locator: Vec<u8> = row.get(1).unwrap();
-            let locator = Locator::deserialize(&raw_locator).unwrap();
+            let locator = Locator::from_slice(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(6).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             let appointment = Appointment::new(locator, row.get(2).unwrap(), row.get(3).unwrap());
 
@@ -395,7 +395,7 @@ impl DBM {
     /// Removes an [Appointment] from the database.
     pub(crate) fn remove_appointment(&self, uuid: UUID) {
         let query = "DELETE FROM appointments WHERE UUID=(?)";
-        match self.remove_data(query, params![uuid.serialize()]) {
+        match self.remove_data(query, params![uuid.to_vec()]) {
             Ok(_) => {
                 log::debug!("Appointment successfully removed: {}", uuid);
             }
@@ -416,7 +416,7 @@ impl DBM {
         let tx = self.connection.transaction().unwrap();
         let iter = appointments
             .iter()
-            .map(|uuid| uuid.serialize())
+            .map(|uuid| uuid.to_vec())
             .collect::<Vec<Vec<u8>>>();
 
         for chunk in iter.chunks(limit) {
@@ -434,7 +434,7 @@ impl DBM {
 
         for (id, info) in updated_users.iter() {
             let query = "UPDATE users SET available_slots=(?1) WHERE user_id=(?2)";
-            match tx.execute(query, params![info.available_slots, id.serialize(),]) {
+            match tx.execute(query, params![info.available_slots, id.to_vec(),]) {
                 Ok(_) => log::debug!("User update added to db transaction"),
                 Err(e) => log::error!("Couldn't add update query to transaction. Error: {:?}", e),
             };
@@ -455,9 +455,9 @@ impl DBM {
             .prepare("SELECT locator FROM appointments WHERE UUID=(?)")
             .unwrap();
 
-        stmt.query_row([uuid.serialize()], |row| {
+        stmt.query_row([uuid.to_vec()], |row| {
             let raw_locator: Vec<u8> = row.get(0).unwrap();
-            Ok(Locator::deserialize(&raw_locator).unwrap())
+            Ok(Locator::from_slice(&raw_locator).unwrap())
         })
         .map_err(|_| Error::NotFound)
     }
@@ -475,7 +475,7 @@ impl DBM {
         match self.store_data(
             query,
             params![
-                uuid.serialize(),
+                uuid.to_vec(),
                 consensus::serialize(&tracker.dispute_tx),
                 consensus::serialize(&tracker.penalty_tx),
                 height,
@@ -495,7 +495,7 @@ impl DBM {
 
     /// Loads a [TransactionTracker] from the database.
     pub(crate) fn load_tracker(&self, uuid: UUID) -> Result<TransactionTracker, Error> {
-        let key = uuid.serialize();
+        let key = uuid.to_vec();
         let mut stmt = self.connection.prepare(
             "SELECT t.*, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID WHERE t.UUID=(?)").unwrap();
 
@@ -507,7 +507,7 @@ impl DBM {
             let height: u32 = row.get(3).unwrap();
             let confirmed: bool = row.get(4).unwrap();
             let raw_userid: Vec<u8> = row.get(5).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             Ok(TransactionTracker {
                 dispute_tx,
@@ -535,14 +535,14 @@ impl DBM {
         let mut stmt = self.connection.prepare(&sql).unwrap();
 
         let mut rows = if let Some(locator) = locator {
-            stmt.query([locator.serialize()]).unwrap()
+            stmt.query([locator.to_vec()]).unwrap()
         } else {
             stmt.query([]).unwrap()
         };
 
         while let Ok(Some(row)) = rows.next() {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
-            let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
+            let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
             let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
             let dispute_tx = consensus::deserialize(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
@@ -550,7 +550,7 @@ impl DBM {
             let height: u32 = row.get(3).unwrap();
             let confirmed: bool = row.get(4).unwrap();
             let raw_userid: Vec<u8> = row.get(5).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             trackers.insert(
                 uuid,
@@ -636,7 +636,7 @@ mod tests {
         }
 
         pub(crate) fn load_user(&self, user_id: UserId) -> Result<UserInfo, Error> {
-            let key = user_id.serialize();
+            let key = user_id.to_vec();
             let mut stmt = self
                 .connection
                 .prepare("SELECT available_slots, subscription_expiry FROM users WHERE user_id=(?)")

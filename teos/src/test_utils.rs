@@ -290,7 +290,7 @@ impl BlockSource for Blockchain {
 pub(crate) fn generate_uuid() -> UUID {
     let mut rng = rand::thread_rng();
 
-    UUID::deserialize(&rng.gen::<[u8; 20]>()).unwrap()
+    UUID::from_slice(&rng.gen::<[u8; 20]>()).unwrap()
 }
 
 pub(crate) fn get_random_user_id() -> UserId {
@@ -336,7 +336,7 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
 
     let mut raw_locator: [u8; 16] = get_random_bytes(16).try_into().unwrap();
     raw_locator.copy_from_slice(&dispute_txid[..16]);
-    let locator = Locator::deserialize(&raw_locator).unwrap();
+    let locator = Locator::from_slice(&raw_locator).unwrap();
 
     let encrypted_blob = encrypt(&penalty_tx, &dispute_txid).unwrap();
     let appointment = Appointment::new(locator, encrypted_blob, 21);

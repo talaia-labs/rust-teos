@@ -21,18 +21,18 @@ impl UUID {
     /// when a user requests it without having to perform lookups based on the [Locator], and match what [UUID] belongs to what user (if any).
     /// Therefore, it provides a hard-to-forge id while reducing the tower lookups and the required data to be stored (no reverse maps).
     pub fn new(locator: Locator, user_id: UserId) -> Self {
-        let mut uuid_data = locator.serialize();
+        let mut uuid_data = locator.to_vec();
         uuid_data.extend(&user_id.0.serialize());
         UUID(ripemd160::Hash::hash(&uuid_data).into_inner())
     }
 
     /// Serializes the [UUID] returning its byte representation.
-    pub fn serialize(&self) -> Vec<u8> {
+    pub fn to_vec(self) -> Vec<u8> {
         self.0.to_vec()
     }
 
     /// Builds a [UUID] from its byte representation.
-    pub fn deserialize(data: &[u8]) -> Result<Self, TryFromSliceError> {
+    pub fn from_slice(data: &[u8]) -> Result<Self, TryFromSliceError> {
         data.try_into().map(Self)
     }
 }
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_get_summary() {
-        let locator = Locator::deserialize(&get_random_bytes(16)).unwrap();
+        let locator = Locator::from_slice(&get_random_bytes(16)).unwrap();
         let user_id = get_random_user_id();
         let signature = String::new();
 
