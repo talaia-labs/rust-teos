@@ -1,13 +1,13 @@
-//! Logic related to the database manager (DBM), component in charge of persisting data on disk.
+//! Logic related to the tower database manager (DBM), component in charge of persisting data on disk.
 //!
 
 use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use rusqlite::ffi::{SQLITE_CONSTRAINT_FOREIGNKEY, SQLITE_CONSTRAINT_PRIMARYKEY};
 use rusqlite::limits::Limit;
-use rusqlite::{params, params_from_iter, Connection, Error as SqliteError, ErrorCode, Params};
+use rusqlite::{params, params_from_iter, Connection, Error as SqliteError};
 
 use bitcoin::consensus;
 use bitcoin::hashes::Hash;
@@ -16,21 +16,50 @@ use bitcoin::BlockHash;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
+use teos_common::dbm::{DatabaseConnection, DatabaseManager, Error};
 use teos_common::UserId;
 
 use crate::extended_appointment::{compute_appointment_slots, ExtendedAppointment, UUID};
 use crate::gatekeeper::UserInfo;
 use crate::responder::{ConfirmationStatus, TransactionTracker};
 
-/// Packs the errors than can raise when interacting with the underlying database.
-#[derive(Debug)]
-pub enum Error {
-    AlreadyExists,
-    MissingForeignKey,
-    MissingField,
-    NotFound,
-    Unknown(SqliteError),
-}
+const TABLES: [&str; 5] = [
+    "CREATE TABLE IF NOT EXISTS users (
+    user_id INT PRIMARY KEY,
+    available_slots INT NOT NULL,
+    subscription_expiry INT NOT NULL
+)",
+    "CREATE TABLE IF NOT EXISTS appointments (
+    UUID INT PRIMARY KEY,
+    locator INT NOT NULL,
+    encrypted_blob BLOB NOT NULL,
+    to_self_delay INT NOT NULL,
+    user_signature BLOB NOT NULL,
+    start_block INT NOT NULL,
+    user_id INT NOT NULL,
+    FOREIGN KEY(user_id)
+        REFERENCES users(user_id)
+        ON DELETE CASCADE
+)",
+    "CREATE TABLE IF NOT EXISTS trackers (
+    UUID INT PRIMARY KEY,
+    dispute_tx BLOB NOT NULL,
+    penalty_tx BLOB NOT NULL,
+    height INT NOT NULL,
+    confirmed BOOL NOT NULL,
+    FOREIGN KEY(UUID)
+        REFERENCES appointments(UUID)
+        ON DELETE CASCADE
+)",
+    "CREATE TABLE IF NOT EXISTS last_known_block (
+    id INT PRIMARY KEY,
+    block_hash INT NOT NULL
+)",
+    "CREATE TABLE IF NOT EXISTS keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key INT NOT NULL
+)",
+];
 
 /// Component in charge of interacting with the underlying database.
 ///
@@ -41,112 +70,25 @@ pub struct DBM {
     connection: Connection,
 }
 
+impl DatabaseConnection for DBM {
+    fn get_connection(&self) -> &Connection {
+        &self.connection
+    }
+
+    fn get_mut_connection(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+}
+
 impl DBM {
     /// Creates a new [DBM] instance.
     pub fn new(db_path: PathBuf) -> Result<Self, SqliteError> {
         let connection = Connection::open(db_path)?;
         connection.execute("PRAGMA foreign_keys=1;", [])?;
         let mut dbm = Self { connection };
-        dbm.create_tables()?;
+        dbm.create_tables(Vec::from_iter(TABLES))?;
 
         Ok(dbm)
-    }
-
-    /// Creates the database tables if not present.
-    ///
-    /// The database consists of the following tables:
-    /// - users
-    /// - appointments
-    /// - trackers
-    /// - last_known_block
-    /// - keys
-    fn create_tables(&mut self) -> Result<(), SqliteError> {
-        let tx = self.connection.transaction().unwrap();
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS users (
-                    user_id INT PRIMARY KEY,
-                    available_slots INT NOT NULL,
-                    subscription_expiry INT NOT NULL
-                )",
-            [],
-        )?;
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS appointments (
-                UUID INT PRIMARY KEY,
-                locator INT NOT NULL,
-                encrypted_blob BLOB NOT NULL,
-                to_self_delay INT NOT NULL,
-                user_signature BLOB NOT NULL,
-                start_block INT NOT NULL,
-                user_id INT NOT NULL,
-                FOREIGN KEY(user_id)
-                    REFERENCES users(user_id)
-                    ON DELETE CASCADE
-            )",
-            [],
-        )?;
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS trackers (
-                UUID INT PRIMARY KEY,
-                dispute_tx BLOB NOT NULL,
-                penalty_tx BLOB NOT NULL,
-                height INT NOT NULL,
-                confirmed BOOL NOT NULL,
-                FOREIGN KEY(UUID)
-                    REFERENCES appointments(UUID)
-                    ON DELETE CASCADE
-            )",
-            [],
-        )?;
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS last_known_block (
-                id INT PRIMARY KEY,
-                block_hash INT NOT NULL
-            )",
-            [],
-        )?;
-
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS keys (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key INT NOT NULL
-            )",
-            [],
-        )?;
-        tx.commit()
-    }
-
-    /// Generic method to store data into the database.
-    fn store_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
-        match self.connection.execute(query, params) {
-            Ok(_) => Ok(()),
-            Err(e) => match e {
-                SqliteError::SqliteFailure(ie, _) => match ie.code {
-                    ErrorCode::ConstraintViolation => match ie.extended_code {
-                        SQLITE_CONSTRAINT_FOREIGNKEY => Err(Error::MissingForeignKey),
-                        SQLITE_CONSTRAINT_PRIMARYKEY => Err(Error::AlreadyExists),
-                        _ => Err(Error::Unknown(e)),
-                    },
-                    _ => Err(Error::Unknown(e)),
-                },
-                _ => Err(Error::Unknown(e)),
-            },
-        }
-    }
-
-    /// Generic method to remove data from the database.
-    fn remove_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
-        match self.connection.execute(query, params).unwrap() {
-            0 => Err(Error::NotFound),
-            _ => Ok(()),
-        }
-    }
-
-    /// Generic method to update data from the database.
-    fn update_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
-        // Updating data is fundamentally the same as deleting it in terms of interface.
-        // A query is sent and either no row is modified or some rows are
-        self.remove_data(query, params)
     }
 
     /// Stores a user ([UserInfo]) into the database.
@@ -632,7 +574,7 @@ mod tests {
             let connection = Connection::open_in_memory()?;
             connection.execute("PRAGMA foreign_keys=1;", [])?;
             let mut dbm = Self { connection };
-            dbm.create_tables()?;
+            dbm.create_tables(Vec::from_iter(TABLES))?;
 
             Ok(dbm)
         }
@@ -663,7 +605,7 @@ mod tests {
     fn test_create_tables() {
         let connection = Connection::open_in_memory().unwrap();
         let mut dbm = DBM { connection };
-        dbm.create_tables().unwrap();
+        dbm.create_tables(Vec::from_iter(TABLES)).unwrap();
     }
 
     #[test]

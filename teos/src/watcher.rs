@@ -885,7 +885,7 @@ mod tests {
     use std::ops::Deref;
     use std::sync::{Arc, Mutex};
 
-    use crate::dbm::{Error as DBError, DBM};
+    use crate::dbm::DBM;
     use crate::responder::ConfirmationStatus;
     use crate::rpc_errors;
     use crate::test_utils::{
@@ -895,6 +895,7 @@ mod tests {
         MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
+    use teos_common::dbm::Error as DBError;
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
