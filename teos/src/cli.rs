@@ -8,6 +8,7 @@ use teos::cli_config::{Command, Config, Opt};
 use teos::config;
 use teos::protos as msgs;
 use teos::protos::private_tower_services_client::PrivateTowerServicesClient;
+use teos_common::appointment::Locator;
 use teos_common::UserId;
 
 #[tokio::main]
@@ -44,6 +45,24 @@ async fn main() {
             let appointments = client.get_all_appointments(Request::new(())).await.unwrap();
             println!("{}", pretty_json(&appointments.into_inner()).unwrap());
         }
+        Command::GetAppointments(appointments_data) => {
+            match Locator::from_str(&appointments_data.locator) {
+                Ok(locator) => {
+                    match client
+                        .get_appointments(Request::new(msgs::GetAppointmentsRequest {
+                            locator: locator.serialize(),
+                        }))
+                        .await
+                    {
+                        Ok(appointments) => {
+                            println!("{}", pretty_json(&appointments.into_inner()).unwrap())
+                        }
+                        Err(status) => println!("{}", status.message()),
+                    }
+                }
+                Err(e) => println!("{}", e),
+            };
+        }
         Command::GetTowerInfo => {
             let info = client.get_tower_info(Request::new(())).await.unwrap();
             println!("{}", pretty_json(&info.into_inner()).unwrap())
@@ -52,8 +71,8 @@ async fn main() {
             let users = client.get_users(Request::new(())).await.unwrap();
             println!("{}", pretty_json(&users.into_inner()).unwrap());
         }
-        Command::GetUser(data) => {
-            match UserId::from_str(&data.user_id) {
+        Command::GetUser(user) => {
+            match UserId::from_str(&user.user_id) {
                 Ok(user_id) => {
                     match client
                         .get_user(Request::new(msgs::GetUserRequest {

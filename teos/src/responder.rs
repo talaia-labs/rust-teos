@@ -144,7 +144,7 @@ impl Responder {
         let mut trackers = HashMap::new();
         let mut tx_tracker_map: HashMap<Txid, HashSet<UUID>> = HashMap::new();
 
-        for (uuid, tracker) in dbm.lock().unwrap().load_all_trackers() {
+        for (uuid, tracker) in dbm.lock().unwrap().load_trackers(None) {
             trackers.insert(uuid, tracker.get_summary());
 
             if let Some(map) = tx_tracker_map.get_mut(&tracker.penalty_tx.txid()) {
@@ -593,10 +593,19 @@ mod tests {
             &self.carrier
         }
 
-        pub(crate) fn add_random_tracker(&self, uuid: UUID, status: ConfirmationStatus) {
+        pub(crate) fn add_random_tracker(
+            &self,
+            uuid: UUID,
+            status: ConfirmationStatus,
+        ) -> TransactionTracker {
             let user_id = get_random_user_id();
             let tracker = get_random_tracker(user_id, status);
+            self.add_dummy_tracker(uuid, &tracker);
 
+            tracker
+        }
+
+        pub(crate) fn add_dummy_tracker(&self, uuid: UUID, tracker: &TransactionTracker) {
             // Add data to memory
             self.trackers
                 .lock()
@@ -608,13 +617,15 @@ mod tests {
                 .insert(tracker.penalty_tx.txid(), HashSet::from_iter([uuid]));
 
             // Add data to the db
-            let (_, appointment) =
-                generate_dummy_appointment_with_user(user_id, Some(&tracker.dispute_tx.txid()));
+            let (_, appointment) = generate_dummy_appointment_with_user(
+                tracker.user_id,
+                Some(&tracker.dispute_tx.txid()),
+            );
             store_appointment_and_fks_to_db(&self.dbm.lock().unwrap(), uuid, &appointment);
             self.dbm
                 .lock()
                 .unwrap()
-                .store_tracker(uuid, &tracker)
+                .store_tracker(uuid, tracker)
                 .unwrap();
         }
     }

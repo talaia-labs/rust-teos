@@ -74,6 +74,18 @@ message GetAppointmentResponse {
   AppointmentStatus status = 2;
 }
 
+message GetAppointmentsRequest {
+  // Request the information of appointments with specific locator.
+
+  bytes locator = 1;
+}
+
+message GetAppointmentsResponse {
+  // Response with the information of all appointments with a specific locator.
+
+  repeated AppointmentData appointments = 1;
+}
+
 message GetAllAppointmentsResponse {
   // Response with data about all the appointments in the tower. 
   

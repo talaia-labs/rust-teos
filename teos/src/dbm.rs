@@ -347,14 +347,26 @@ impl DBM {
         .map_err(|_| Error::NotFound)
     }
 
-    /// Loads all appointments from the database.
-    pub(crate) fn load_all_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
+    /// Loads appointments from the database. If a locator is given, this method loads only the appointments
+    /// matching this locator. If no locator is given, all the appointments in the database would be returned.
+    pub(crate) fn load_appointments(
+        &self,
+        locator: Option<Locator>,
+    ) -> HashMap<UUID, ExtendedAppointment> {
         let mut appointments = HashMap::new();
-        let mut stmt = self
-            .connection
-            .prepare("SELECT * FROM appointments as a LEFT JOIN trackers as t ON a.UUID=t.UUID WHERE t.UUID IS NULL")
-            .unwrap();
-        let mut rows = stmt.query([]).unwrap();
+
+        let mut sql = "SELECT * FROM appointments as a LEFT JOIN trackers as t ON a.UUID=t.UUID WHERE t.UUID IS NULL".to_string();
+        // If a locator was passed, filter based on it.
+        if locator.is_some() {
+            sql.push_str(" AND a.locator=(?)");
+        }
+        let mut stmt = self.connection.prepare(&sql).unwrap();
+
+        let mut rows = if let Some(locator) = locator {
+            stmt.query([locator.serialize()]).unwrap()
+        } else {
+            stmt.query([]).unwrap()
+        };
 
         while let Ok(Some(row)) = rows.next() {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
@@ -507,14 +519,26 @@ impl DBM {
         .map_err(|_| Error::NotFound)
     }
 
-    /// Loads all trackers from the database.
-    pub(crate) fn load_all_trackers(&self) -> HashMap<UUID, TransactionTracker> {
+    /// Loads trackers from the database. If a locator is given, this method loads only the trackers
+    /// matching this locator. If no locator is given, all the trackers in the database would be returned.
+    pub(crate) fn load_trackers(
+        &self,
+        locator: Option<Locator>,
+    ) -> HashMap<UUID, TransactionTracker> {
         let mut trackers = HashMap::new();
-        let mut stmt = self
-            .connection
-            .prepare("SELECT t.*, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID")
-            .unwrap();
-        let mut rows = stmt.query([]).unwrap();
+
+        let mut sql = "SELECT t.*, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID".to_string();
+        // If a locator was passed, filter based on it.
+        if locator.is_some() {
+            sql.push_str(" WHERE a.locator=(?)");
+        }
+        let mut stmt = self.connection.prepare(&sql).unwrap();
+
+        let mut rows = if let Some(locator) = locator {
+            stmt.query([locator.serialize()]).unwrap()
+        } else {
+            stmt.query([]).unwrap()
+        };
 
         while let Ok(Some(row)) = rows.next() {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
@@ -596,7 +620,7 @@ mod tests {
 
     use crate::test_utils::{
         generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_tracker, get_random_user_id,
+        get_random_tracker, get_random_tx, get_random_user_id,
     };
     use std::iter::FromIterator;
     use teos_common::cryptography::get_random_bytes;
@@ -755,13 +779,7 @@ mod tests {
         // Check that the db transaction had 5 (100/2*10) queries on it
         assert_eq!(dbm.batch_remove_users(&to_be_deleted), 5);
         // Check user data was deleted
-        assert_eq!(
-            rest,
-            dbm.load_all_users()
-                .keys()
-                .cloned()
-                .collect::<HashSet<UserId>>()
-        );
+        assert_eq!(rest, dbm.load_all_users().keys().cloned().collect());
     }
 
     #[test]
@@ -811,9 +829,7 @@ mod tests {
     #[test]
     fn test_batch_remove_nonexistent_users() {
         let mut dbm = DBM::in_memory().unwrap();
-        let users = (0..10)
-            .map(|_| get_random_user_id())
-            .collect::<HashSet<UserId>>();
+        let users = (0..10).map(|_| get_random_user_id()).collect();
 
         // Test it does not fail even if the user does not exist (it will log though)
         dbm.batch_remove_users(&users);
@@ -911,7 +927,7 @@ mod tests {
             appointments.insert(uuid, appointment);
         }
 
-        assert_eq!(dbm.load_all_appointments(), appointments);
+        assert_eq!(dbm.load_appointments(None), appointments);
 
         // If an appointment has an associated tracker, it should not be loaded since it is seen
         // as a triggered appointment
@@ -927,7 +943,56 @@ mod tests {
         dbm.store_tracker(uuid, &tracker).unwrap();
 
         // We should get all the appointments back except from the triggered one
-        assert_eq!(dbm.load_all_appointments(), appointments);
+        assert_eq!(dbm.load_appointments(None), appointments);
+    }
+
+    #[test]
+    fn test_load_appointments_with_locator() {
+        let dbm = DBM::in_memory().unwrap();
+        let mut appointments = HashMap::new();
+        let dispute_tx = get_random_tx();
+        let dispute_txid = dispute_tx.txid();
+        let locator = Locator::new(dispute_txid);
+
+        for i in 1..11 {
+            let user_id = get_random_user_id();
+            let user = UserInfo::new(i, i * 2);
+            dbm.store_user(user_id, &user).unwrap();
+
+            // Let some appointments belong to a specific dispute tx and some with random ones.
+            // We will use the locator for that dispute tx to query these appointments.
+            if i % 2 == 0 {
+                let (uuid, appointment) =
+                    generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
+                dbm.store_appointment(uuid, &appointment).unwrap();
+                // Store the appointments made using our dispute tx.
+                appointments.insert(uuid, appointment);
+            } else {
+                let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+                dbm.store_appointment(uuid, &appointment).unwrap();
+            }
+        }
+
+        // Validate that no other appointments than the ones with our locator are returned.
+        assert_eq!(dbm.load_appointments(Some(locator)), appointments);
+
+        // If an appointment has an associated tracker, it should not be loaded since it is seen
+        // as a triggered appointment
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(21, 42);
+        dbm.store_user(user_id, &user).unwrap();
+
+        // Generate an appointment for our dispute tx, thus it gets the same locator as the ones generated above.
+        let (uuid, appointment) =
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
+        dbm.store_appointment(uuid, &appointment).unwrap();
+
+        // The confirmation status doesn't really matter here, it can be any of {ConfirmedIn, InMempoolSince}.
+        let tracker = get_random_tracker(user_id, ConfirmationStatus::InMempoolSince(100));
+        dbm.store_tracker(uuid, &tracker).unwrap();
+
+        // We should get all the appointments matching our locator back except from the triggered one
+        assert_eq!(dbm.load_appointments(Some(locator)), appointments);
     }
 
     #[test]
@@ -969,13 +1034,7 @@ mod tests {
                 i as usize
             );
             // Check appointment data was deleted and users properly updated
-            assert_eq!(
-                rest,
-                dbm.load_all_appointments()
-                    .keys()
-                    .cloned()
-                    .collect::<HashSet<UUID>>()
-            );
+            assert_eq!(rest, dbm.load_appointments(None).keys().cloned().collect());
             assert_eq!(
                 dbm.load_user(user_id).unwrap().available_slots,
                 user.available_slots
@@ -1026,7 +1085,7 @@ mod tests {
     #[test]
     fn test_batch_remove_nonexistent_appointments() {
         let mut dbm = DBM::in_memory().unwrap();
-        let appointments = (0..10).map(|_| generate_uuid()).collect::<HashSet<UUID>>();
+        let appointments = (0..10).map(|_| generate_uuid()).collect();
 
         // Test it does not fail even if the user does not exist (it will log though)
         dbm.batch_remove_appointments(&appointments, &HashMap::new());
@@ -1143,7 +1202,39 @@ mod tests {
             trackers.insert(uuid, tracker);
         }
 
-        assert_eq!(dbm.load_all_trackers(), trackers);
+        assert_eq!(dbm.load_trackers(None), trackers);
+    }
+
+    #[test]
+    fn test_load_trackers_with_locator() {
+        let dbm = DBM::in_memory().unwrap();
+        let mut trackers = HashMap::new();
+        let dispute_tx = get_random_tx();
+        let dispute_txid = dispute_tx.txid();
+        let locator = Locator::new(dispute_txid);
+        let status = ConfirmationStatus::InMempoolSince(42);
+
+        for i in 1..11 {
+            let user_id = get_random_user_id();
+            let user = UserInfo::new(i, i * 2);
+            dbm.store_user(user_id, &user).unwrap();
+            let tracker = get_random_tracker(user_id, status);
+
+            // Let some trackers belong to our dispute tx and some belong to random ones.
+            let (uuid, appointment) = if i % 2 == 0 {
+                let (uuid, app) =
+                    generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
+                // Store the trackers of appointments made with our dispute tx.
+                trackers.insert(uuid, tracker.clone());
+                (uuid, app)
+            } else {
+                generate_dummy_appointment_with_user(user_id, None)
+            };
+            dbm.store_appointment(uuid, &appointment).unwrap();
+            dbm.store_tracker(uuid, &tracker).unwrap();
+        }
+
+        assert_eq!(dbm.load_trackers(Some(locator)), trackers);
     }
 
     #[test]
