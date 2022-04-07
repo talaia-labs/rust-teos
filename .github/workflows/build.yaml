@@ -7,14 +7,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ ubuntu-latest ]
+        platform: [ ubuntu-latest, macos-latest, windows-latest ]
         toolchain: [ stable ]
-        include:
-          - toolchain: stable
-          - toolchain: stable
-            platform: macos-latest
-          - toolchain: stable
-            platform: windows-latest
 
     runs-on: ${{ matrix.platform }}
     steps:
