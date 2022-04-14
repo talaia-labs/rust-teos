@@ -16,4 +16,4 @@ chacha20poly1305 = "0.8.0"
 
 # Bitcoin and Lightning
 bitcoin = "0.27"
-lightning = "0.0.99"
+lightning = "0.0.105"
