@@ -3,7 +3,7 @@
 The tower can be installed and tested using cargo:
 
 ```
-git https://github.com/sr-gi/rusty-teos.git
+git clone https://github.com/sr-gi/rusty-teos.git
 cd rusty-teos
 cargo install --path teos
 ```
