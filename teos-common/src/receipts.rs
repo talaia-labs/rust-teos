@@ -77,7 +77,8 @@ impl RegistrationReceipt {
         }
     }
 }
-#[derive(Debug, Serialize)]
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppointmentReceipt {
     user_signature: String,
     start_block: u32,
