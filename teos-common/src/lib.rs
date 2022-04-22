@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use bitcoin::secp256k1::{Error, PublicKey};
 
 pub const USER_ID_LEN: usize = 33;
+pub use UserId as TowerId;
 
 /// User identifier. A wrapper around a [PublicKey].
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]

@@ -32,7 +32,7 @@ use teos::tls::tls_init;
 use teos::watcher::Watcher;
 
 use teos_common::cryptography::get_random_keypair;
-use teos_common::UserId;
+use teos_common::TowerId;
 
 async fn get_last_n_blocks<B, T>(
     poller: &mut ChainPoller<B, T>,
@@ -189,7 +189,7 @@ async fn main() {
         last_n_blocks,
         tip.height,
         tower_sk,
-        UserId(tower_pk),
+        TowerId(tower_pk),
         dbm.clone(),
     ));
 

@@ -18,7 +18,7 @@ use lightning_block_sync::poll::ValidatedBlock;
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
-use teos_common::UserId;
+use teos_common::{TowerId, UserId};
 
 use crate::dbm::DBM;
 use crate::extended_appointment::{AppointmentSummary, ExtendedAppointment, UUID};
@@ -251,7 +251,7 @@ pub struct Watcher {
     /// The tower signing key. Used to sign messages going to users.
     signing_key: SecretKey,
     /// The tower identifier.
-    pub tower_id: UserId,
+    pub tower_id: TowerId,
     /// A [DBM] (database manager) instance. Used to persist appointment data into disk.
     dbm: Arc<Mutex<DBM>>,
 }
@@ -264,7 +264,7 @@ impl Watcher {
         last_n_blocks: Vec<ValidatedBlock>,
         last_known_block_height: u32,
         signing_key: SecretKey,
-        tower_id: UserId,
+        tower_id: TowerId,
         dbm: Arc<Mutex<DBM>>,
     ) -> Self {
         let mut appointments = HashMap::new();
@@ -960,7 +960,7 @@ mod tests {
         expiry: u32,
         receipt: AppointmentReceipt,
         expected_user_signature: &str,
-        tower_id: UserId,
+        tower_id: TowerId,
     ) {
         assert_eq!(slots, expected_slots);
         assert_eq!(expiry, START_HEIGHT as u32 + DURATION);
@@ -968,7 +968,7 @@ mod tests {
         assert_eq!(receipt.user_signature(), expected_user_signature);
         let recovered_pk =
             cryptography::recover_pk(&receipt.to_vec(), &receipt.signature().unwrap()).unwrap();
-        assert_eq!(UserId(recovered_pk), tower_id);
+        assert_eq!(TowerId(recovered_pk), tower_id);
     }
 
     #[tokio::test]
@@ -1158,7 +1158,7 @@ mod tests {
         //      - the user does not have enough slots (either to add or update)
         //      - the subscription has expired
 
-        let tower_id: UserId = UserId(PublicKey::from_secret_key(
+        let tower_id = TowerId(PublicKey::from_secret_key(
             &Secp256k1::new(),
             &watcher.signing_key,
         ));
