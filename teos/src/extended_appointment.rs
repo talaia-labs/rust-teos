@@ -112,13 +112,6 @@ impl ExtendedAppointment {
     }
 }
 
-/// Computes the number of slots an appointment takes from a user subscription.
-///
-/// This is based on the [encrypted_blob](Appointment::encrypted_blob) size and the slot size that was defined by the [Gatekeeper](crate::gatekeeper::Gatekeeper).
-pub(crate) fn compute_appointment_slots(blob_size: usize, blob_max_size: usize) -> u32 {
-    (blob_size as f32 / blob_max_size as f32).ceil() as u32
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

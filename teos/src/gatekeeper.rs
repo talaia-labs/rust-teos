@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex};
 
 use lightning::chain;
 
+use teos_common::appointment::compute_appointment_slots;
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
 use teos_common::cryptography;
 use teos_common::receipts::RegistrationReceipt;
 use teos_common::UserId;
 
 use crate::dbm::DBM;
-use crate::extended_appointment::{compute_appointment_slots, ExtendedAppointment, UUID};
+use crate::extended_appointment::{ExtendedAppointment, UUID};
 
 /// Data regarding a user subscription with the tower.
 #[derive(Debug, Clone, PartialEq, Eq)]
