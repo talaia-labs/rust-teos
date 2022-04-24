@@ -7,7 +7,9 @@ use std::str::FromStr;
 
 use rusqlite::ffi::{SQLITE_CONSTRAINT_FOREIGNKEY, SQLITE_CONSTRAINT_PRIMARYKEY};
 use rusqlite::limits::Limit;
-use rusqlite::{params, params_from_iter, Connection, Error as SqliteError, ErrorCode, Params};
+use rusqlite::{
+    params, params_from_iter, Connection, Error as SqliteError, ErrorCode, Params, Row,
+};
 
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::Hash;
@@ -571,22 +573,28 @@ impl DBM {
         self.store_data(query, params![sk.to_string()])
     }
 
-    /// Loads the last known tower secret key from the database.
+    /// Loads a tower secret key from the database.
     ///
-    /// Loads the key with higher id from the database. Old keys are not overwritten just in case a recovery is needed,
-    /// but they are not accessible from the API either.
-    pub fn load_tower_key(&self) -> Result<SecretKey, Error> {
-        let mut stmt = self
-            .connection
-            .prepare(
-                "SELECT key FROM keys WHERE id = (SELECT seq FROM sqlite_sequence WHERE name=(?))",
-            )
-            .unwrap();
+    /// Loads the secret key whose in-database id matches the index parameter.
+    /// If no index was passed, this will load the key with greatest id found in the database.
+    pub fn load_tower_key(&self, index: Option<u32>) -> Result<SecretKey, Error> {
+        let placeholder = match index {
+            Some(_) => "?",
+            None => "SELECT seq FROM sqlite_sequence WHERE name=('keys')",
+        };
 
-        stmt.query_row(["keys"], |row| {
+        let sql = format!("SELECT key FROM keys WHERE id = ({})", placeholder);
+        let mut stmt = self.connection.prepare(&sql).unwrap();
+
+        let f = |row: &Row| {
             let sk: String = row.get(0).unwrap();
             Ok(SecretKey::from_str(&sk).unwrap())
-        })
+        };
+
+        match index {
+            Some(id) => stmt.query_row([id], f),
+            None => stmt.query_row([], f),
+        }
         .map_err(|_| Error::NotFound)
     }
 }

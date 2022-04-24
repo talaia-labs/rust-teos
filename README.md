@@ -69,9 +69,9 @@ btc_network = regtest
 
 ### Tower id and signing key
 
-`teos` needs a pair of keys that will serve as tower id and signing key. The former can be used by users to identify the tower, whereas the latter is used by the tower to sign responses. These keys are automatically generated on the first run, and can be refreshed by running `teos` with the `--overwritekey` flag. Notice that once a key is overwritten you won't be able to use the previous key again*.
+`teos` needs a pair of keys that will serve as tower id and signing key. The former can be used by users to identify the tower, whereas the latter is used by the tower to sign responses. These keys are automatically generated on the first run, and can be refreshed by running `teos` with the `--usenewkey` flag.
 
-\* Old keys are actually kept in the tower's database as a fail safe in case you overwrite them by mistake. However, there is no automated way of switching back to and old key. Feel free to open an issue if you overwrote your key by mistake and need support to recover it.
+You can use an old key with the `--usekey <keyindex>` option, where `keyindex` is the index of the desired secret key. The first tower secret key will have `keyindex` equal to `1` and subsequent keys will have their `keyindex` auto-incremented.
 
 ## Interacting with a TEOS Instance
 
