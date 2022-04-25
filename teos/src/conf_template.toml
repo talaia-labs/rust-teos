@@ -15,7 +15,7 @@ btc_rpc_port = 8332
 
 # Flags
 debug = false
-use_new_key = false
+generate_new_key = false
 
 # General
 subscription_slots = 10000

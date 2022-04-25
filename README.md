@@ -69,9 +69,9 @@ btc_network = regtest
 
 ### Tower id and signing key
 
-`teos` needs a pair of keys that will serve as tower id and signing key. The former can be used by users to identify the tower, whereas the latter is used by the tower to sign responses. These keys are automatically generated on the first run, and can be refreshed by running `teos` with the `--usenewkey` flag.
+`teos` needs a pair of keys that will serve as tower id and signing key. The former can be used by users to identify the tower, whereas the latter is used by the tower to sign responses. These keys are automatically generated on the first run, and can be refreshed by running `teos` with the `--generatenewkey` flag.
 
-You can use an old key with the `--usekey <keyindex>` option, where `keyindex` is the index of the desired secret key. The first tower secret key will have `keyindex` equal to `1` and subsequent keys will have their `keyindex` auto-incremented.
+You can use an old key with the `--towerkey <keyindex>` option, where `keyindex` is the index of the desired secret key. The first tower secret key will have `keyindex` equal to `1` and subsequent keys will have their `keyindex` auto-incremented.
 
 ## Interacting with a TEOS Instance
 
