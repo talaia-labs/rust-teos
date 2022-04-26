@@ -224,7 +224,7 @@ mod tests {
         get_random_tx, start_server, BitcoindMock, MockOptions, START_HEIGHT, TX_HEX,
     };
 
-    use bitcoin::consensus::deserialize;
+    use bitcoin::consensus;
     use bitcoin::hashes::hex::FromHex;
     use bitcoincore_rpc::Auth;
 
@@ -273,7 +273,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
         assert_eq!(r, ConfirmationStatus::InMempoolSince(start_height));
@@ -293,7 +293,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
         assert_eq!(
@@ -315,7 +315,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
         assert_eq!(
@@ -340,7 +340,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
         assert_eq!(r, ConfirmationStatus::ConfirmedIn(start_height));
@@ -359,7 +359,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
         assert_eq!(
@@ -380,7 +380,7 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable.clone(), start_height);
 
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let delay = std::time::Duration::new(3, 0);
 
         thread::spawn(move || {
@@ -411,7 +411,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         assert_eq!(
             carrier.get_tx_height(&tx.txid()),
             Some(target_height as u32)
@@ -429,7 +429,7 @@ mod tests {
         start_server(bitcoind_mock);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         assert_eq!(carrier.get_tx_height(&tx.txid()), None);
     }
 
@@ -471,7 +471,7 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock);
 
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         assert_eq!(carrier.get_block_hash_for_tx(&tx.txid()), Some(block_hash));
     }
@@ -484,7 +484,7 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock);
 
-        let tx = deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let tx = consensus::deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         assert_eq!(carrier.get_block_hash_for_tx(&tx.txid()), None);
     }

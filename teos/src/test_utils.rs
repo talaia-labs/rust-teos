@@ -23,13 +23,13 @@ use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::blockdata::script::{Builder, Script};
 use bitcoin::blockdata::transaction::{OutPoint, Transaction, TxIn, TxOut};
+use bitcoin::consensus;
 use bitcoin::hash_types::BlockHash;
 use bitcoin::hash_types::Txid;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::util::hash::bitcoin_merkle_root;
-use bitcoin::util::psbt::serialize::Deserialize;
 use bitcoin::util::uint::Uint256;
 use lightning_block_sync::poll::{
     ChainPoller, Poll, Validate, ValidatedBlock, ValidatedBlockHeader,
@@ -332,7 +332,7 @@ pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> Extende
     };
 
     let tx_bytes = Vec::from_hex(TX_HEX).unwrap();
-    let penalty_tx = Transaction::deserialize(&tx_bytes).unwrap();
+    let penalty_tx = consensus::deserialize(&tx_bytes).unwrap();
 
     let mut raw_locator: [u8; 16] = get_random_bytes(16).try_into().unwrap();
     raw_locator.copy_from_slice(&dispute_txid[..16]);
