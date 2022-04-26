@@ -101,9 +101,16 @@ pub struct Opt {
     #[structopt(long)]
     pub debug: bool,
 
-    /// Overwrites the tower secret key. THIS IS IRREVERSIBLE AND WILL CHANGE YOUR TOWER ID
+    /// Generates a new secret key for the tower. This will change your tower ID
     #[structopt(long)]
-    pub overwrite_key: bool,
+    pub generate_new_key: bool,
+
+    /// Index of the tower's secret key [default: None]
+    ///
+    /// keyindex is the index of the secret key starting from 1 and is auto-incremented with each new key used.
+    /// Not specifying this option will let the tower choose the last known secret key.
+    #[structopt(long, conflicts_with = "generatenewkey", name = "keyindex")]
+    pub tower_key: Option<u32>,
 }
 
 /// Holds all configuration options.
@@ -132,9 +139,10 @@ pub struct Config {
 
     // Flags
     pub debug: bool,
-    pub overwrite_key: bool,
+    pub generate_new_key: bool,
 
     // General
+    pub tower_key: Option<u32>,
     pub subscription_slots: u32,
     pub subscription_duration: u32,
     pub expiry_delta: u32,
@@ -178,7 +186,8 @@ impl Config {
         }
 
         self.debug |= options.debug;
-        self.overwrite_key = options.overwrite_key;
+        self.generate_new_key = options.generate_new_key;
+        self.tower_key = options.tower_key;
     }
 
     /// Verifies that [Config] is properly built.
@@ -239,7 +248,8 @@ impl Default for Config {
             btc_rpc_port: 0,
 
             debug: false,
-            overwrite_key: false,
+            generate_new_key: false,
+            tower_key: None,
             subscription_slots: 10000,
             subscription_duration: 4320,
             expiry_delta: 6,
@@ -270,7 +280,8 @@ mod tests {
                 data_dir: String::from("~/.teos"),
 
                 debug: false,
-                overwrite_key: false,
+                generate_new_key: false,
+                tower_key: None,
             }
         }
     }

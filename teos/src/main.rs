@@ -97,19 +97,24 @@ async fn main() {
         DBM::new(path_network.join("teos_db.sql3")).unwrap(),
     ));
 
-    // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
+    // Load tower secret key or create a fresh one if none is found. If generate_new_key is set, create a new
     // key straightaway
     let (tower_sk, tower_pk) = {
         let locked_db = dbm.lock().unwrap();
-        if conf.overwrite_key {
-            log::info!("Overwriting tower keys");
+        if conf.generate_new_key {
+            log::info!("Generating new tower keys");
             create_new_tower_keypair(&locked_db)
         } else {
-            match locked_db.load_tower_key() {
+            match locked_db.load_tower_key(conf.tower_key) {
                 Ok(sk) => (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
                 Err(_) => {
-                    log::info!("Tower keys not found. Creating a fresh set");
-                    create_new_tower_keypair(&locked_db)
+                    if let Some(key_index) = conf.tower_key {
+                        eprintln!("No tower key of index {} found in the database.", key_index);
+                        std::process::exit(1);
+                    } else {
+                        log::info!("Tower keys not found. Creating a fresh set");
+                        create_new_tower_keypair(&locked_db)
+                    }
                 }
             }
         }
