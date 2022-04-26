@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::sync::{Arc, Mutex};
 
-use bitcoin::util::psbt::serialize::Serialize;
+use bitcoin::consensus;
 use bitcoin::{BlockHeader, Transaction, Txid};
 use lightning::chain;
 
@@ -113,7 +113,7 @@ impl From<TransactionTracker> for msgs::Tracker {
         msgs::Tracker {
             dispute_txid: t.dispute_tx.txid().to_vec(),
             penalty_txid: t.penalty_tx.txid().to_vec(),
-            penalty_rawtx: t.penalty_tx.serialize(),
+            penalty_rawtx: consensus::serialize(&t.penalty_tx),
         }
     }
 }

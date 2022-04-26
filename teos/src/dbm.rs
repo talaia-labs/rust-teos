@@ -9,11 +9,10 @@ use rusqlite::ffi::{SQLITE_CONSTRAINT_FOREIGNKEY, SQLITE_CONSTRAINT_PRIMARYKEY};
 use rusqlite::limits::Limit;
 use rusqlite::{params, params_from_iter, Connection, Error as SqliteError, ErrorCode, Params};
 
-use bitcoin::consensus::deserialize;
+use bitcoin::consensus;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::SecretKey;
-use bitcoin::util::psbt::serialize::Serialize;
-use bitcoin::{BlockHash, Transaction};
+use bitcoin::BlockHash;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
@@ -465,8 +464,8 @@ impl DBM {
             query,
             params![
                 uuid.serialize(),
-                tracker.dispute_tx.serialize(),
-                tracker.penalty_tx.serialize(),
+                consensus::serialize(&tracker.dispute_tx),
+                consensus::serialize(&tracker.penalty_tx),
                 height,
                 confirmed,
             ],
@@ -490,9 +489,9 @@ impl DBM {
 
         stmt.query_row([key], |row| {
             let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
-            let dispute_tx = deserialize::<Transaction>(&raw_dispute_tx).unwrap();
+            let dispute_tx = consensus::deserialize(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
-            let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
+            let penalty_tx = consensus::deserialize(&raw_penalty_tx).unwrap();
             let height: u32 = row.get(3).unwrap();
             let confirmed: bool = row.get(4).unwrap();
             let raw_userid: Vec<u8> = row.get(5).unwrap();
@@ -521,9 +520,9 @@ impl DBM {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
             let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
             let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
-            let dispute_tx = deserialize::<Transaction>(&raw_dispute_tx).unwrap();
+            let dispute_tx = consensus::deserialize(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
-            let penalty_tx = deserialize::<Transaction>(&raw_penalty_tx).unwrap();
+            let penalty_tx = consensus::deserialize(&raw_penalty_tx).unwrap();
             let height: u32 = row.get(3).unwrap();
             let confirmed: bool = row.get(4).unwrap();
             let raw_userid: Vec<u8> = row.get(5).unwrap();

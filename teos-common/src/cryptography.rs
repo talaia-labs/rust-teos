@@ -6,9 +6,9 @@ use rand::Rng;
 use chacha20poly1305::aead::{Aead, NewAead};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 
+use bitcoin::consensus;
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::secp256k1::{Error, PublicKey, Secp256k1, SecretKey};
-use bitcoin::util::psbt::serialize::{Deserialize, Serialize};
 use bitcoin::{Transaction, Txid};
 use lightning::util::message_signing;
 
@@ -51,7 +51,7 @@ pub fn encrypt(
     let key = Key::from_slice(&_k);
 
     let cypher = ChaCha20Poly1305::new(key);
-    cypher.encrypt(&nonce, message.serialize().as_ref())
+    cypher.encrypt(&nonce, consensus::serialize(message).as_ref())
 }
 
 /// Decrypts an encrypted blob of data using `chacha20poly1305` and a given secret.
@@ -70,7 +70,7 @@ pub fn decrypt(encrypted_blob: &[u8], secret: &Txid) -> Result<Transaction, Decr
     let cypher = ChaCha20Poly1305::new(key);
 
     match cypher.decrypt(&nonce, encrypted_blob.as_ref()) {
-        Ok(tx_bytes) => Transaction::deserialize(&tx_bytes).map_err(DecryptingError::Encode),
+        Ok(tx_bytes) => consensus::deserialize(&tx_bytes).map_err(DecryptingError::Encode),
         Err(e) => Err(DecryptingError::AED(e)),
     }
 }
@@ -100,7 +100,8 @@ pub fn get_random_keypair() -> (SecretKey, PublicKey) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::{hashes::hex::FromHex, util::psbt::serialize::Deserialize};
+    use bitcoin::consensus;
+    use bitcoin::hashes::hex::FromHex;
 
     const HEX_TX: &str = "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff54038e830a1b4d696e656420627920416e74506f6f6c373432c2005b005e7a0ae3fabe6d6d7841cd582ead8ea5dd8e3de1173cae6fcd2a53c7362ebb7fb6f815604fe07cbe0200000000000000ac0e060005f90000ffffffff04d9476026000000001976a91411dbe48cc6b617f9c6adaf4d9ed5f625b1c7cb5988ac0000000000000000266a24aa21a9ed7248c6efddd8d99bfddd7f499f0b915bffa8253003cc934df1ff14a81301e2340000000000000000266a24b9e11b6d7054937e13f39529d6ad7e685e9dd4efa426f247d5f5a5bed58cdddb2d0fa60100000000000000002b6a2952534b424c4f434b3a054a68aa5368740e8b3e3c67bce45619c2cfd07d4d4f0936a5612d2d0034fa0a0120000000000000000000000000000000000000000000000000000000000000000000000000";
     const HEX_TXID: &str = "d6ac4a5e61657c4c604dcde855a1db74ec6b3e54f32695d72c5e11c7761ea1b4";
@@ -111,14 +112,14 @@ mod tests {
         let expected_enc_blob = Vec::from_hex(ENC_BLOB).unwrap();
         let tx_bytes = Vec::from_hex(HEX_TX).unwrap();
 
-        let tx = Transaction::deserialize(&tx_bytes).unwrap();
+        let tx = consensus::deserialize(&tx_bytes).unwrap();
         let txid = Txid::from_hex(HEX_TXID).unwrap();
         assert_eq!(encrypt(&tx, &txid).unwrap(), expected_enc_blob);
     }
 
     #[test]
     fn test_decrypt() {
-        let expected_tx = Transaction::deserialize(&Vec::from_hex(HEX_TX).unwrap()).unwrap();
+        let expected_tx = consensus::deserialize(&Vec::from_hex(HEX_TX).unwrap()).unwrap();
 
         let encrypted_blob = Vec::from_hex(ENC_BLOB).unwrap();
         let txid = Txid::from_hex(HEX_TXID).unwrap();
