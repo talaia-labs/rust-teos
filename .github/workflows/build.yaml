@@ -37,7 +37,10 @@ jobs:
         with:
           toolchain: stable
           profile: minimal
-          components: rustfmt
+          components: rustfmt, clippy
       - name: Run rustfmt
         run: |
           cargo fmt --verbose --check -- --color always
+      - name: Run clippy
+        run: |
+          cargo clippy --all-features --all-targets --color always -- --deny warnings
