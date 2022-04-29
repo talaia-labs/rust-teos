@@ -26,3 +26,18 @@ jobs:
       - name: Test on Rust ${{ matrix.toolchain }}
         run: |
           cargo test --verbose --color always
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v2
+      - name: Install Rust stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          components: rustfmt
+      - name: Run rustfmt
+        run: |
+          cargo fmt --verbose --check -- --color always
