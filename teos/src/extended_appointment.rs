@@ -11,6 +11,7 @@ use teos_common::appointment::{Appointment, Locator};
 use teos_common::UserId;
 
 /// Unique identifier used to identify appointments.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub(crate) struct UUID([u8; 20]);
 
