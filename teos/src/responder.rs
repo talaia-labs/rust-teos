@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::sync::{Arc, Mutex};
+use tokio::task::{JoinHandle};
 
 use bitcoin::consensus;
 use bitcoin::{BlockHeader, Transaction, Txid};
@@ -127,11 +128,11 @@ impl From<TransactionTracker> for msgs::Tracker {
 pub struct Responder {
     /// A map holding a summary of every tracker ([TransactionTracker]) hold by the [Responder], identified by [UUID].
     /// The identifiers match those used by the [Watcher](crate::watcher::Watcher).
-    trackers: Mutex<HashMap<UUID, TrackerSummary>>,
+    trackers: Arc<Mutex<HashMap<UUID, TrackerSummary>>>,
     /// A map between [Txid]s and [UUID]s.
-    tx_tracker_map: Mutex<HashMap<Txid, HashSet<UUID>>>,
+    tx_tracker_map: Arc<Mutex<HashMap<Txid, HashSet<UUID>>>>,
     /// A [Carrier] instance. Data is sent to the `bitcoind` through it.
-    carrier: Mutex<Carrier>,
+    carrier: Arc<Carrier>,
     /// A [Gatekeeper] instance. Data regarding users is requested to it.
     gatekeeper: Arc<Gatekeeper>,
     /// A [DBM] (database manager) instance. Used to persist tracker data into disk.
@@ -155,9 +156,9 @@ impl Responder {
         }
 
         Responder {
-            carrier: Mutex::new(carrier),
-            trackers: Mutex::new(trackers),
-            tx_tracker_map: Mutex::new(tx_tracker_map),
+            carrier: Arc::new(carrier),
+            trackers: Arc::new(Mutex::new(trackers)),
+            tx_tracker_map: Arc::new(Mutex::new(tx_tracker_map)),
             dbm,
             gatekeeper,
         }
@@ -177,7 +178,7 @@ impl Responder {
     ///
     /// Breaches can either be added to the [Responder] in the form of a [TransactionTracker] if the [penalty transaction](Breach::penalty_tx)
     /// is accepted by the `bitcoind` or rejected otherwise.
-    pub(crate) fn handle_breach(
+    pub(crate) async fn handle_breach(
         &self,
         uuid: UUID,
         breach: Breach,
@@ -191,9 +192,8 @@ impl Responder {
 
         let status = self
             .carrier
-            .lock()
-            .unwrap()
-            .send_transaction(&breach.penalty_tx);
+            .send_transaction(&breach.penalty_tx)
+            .await;
         if !matches!(status, ConfirmationStatus::Rejected { .. }) {
             self.add_tracker(uuid, breach, user_id, status);
         }
@@ -365,38 +365,36 @@ impl Responder {
     /// otherwise, we could potentially try to rebroadcast again while processing the upcoming reorged blocks (if the tx hits [CONFIRMATIONS_BEFORE_RETRY]).
     ///
     /// Returns a tuple with two maps, one containing the trackers that where successfully rebroadcast and another one containing the ones that were rejected.
-    fn rebroadcast(
-        &self,
+    async fn rebroadcast(
         txs: HashMap<UUID, (Transaction, Option<Transaction>)>,
+        trackers: Arc<Mutex<HashMap<UUID, TrackerSummary>>>,
+        carrier: Arc<Carrier>,
     ) -> (HashMap<UUID, ConfirmationStatus>, HashSet<UUID>) {
         let mut accepted = HashMap::new();
         let mut rejected = HashSet::new();
 
-        let mut trackers = self.trackers.lock().unwrap();
-        let mut carrier = self.carrier.lock().unwrap();
-
         for (uuid, (penalty_tx, dispute_tx)) in txs.into_iter() {
             let status = if let Some(dispute_tx) = dispute_tx {
                 // The tracker was reorged out, and the dispute may potentially not be in the chain anymore.
-                if carrier.get_block_hash_for_tx(&dispute_tx.txid()).is_some() {
+                if carrier.get_block_hash_for_tx(&dispute_tx.txid()).await.is_some() {
                     // Dispute tx is on chain, so we only need to care about the penalty
-                    carrier.send_transaction(&penalty_tx)
+                    carrier.send_transaction(&penalty_tx).await
                 } else {
                     // Dispute tx has also been reorged out, meaning that both transactions need to be broadcast.
                     // DISCUSS: For lightning transactions, if the dispute has been reorged the penalty cannot make it to the network.
                     // If we keep this general, the dispute can simply be a trigger and the penalty doesn't necessarily have to spend from it.
                     // We'll keel it lightning specific, at least for now.
-                    let status = carrier.send_transaction(&dispute_tx);
+                    let status = carrier.send_transaction(&dispute_tx).await;
                     if let ConfirmationStatus::Rejected(e) = status {
                         log::error!(
-                        "Reorged dispute transaction rejected during rebroadcast: {} (reason: {:?})",
-                        dispute_tx.txid(),
-                        e
-                    );
+                            "Reorged dispute transaction rejected during rebroadcast: {} (reason: {:?})",
+                            dispute_tx.txid(),
+                            e
+                        );
                         status
                     } else {
                         // The dispute was accepted, so we can rebroadcast the penalty.
-                        carrier.send_transaction(&penalty_tx)
+                        carrier.send_transaction(&penalty_tx).await
                     }
                 }
             } else {
@@ -405,7 +403,7 @@ impl Responder {
                     "Penalty transaction has missed many confirmations: {}",
                     penalty_tx.txid()
                 );
-                carrier.send_transaction(&penalty_tx)
+                carrier.send_transaction(&penalty_tx).await
             };
 
             if let ConfirmationStatus::Rejected(_) = status {
@@ -414,7 +412,7 @@ impl Responder {
                 // Update the tracker if it gets accepted. This will also update the height (since when we are counting the tracker
                 // to have been in mempool), so it resets the wait period instead of trying to rebroadcast every block.
                 // DISCUSS: We may want to find another approach in the future for the InMempoool transactions.
-                trackers.get_mut(&uuid).unwrap().status = status;
+                trackers.lock().unwrap().get_mut(&uuid).unwrap().status = status;
                 accepted.insert(uuid, status);
             }
         }
@@ -428,8 +426,22 @@ impl Responder {
     ///
     /// Logs a different message depending on whether the trackers have been outdated or completed.
     fn delete_trackers_from_memory(&self, uuids: &HashSet<UUID>, reason: DeletionReason) {
-        let mut trackers = self.trackers.lock().unwrap();
-        let mut tx_tracker_map = self.tx_tracker_map.lock().unwrap();
+        Responder::delete_trackers_from_memory_no_self(
+            uuids,
+            reason,
+            self.trackers.clone(),
+            self.tx_tracker_map.clone())
+    }
+
+    /// See [Responder::delete_trackers_from_memory]
+    fn delete_trackers_from_memory_no_self(
+        uuids: &HashSet<UUID>, 
+        reason: DeletionReason,
+        trackers: Arc<Mutex<HashMap<UUID, TrackerSummary>>>,
+        tx_tracker_map: Arc<Mutex<HashMap<Txid, HashSet<UUID>>>>,)
+    {
+        let mut trackers_mutable = trackers.lock().unwrap();
+        let mut tx_tracker_map_mutable = tx_tracker_map.lock().unwrap();
         for uuid in uuids.iter() {
             match reason {
                 DeletionReason::Completed => log::info!("Appointment completed. Penalty transaction was irrevocably confirmed: {}", uuid),
@@ -437,19 +449,19 @@ impl Responder {
                 DeletionReason::Rejected => log::info!("Appointment couldn't be completed. Either the dispute or the penalty txs where rejected during rebroadcast: {}", uuid),
             }
 
-            match trackers.remove(uuid) {
+            match trackers_mutable.remove(uuid) {
                 Some(tracker) => {
-                    let trackers = tx_tracker_map.get_mut(&tracker.penalty_txid).unwrap();
+                    let trackers_mutable = tx_tracker_map_mutable.get_mut(&tracker.penalty_txid).unwrap();
 
-                    if trackers.len() == 1 {
-                        tx_tracker_map.remove(&tracker.penalty_txid);
+                    if trackers_mutable.len() == 1 {
+                        tx_tracker_map_mutable.remove(&tracker.penalty_txid);
 
                         log::info!(
                             "No more trackers for penalty transaction: {}",
                             tracker.penalty_txid
                         );
                     } else {
-                        trackers.remove(uuid);
+                        trackers_mutable.remove(uuid);
                     }
                 }
                 None => {
@@ -469,29 +481,42 @@ impl Responder {
         updated_users: &HashMap<UserId, UserInfo>,
         reason: DeletionReason,
     ) {
-        self.delete_trackers_from_memory(uuids, reason);
-        self.dbm
+        Responder::delete_trackers_no_self(
+            uuids, 
+            updated_users,
+            reason,
+            self.dbm.clone(),
+            self.trackers.clone(),
+            self.tx_tracker_map.clone())
+    }
+
+    /// See [Responder::delete_trackers]
+    fn delete_trackers_no_self(
+        uuids: &HashSet<UUID>,
+        updated_users: &HashMap<UserId, UserInfo>,
+        reason: DeletionReason,
+        dbm: Arc<Mutex<DBM>>,
+        trackers: Arc<Mutex<HashMap<UUID, TrackerSummary>>>,
+        tx_tracker_map: Arc<Mutex<HashMap<Txid, HashSet<UUID>>>>,
+    ) {
+        Responder::delete_trackers_from_memory_no_self(
+            uuids,
+            reason,
+            trackers,
+            tx_tracker_map);
+        dbm
             .lock()
             .unwrap()
             .batch_remove_appointments(uuids, updated_users);
     }
-}
 
-/// Listen implementation by the [Responder]. Handles monitoring and reorgs.
-impl chain::Listen for Responder {
-    /// Handles the monitoring process by the [Responder].
-    ///
-    /// Watching is performed in a per-block basis. A [TransactionTracker] is tracked until:
-    /// - It gets [irrevocably resolved](https://github.com/lightning/bolts/blob/master/05-onchain.md#general-nomenclature) or
-    /// - The user subscription expires
-    /// - The trackers becomes invalid (due to a reorg)
-    ///
-    /// Every time a block is received the tracking conditions are checked against the monitored [TransactionTracker]s and
-    /// data deletion is performed accordingly. Moreover, lack of confirmations is check for the tracked transactions and
-    /// rebroadcasting is performed for those that have missed too many.
-    fn block_connected(&self, block: &bitcoin::Block, height: u32) {
+    /// See [Responder::block_connected]
+    fn block_connected_helper(&self, block: &bitcoin::Block, height: u32)
+        -> Option<JoinHandle<()>>
+    {
         log::info!("New block received: {}", block.header.block_hash());
-        self.carrier.lock().unwrap().update_height(height);
+        self.carrier.update_height(height);
+        let mut join_handle_option: Option<JoinHandle<_>> = None;
 
         if self.trackers.lock().unwrap().len() > 0 {
             // Complete those appointments that are due at this height
@@ -521,34 +546,67 @@ impl chain::Listen for Responder {
                 DeletionReason::Outdated,
             );
 
-            // Rebroadcast those transactions that need to
-            let (_, rejected_trackers) = self.rebroadcast(self.get_txs_to_rebroadcast(height));
-            // Delete trackers rejected during rebroadcast
-            let trackers_to_delete_gk = rejected_trackers
-                .iter()
-                .map(|uuid| (*uuid, self.trackers.lock().unwrap()[uuid].user_id))
-                .collect();
-            self.delete_trackers(
-                &rejected_trackers,
-                &self
-                    .gatekeeper
-                    .delete_appointments_from_memory(&trackers_to_delete_gk),
-                DeletionReason::Rejected,
-            );
+            // Aynchronously rebroadcast those transactions that need to
+            let txs_to_rebroadcast = self.get_txs_to_rebroadcast(height);
+            let trackers = self.trackers.clone();
+            let gatekeeper = self.gatekeeper.clone();
+            let carrier = self.carrier.clone();
+            let dbm = self.dbm.clone();
+            let tx_tracker_map = self.tx_tracker_map.clone();
+            join_handle_option = Some(tokio::spawn(async move {
+                let (_, rejected_trackers) = Responder::rebroadcast(
+                    txs_to_rebroadcast,
+                    trackers.clone(),
+                    carrier.clone()
+                ).await;
+                // Delete trackers rejected during rebroadcast
+                let trackers_to_delete_gk = rejected_trackers
+                    .iter()
+                    .map(|uuid| (*uuid, trackers.lock().unwrap()[uuid].user_id))
+                    .collect();
+                Responder::delete_trackers_no_self(
+                    &rejected_trackers,
+                    &gatekeeper
+                        .delete_appointments_from_memory(&trackers_to_delete_gk),
+                    DeletionReason::Rejected,
+                    dbm,
+                    trackers.clone(),
+                    tx_tracker_map
+                );
 
-            // Remove all receipts created in this block
-            self.carrier.lock().unwrap().clear_receipts();
+                // Remove all receipts created in this block
+                carrier.clear_receipts();
 
-            if self.trackers.lock().unwrap().is_empty() {
-                log::info!("No more pending trackers");
-            }
+                if trackers.lock().unwrap().is_empty() {
+                    log::info!("No more pending trackers");
+                }
+            }));
         }
+
+        join_handle_option
+    }
+}
+
+/// Listen implementation by the [Responder]. Handles monitoring and reorgs.
+impl chain::Listen for Responder {
+    /// Handles the monitoring process by the [Responder].
+    ///
+    /// Watching is performed in a per-block basis. A [TransactionTracker] is tracked until:
+    /// - It gets [irrevocably resolved](https://github.com/lightning/bolts/blob/master/05-onchain.md#general-nomenclature) or
+    /// - The user subscription expires
+    /// - The trackers becomes invalid (due to a reorg)
+    ///
+    /// Every time a block is received the tracking conditions are checked against the monitored [TransactionTracker]s and
+    /// data deletion is performed accordingly. Moreover, lack of confirmations is check for the tracked transactions and
+    /// rebroadcasting is performed for those that have missed too many.
+    fn block_connected(&self, block: &bitcoin::Block, height: u32) {
+        self.block_connected_helper(block, height);
     }
 
     /// Handles reorgs in the [Responder].
     fn block_disconnected(&self, header: &BlockHeader, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
-        self.carrier.lock().unwrap().update_height(height);
+        self.carrier.update_height(height);
 
         for tracker in self.trackers.lock().unwrap().values_mut() {
             // The transaction has been unconfirmed. Flag it as reorged out so we can rebroadcast it.
@@ -566,6 +624,7 @@ mod tests {
 
     use std::ops::Deref;
     use std::sync::{Arc, Mutex};
+    use tokio::sync::{Notify};
 
     use crate::dbm::{Error as DBError, DBM};
     use crate::gatekeeper::UserInfo;
@@ -589,8 +648,8 @@ mod tests {
             &self.trackers
         }
 
-        pub(crate) fn get_carrier(&self) -> &Mutex<Carrier> {
-            &self.carrier
+        pub(crate) fn get_carrier(&self) -> Arc<Carrier> {
+            self.carrier.clone()
         }
 
         pub(crate) fn add_random_tracker(&self, uuid: UUID, status: ConfirmationStatus) {
@@ -626,7 +685,13 @@ mod tests {
         query: MockedServerQuery,
     ) -> Responder {
         let tip = chain.tip();
-        Responder::new(create_carrier(query, tip.deref().height), gatekeeper, dbm)
+        Responder::new(
+            create_carrier(
+                query, 
+                tip.deref().height, 
+                Arc::new((Mutex::new(true), Notify::new()))), 
+            gatekeeper, 
+            dbm)
     }
 
     fn init_responder_with_chain_and_dbm(
@@ -722,8 +787,8 @@ mod tests {
         assert_eq!(responder, another_r);
     }
 
-    #[test]
-    fn test_handle_breach_delivered() {
+    #[tokio::test]
+    async fn test_handle_breach_delivered() {
         let start_height = START_HEIGHT as u32;
         let responder = init_responder(MockedServerQuery::Regular);
 
@@ -735,7 +800,7 @@ mod tests {
         let penalty_txid = breach.penalty_tx.txid();
 
         assert_eq!(
-            responder.handle_breach(uuid, breach, user_id),
+            responder.handle_breach(uuid, breach, user_id).await,
             ConfirmationStatus::InMempoolSince(start_height)
         );
         assert!(responder.trackers.lock().unwrap().contains_key(&uuid));
@@ -753,7 +818,7 @@ mod tests {
         // passed twice, the receipt corresponding to the first breach will be handed back.
         let another_breach = get_random_breach();
         assert_eq!(
-            responder.handle_breach(uuid, another_breach.clone(), user_id),
+            responder.handle_breach(uuid, another_breach.clone(), user_id).await,
             ConfirmationStatus::InMempoolSince(start_height)
         );
 
@@ -769,8 +834,8 @@ mod tests {
             .contains_key(&another_breach.penalty_tx.txid()));
     }
 
-    #[test]
-    fn test_handle_breach_rejected() {
+    #[tokio::test]
+    async fn test_handle_breach_rejected() {
         let responder = init_responder(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
         ));
@@ -781,7 +846,7 @@ mod tests {
         let penalty_txid = breach.penalty_tx.txid();
 
         assert_eq!(
-            responder.handle_breach(uuid, breach, user_id),
+            responder.handle_breach(uuid, breach, user_id).await,
             ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
         );
         assert!(!responder.trackers.lock().unwrap().contains_key(&uuid));
@@ -1242,8 +1307,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_rebroadcast_accepted() {
+    #[tokio::test]
+    async fn test_rebroadcast_accepted() {
         // This test positive rebroadcast cases, including reorgs. However, complex reorg logic is not tested here, it will need a
         // dedicated test (against bitcoind, not mocked).
         let responder = init_responder(MockedServerQuery::Regular);
@@ -1301,14 +1366,18 @@ mod tests {
 
         // Check all are accepted
         let (accepted, rejected) =
-            responder.rebroadcast(responder.get_txs_to_rebroadcast(current_height));
+            Responder::rebroadcast(
+                responder.get_txs_to_rebroadcast(current_height),
+                responder.trackers.clone(),
+                responder.carrier.clone()
+            ).await;
         let accepted_uuids: HashSet<UUID> = accepted.keys().cloned().collect();
         assert_eq!(accepted_uuids, need_rebroadcast);
         assert!(rejected.is_empty());
     }
 
-    #[test]
-    fn test_rebroadcast_rejected() {
+    #[tokio::test]
+    async fn test_rebroadcast_rejected() {
         // This test negative rebroadcast cases, including reorgs. However, complex reorg logic is not tested here, it will need a
         // dedicated test (against bitcoind, not mocked).
         let responder = init_responder(MockedServerQuery::Error(
@@ -1368,7 +1437,11 @@ mod tests {
 
         // Check all are rejected
         let (accepted, rejected) =
-            responder.rebroadcast(responder.get_txs_to_rebroadcast(current_height));
+            Responder::rebroadcast(
+                responder.get_txs_to_rebroadcast(current_height),
+                responder.trackers.clone(),
+                responder.carrier.clone()
+            ).await;
         assert_eq!(rejected, need_rebroadcast);
         assert!(accepted.is_empty());
     }
@@ -1441,7 +1514,7 @@ mod tests {
             .unwrap();
 
         // Delete trackers removes data from the trackers, tx_tracker_map maps, the database. The deletion of the later is
-        // better check in test_block_connected. Add data to the map first.
+        // better checked in test_block_connected. Add data to the map first.
         let mut all_trackers = HashSet::new();
         let mut target_trackers = HashSet::new();
         let mut uuid_txid_map = HashMap::new();
@@ -1553,8 +1626,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_block_connected() {
+    #[tokio::test]
+    async fn test_block_connected() {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let start_height = START_HEIGHT * 2;
         let mut chain = Blockchain::default().with_height(start_height);
@@ -1708,28 +1781,31 @@ mod tests {
         // Add some dummy data in the cache to check that it gets cleared
         responder
             .carrier
-            .lock()
-            .unwrap()
             .get_issued_receipts()
             .insert(get_random_tx().txid(), ConfirmationStatus::ConfirmedIn(21));
 
         // Connecting a block should trigger all the state transitions
-        responder.block_connected(
+        let join_handle_option = responder.block_connected_helper(
             &chain.generate(Some(just_confirmed_txs.clone())),
             chain.get_block_count(),
         );
 
+        // Ensure a join handle was created, then join the async task
+        assert!(!join_handle_option.is_none());
+        match tokio::join!(join_handle_option.unwrap()).0 {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
+
         // CARRIER CHECKS
         assert!(responder
             .carrier
-            .lock()
-            .unwrap()
             .get_issued_receipts()
             .is_empty());
 
         // Check that the carrier last_known_block_height has been updated
         assert_eq!(
-            responder.carrier.lock().unwrap().get_height(),
+            responder.carrier.get_height(),
             target_block_height
         );
 
@@ -1852,7 +1928,7 @@ mod tests {
             );
 
             // Check that the carrier block_height has been updated
-            assert_eq!(responder.carrier.lock().unwrap().get_height(), i);
+            assert_eq!(responder.carrier.get_height(), i);
         }
 
         // Check that all reorged trackers are still reorged
