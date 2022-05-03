@@ -2,8 +2,9 @@ use simple_logger::init_with_level;
 use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
+use tokio::sync::{Notify};
 use tokio::task;
 use tonic::transport::Server;
 
@@ -126,7 +127,7 @@ async fn main() {
     {
         Ok(client) => (
             Arc::new(client),
-            Arc::new((Mutex::new(true), Condvar::new())),
+            Arc::new((Mutex::new(true), Notify::new())),
         ),
         Err(e) => {
             log::error!("Failed to connect to bitcoind client: {}", e);
@@ -141,13 +142,11 @@ async fn main() {
     } else {
         ""
     };
-    let rpc = Arc::new(
-        Client::new(
-            &format!("{}{}:{}", schema, conf.btc_rpc_connect, conf.btc_rpc_port),
-            Auth::UserPass(conf.btc_rpc_user.clone(), conf.btc_rpc_password.clone()),
-        )
-        .unwrap(),
-    );
+    let rpc = Client::new(
+        &format!("{}{}:{}", schema, conf.btc_rpc_connect, conf.btc_rpc_port),
+        Auth::UserPass(conf.btc_rpc_user.clone(), conf.btc_rpc_password.clone()),
+    )
+    .unwrap();
     let mut derefed = bitcoin_cli.deref();
     // Load last known block from DB if found. Poll it from Bitcoind otherwise.
     let tip = if let Ok(block_hash) = dbm.lock().unwrap().load_last_known_block() {

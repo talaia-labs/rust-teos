@@ -2,8 +2,9 @@
 //!
 
 use std::ops::Deref;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time;
+use tokio::sync::{Notify};
 use tokio::time::timeout;
 use triggered::Listener;
 
@@ -35,7 +36,7 @@ where
     /// A signal from the main thread indicating the tower is shuting down.
     shutdown_signal: Listener,
     /// A flag that indicates wether bitcoind is reachable or not.
-    bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
+    bitcoind_reachable: Arc<(Mutex<bool>, Notify)>,
 }
 
 impl<'a, P, C, L> ChainMonitor<'a, P, C, L>
@@ -52,7 +53,7 @@ where
         dbm: Arc<Mutex<DBM>>,
         polling_delta_sec: u16,
         shutdown_signal: Listener,
-        bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
+        bitcoind_reachable: Arc<(Mutex<bool>, Notify)>,
     ) -> ChainMonitor<'a, P, C, L> {
         ChainMonitor {
             spv_client,
@@ -95,7 +96,7 @@ where
                     }
                 }
                 *reachable.lock().unwrap() = true;
-                notifier.notify_all();
+                notifier.notify_waiters();
             }
             Err(e) => match e.kind() {
                 BlockSourceErrorKind::Persistent => {

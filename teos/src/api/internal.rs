@@ -1,5 +1,6 @@
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use tonic::{Code, Request, Response, Status};
+use tokio::sync::{Notify};
 use triggered::Trigger;
 
 use crate::protos as msgs;
@@ -22,7 +23,7 @@ pub struct InternalAPI {
     /// A [Watcher] instance.
     watcher: Arc<Watcher>,
     /// A flag that indicates wether bitcoind is reachable or not.
-    bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
+    bitcoind_reachable: Arc<(Mutex<bool>, Notify)>,
     /// A signal indicating the tower is shuting down.
     shutdown_trigger: Trigger,
 }
@@ -31,7 +32,7 @@ impl InternalAPI {
     /// Creates a new [InternalAPI] instance.
     pub fn new(
         watcher: Arc<Watcher>,
-        bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
+        bitcoind_reachable: Arc<(Mutex<bool>, Notify)>,
         shutdown_trigger: Trigger,
     ) -> Self {
         Self {
@@ -107,7 +108,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
             .watcher
             .add_appointment(appointment, req_data.signature)
         {
-            Ok((receipt, available_slots, subscription_expiry)) => {
+            Ok((receipt, available_slots, subscription_expiry, _)) => {
                 Ok(Response::new(msgs::AddAppointmentResponse {
                     locator: locator.serialize(),
                     start_block: receipt.start_block(),
