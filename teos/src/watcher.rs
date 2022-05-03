@@ -964,10 +964,10 @@ mod tests {
     use crate::responder::ConfirmationStatus;
     use crate::rpc_errors;
     use crate::test_utils::{
-        create_carrier, create_responder, create_watcher, generate_dummy_appointment,
+        create_responder, create_watcher, generate_dummy_appointment,
         generate_dummy_appointment_with_user, generate_uuid, get_last_n_blocks, get_random_breach,
-        get_random_tx, store_appointment_and_fks_to_db, BitcoindMock, Blockchain, MockOptions,
-        MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        get_random_tx, reset_carrier, store_appointment_and_fks_to_db, BitcoindMock, Blockchain, 
+        MockOptions, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
 
@@ -1236,10 +1236,11 @@ mod tests {
         // Add the appointment for a new user (twice so we can check that updates work)
         for _ in 0..2 {
             let user_sig = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
-            let (receipt, slots, expiry) = watcher
+            let (receipt, slots, expiry, join_handle_option) = watcher
                 .add_appointment(appointment.clone(), user_sig.clone())
                 .unwrap();
-
+            
+            assert!(join_handle_option.is_none());
             assert_appointment_added(slots, SLOTS - 1, expiry, receipt, &user_sig, tower_id);
         }
 
@@ -1249,10 +1250,11 @@ mod tests {
         watcher.register(user2_id).unwrap();
 
         let user2_sig = cryptography::sign(&appointment.serialize(), &user2_sk).unwrap();
-        let (receipt, slots, expiry) = watcher
+        let (receipt, slots, expiry, join_handle_option) = watcher
             .add_appointment(appointment.clone(), user2_sig.clone())
             .unwrap();
 
+        assert!(join_handle_option.is_none());
         assert_appointment_added(slots, SLOTS - 1, expiry, receipt, &user2_sig, tower_id);
 
         // There should be now two appointments in the Watcher and the same locator should have two different uuids
@@ -1274,9 +1276,11 @@ mod tests {
         let (uuid, triggered_appointment) = generate_dummy_appointment_with_user(user_id, None);
         let signature =
             cryptography::sign(&triggered_appointment.inner.serialize(), &user_sk).unwrap();
-        watcher
+        let (_, _, _, join_handle_option) = watcher
             .add_appointment(triggered_appointment.inner.clone(), signature.clone())
             .unwrap();
+        
+        assert!(join_handle_option.is_none());
 
         let breach = get_random_breach();
         watcher.responder.add_tracker(
@@ -1298,9 +1302,14 @@ mod tests {
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
         let user_sig =
             cryptography::sign(&appointment_in_cache.inner.serialize(), &user_sk).unwrap();
-        let (receipt, slots, expiry) = watcher
+        let (receipt, slots, expiry, join_handle_option) = watcher
             .add_appointment(appointment_in_cache.inner.clone(), user_sig.clone())
             .unwrap();
+        assert!(!join_handle_option.is_none());
+        match join_handle_option.unwrap().await {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
 
         // The appointment should have been accepted, slots should have been decreased, and data should have been deleted from
         // the Watcher's memory. Moreover, a new tracker should be found in the Responder
@@ -1331,9 +1340,14 @@ mod tests {
         invalid_appointment.inner.encrypted_blob.reverse();
         let user_sig =
             cryptography::sign(&invalid_appointment.inner.serialize(), &user_sk).unwrap();
-        let (receipt, slots, expiry) = watcher
+        let (receipt, slots, expiry, join_handle_option) = watcher
             .add_appointment(invalid_appointment.inner.clone(), user_sig.clone())
             .unwrap();
+        assert!(!join_handle_option.is_none());
+        match join_handle_option.unwrap().await {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
 
         assert_appointment_added(slots, SLOTS - 4, expiry, receipt, &user_sig, tower_id);
         assert_eq!(watcher.appointments.lock().unwrap().len(), 3);
@@ -1350,17 +1364,24 @@ mod tests {
 
         // Transaction rejected
         // Update the Responder with a new Carrier
-        *watcher.responder.get_carrier().lock().unwrap() = create_carrier(
+        reset_carrier(
+            watcher.responder.get_carrier(),
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
             chain.tip().deref().height,
+            true
         );
 
         let dispute_tx = &tip_txs[tip_txs.len() - 2];
         let invalid_appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
         let user_sig = cryptography::sign(&invalid_appointment.serialize(), &user_sk).unwrap();
-        let (receipt, slots, expiry) = watcher
+        let (receipt, slots, expiry, join_handle_option) = watcher
             .add_appointment(invalid_appointment, user_sig.clone())
             .unwrap();
+        assert!(!join_handle_option.is_none());
+        match join_handle_option.unwrap().await {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
 
         assert_appointment_added(slots, SLOTS - 4, expiry, receipt, &user_sig, tower_id);
         assert_eq!(watcher.appointments.lock().unwrap().len(), 3);
@@ -1430,6 +1451,90 @@ mod tests {
         assert!(matches!(
             watcher.dbm.lock().unwrap().load_appointment(uuid),
             Err(DBError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_bitcoind_unreachable() {
+        // Create the blockchain and watcher. Immediately replace the carrier
+        // so we have control over whether bitcoind is reachable
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
+        let tip_txs = chain.blocks.last().unwrap().txdata.clone();
+        let watcher = init_watcher(&mut chain).await;
+        let bitcoind_reachable = watcher
+            .responder
+            .get_carrier()
+            .get_bitcoind_reachable();
+
+        // Generate the tower id
+        let tower_id: UserId = UserId(PublicKey::from_secret_key(
+            &Secp256k1::new(),
+            &watcher.signing_key,
+        ));
+
+        // Create and register a user
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        watcher.register(user_id).unwrap();
+
+        
+        // Set bitcoind to be unreachable
+        let (lock, _) = &*bitcoind_reachable;
+        *lock.lock().unwrap() = false;
+
+        // Try to add an appointment which has a trigger in the cache
+        let dispute_tx = tip_txs.last().unwrap();
+        let (uuid, appointment_in_cache) =
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+        let user_sig =
+            cryptography::sign(&appointment_in_cache.inner.serialize(), &user_sk).unwrap();
+        let (receipt, slots, expiry, join_handle_option) = watcher
+            .add_appointment(appointment_in_cache.inner.clone(), user_sig.clone())
+            .unwrap();
+        assert!(!join_handle_option.is_none());
+        
+        // Nothing shouldve been added
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            Err(DBError::NotFound)
+        ));
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_tracker(uuid),
+            Err(DBError::NotFound)
+        ));
+
+        // Set bitcoind back to reachable and join the on the add_appointment
+        // handle
+        let bitcoind_reachable_clone = bitcoind_reachable.clone();
+        let handle = tokio::spawn(async move {
+            let (lock, notify) = &*bitcoind_reachable_clone;
+            let mut reachable = lock.lock().unwrap();
+            *reachable = true;
+            notify.notify_waiters();
+        });
+        match tokio::join!(join_handle_option.unwrap(), handle).0 {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
+
+        // The appointment should have been accepted, slots should have been decreased, and data should have been deleted from
+        // the Watcher's memory. Moreover, a new tracker should be found in the Responder
+        assert_appointment_added(slots, SLOTS - 1, expiry, receipt, &user_sig, tower_id);
+        assert!(!watcher
+            .locator_uuid_map
+            .lock()
+            .unwrap()
+            .contains_key(&appointment_in_cache.locator()));
+        assert!(watcher.responder.has_tracker(uuid));
+
+        // Check data was added to the database
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            Ok(ExtendedAppointment { .. })
+        ));
+        assert!(matches!(
+            watcher.dbm.lock().unwrap().load_tracker(uuid),
+            Ok(TransactionTracker { .. })
         ));
     }
 
@@ -1507,10 +1612,19 @@ mod tests {
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+        let appointment_clone = Arc::new(appointment);
 
         // Valid triggered appointments should be accepted by the Responder
         assert_eq!(
-            watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx),
+            Watcher::store_triggered_appointment(
+                uuid, 
+                appointment_clone, 
+                user_id, 
+                &dispute_tx,
+                watcher.dbm.clone(),
+                watcher.responder.clone()
+            )
+            .await,
             TriggeredAppointment::Accepted,
         );
         // In this case the appointment is kept in the Responder and, therefore, in the database
@@ -1522,15 +1636,26 @@ mod tests {
 
         // A properly formatted but invalid transaction should be rejected by the Responder
         // Update the Responder with a new Carrier that will reject the transaction
-        *watcher.responder.get_carrier().lock().unwrap() = create_carrier(
+        reset_carrier(
+            watcher.responder.get_carrier(),
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
             chain.tip().deref().height,
+            true
         );
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+        let appointment_clone = Arc::new(appointment);
         assert_eq!(
-            watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx),
+            Watcher::store_triggered_appointment(
+                uuid,
+                appointment_clone.clone(),
+                user_id,
+                &dispute_tx,
+                watcher.dbm.clone(),
+                watcher.responder.clone()
+            )
+            .await,
             TriggeredAppointment::Rejected,
         );
         // In this case the appointment is not kept in the Responder nor in the database
@@ -1545,7 +1670,15 @@ mod tests {
         // (the same applies to invalid formatted transactions)
         let uuid = generate_uuid();
         assert_eq!(
-            watcher.store_triggered_appointment(uuid, &appointment, user_id, &get_random_tx()),
+            Watcher::store_triggered_appointment(
+                uuid,
+                appointment_clone,
+                user_id,
+                &get_random_tx(),
+                watcher.dbm.clone(),
+                watcher.responder.clone()
+            )
+            .await,
             TriggeredAppointment::Invalid,
         );
         // The appointment is not kept anywhere
@@ -1871,10 +2004,13 @@ mod tests {
         }
 
         // The deletion reason does not matter here, it only changes the logged message when deleting data
-        watcher.delete_appointments(
+        Watcher::delete_appointments(
             &target_appointments,
             &updated_users,
             DeletionReason::Accepted,
+            watcher.dbm.clone(),
+            watcher.appointments.clone(),
+            watcher.locator_uuid_map.clone()
         );
 
         // Only appointments in the target_appointments map should have been removed from
@@ -1952,7 +2088,11 @@ mod tests {
             watcher.last_known_block_height.load(Ordering::Relaxed),
             chain.get_block_count()
         );
-        watcher.block_connected(&chain.generate(None), chain.get_block_count() as u32);
+        let join_handle_option = watcher.block_connected_helper(
+            &chain.generate(None), 
+            chain.get_block_count() as u32
+        );
+        assert!(join_handle_option.is_none());
         assert_eq!(
             watcher.last_known_block_height.load(Ordering::Relaxed),
             chain.get_block_count()
@@ -2013,7 +2153,15 @@ mod tests {
                 .contains_key(&uuid2)
         );
 
-        watcher.block_connected(&chain.generate(None), chain.get_block_count());
+        let join_handle_option = watcher.block_connected_helper(
+            &chain.generate(None),
+            chain.get_block_count()
+        );
+        assert!(!join_handle_option.is_none());
+        match join_handle_option.unwrap().await {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
 
         assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid1));
         assert!(!watcher.locator_uuid_map.lock().unwrap()[&appointment.locator()].contains(&uuid1));
@@ -2050,10 +2198,15 @@ mod tests {
 
         assert!(watcher.appointments.lock().unwrap().contains_key(&uuid));
 
-        watcher.block_connected(
+        let join_handle_option = watcher.block_connected_helper(
             &chain.generate(Some(vec![dispute_tx])),
             chain.get_block_count(),
         );
+        assert!(!join_handle_option.is_none());
+        match join_handle_option.unwrap().await {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
 
         // Data should have been moved to the Responder and kept in the Gatekeeper, since it is still part of the system.
         assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
@@ -2087,15 +2240,22 @@ mod tests {
         watcher.add_appointment(appointment.inner, sig).unwrap();
 
         // Set the carrier response
-        *watcher.responder.get_carrier().lock().unwrap() = create_carrier(
+        reset_carrier(
+            watcher.responder.get_carrier(),
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
             chain.tip().deref().height,
+            true
         );
 
-        watcher.block_connected(
+        let join_handle_option = watcher.block_connected_helper(
             &chain.generate(Some(vec![dispute_tx])),
             chain.get_block_count(),
         );
+        assert!(!join_handle_option.is_none());
+        match join_handle_option.unwrap().await {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
 
         // Data should not be in the Responder, in the Watcher nor in the Gatekeeper
         assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
@@ -2132,10 +2292,15 @@ mod tests {
             .add_appointment(appointment.inner.clone(), sig)
             .unwrap();
 
-        watcher.block_connected(
+        let join_handle_option = watcher.block_connected_helper(
             &chain.generate(Some(vec![dispute_tx])),
             chain.get_block_count(),
         );
+        assert!(!join_handle_option.is_none());
+        match join_handle_option.unwrap().await {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
 
         // Data has been wiped since it was invalid
         assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));

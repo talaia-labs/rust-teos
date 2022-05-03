@@ -624,6 +624,7 @@ mod tests {
 
     use std::ops::Deref;
     use std::sync::{Arc, Mutex};
+    use tokio::sync::{Notify};
 
     use crate::dbm::{Error as DBError, DBM};
     use crate::gatekeeper::UserInfo;
@@ -647,8 +648,8 @@ mod tests {
             &self.trackers
         }
 
-        pub(crate) fn get_carrier(&self) -> &Mutex<Carrier> {
-            &self.carrier
+        pub(crate) fn get_carrier(&self) -> Arc<Carrier> {
+            self.carrier.clone()
         }
 
         pub(crate) fn add_random_tracker(&self, uuid: UUID, status: ConfirmationStatus) {
@@ -684,7 +685,13 @@ mod tests {
         query: MockedServerQuery,
     ) -> Responder {
         let tip = chain.tip();
-        Responder::new(create_carrier(query, tip.deref().height), gatekeeper, dbm)
+        Responder::new(
+            create_carrier(
+                query, 
+                tip.deref().height, 
+                Arc::new((Mutex::new(true), Notify::new()))), 
+            gatekeeper, 
+            dbm)
     }
 
     fn init_responder_with_chain_and_dbm(
@@ -780,8 +787,8 @@ mod tests {
         assert_eq!(responder, another_r);
     }
 
-    #[test]
-    fn test_handle_breach_delivered() {
+    #[tokio::test]
+    async fn test_handle_breach_delivered() {
         let start_height = START_HEIGHT as u32;
         let responder = init_responder(MockedServerQuery::Regular);
 
@@ -793,7 +800,7 @@ mod tests {
         let penalty_txid = breach.penalty_tx.txid();
 
         assert_eq!(
-            responder.handle_breach(uuid, breach, user_id),
+            responder.handle_breach(uuid, breach, user_id).await,
             ConfirmationStatus::InMempoolSince(start_height)
         );
         assert!(responder.trackers.lock().unwrap().contains_key(&uuid));
@@ -811,7 +818,7 @@ mod tests {
         // passed twice, the receipt corresponding to the first breach will be handed back.
         let another_breach = get_random_breach();
         assert_eq!(
-            responder.handle_breach(uuid, another_breach.clone(), user_id),
+            responder.handle_breach(uuid, another_breach.clone(), user_id).await,
             ConfirmationStatus::InMempoolSince(start_height)
         );
 
@@ -827,8 +834,8 @@ mod tests {
             .contains_key(&another_breach.penalty_tx.txid()));
     }
 
-    #[test]
-    fn test_handle_breach_rejected() {
+    #[tokio::test]
+    async fn test_handle_breach_rejected() {
         let responder = init_responder(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
         ));
@@ -839,7 +846,7 @@ mod tests {
         let penalty_txid = breach.penalty_tx.txid();
 
         assert_eq!(
-            responder.handle_breach(uuid, breach, user_id),
+            responder.handle_breach(uuid, breach, user_id).await,
             ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
         );
         assert!(!responder.trackers.lock().unwrap().contains_key(&uuid));
@@ -1300,8 +1307,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_rebroadcast_accepted() {
+    #[tokio::test]
+    async fn test_rebroadcast_accepted() {
         // This test positive rebroadcast cases, including reorgs. However, complex reorg logic is not tested here, it will need a
         // dedicated test (against bitcoind, not mocked).
         let responder = init_responder(MockedServerQuery::Regular);
@@ -1359,14 +1366,18 @@ mod tests {
 
         // Check all are accepted
         let (accepted, rejected) =
-            responder.rebroadcast(responder.get_txs_to_rebroadcast(current_height));
+            Responder::rebroadcast(
+                responder.get_txs_to_rebroadcast(current_height),
+                responder.trackers.clone(),
+                responder.carrier.clone()
+            ).await;
         let accepted_uuids: HashSet<UUID> = accepted.keys().cloned().collect();
         assert_eq!(accepted_uuids, need_rebroadcast);
         assert!(rejected.is_empty());
     }
 
-    #[test]
-    fn test_rebroadcast_rejected() {
+    #[tokio::test]
+    async fn test_rebroadcast_rejected() {
         // This test negative rebroadcast cases, including reorgs. However, complex reorg logic is not tested here, it will need a
         // dedicated test (against bitcoind, not mocked).
         let responder = init_responder(MockedServerQuery::Error(
@@ -1426,7 +1437,11 @@ mod tests {
 
         // Check all are rejected
         let (accepted, rejected) =
-            responder.rebroadcast(responder.get_txs_to_rebroadcast(current_height));
+            Responder::rebroadcast(
+                responder.get_txs_to_rebroadcast(current_height),
+                responder.trackers.clone(),
+                responder.carrier.clone()
+            ).await;
         assert_eq!(rejected, need_rebroadcast);
         assert!(accepted.is_empty());
     }
@@ -1499,7 +1514,7 @@ mod tests {
             .unwrap();
 
         // Delete trackers removes data from the trackers, tx_tracker_map maps, the database. The deletion of the later is
-        // better check in test_block_connected. Add data to the map first.
+        // better checked in test_block_connected. Add data to the map first.
         let mut all_trackers = HashSet::new();
         let mut target_trackers = HashSet::new();
         let mut uuid_txid_map = HashMap::new();
@@ -1611,8 +1626,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_block_connected() {
+    #[tokio::test]
+    async fn test_block_connected() {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let start_height = START_HEIGHT * 2;
         let mut chain = Blockchain::default().with_height(start_height);
@@ -1766,28 +1781,31 @@ mod tests {
         // Add some dummy data in the cache to check that it gets cleared
         responder
             .carrier
-            .lock()
-            .unwrap()
             .get_issued_receipts()
             .insert(get_random_tx().txid(), ConfirmationStatus::ConfirmedIn(21));
 
         // Connecting a block should trigger all the state transitions
-        responder.block_connected(
+        let join_handle_option = responder.block_connected_helper(
             &chain.generate(Some(just_confirmed_txs.clone())),
             chain.get_block_count(),
         );
 
+        // Ensure a join handle was created, then join the async task
+        assert!(!join_handle_option.is_none());
+        match tokio::join!(join_handle_option.unwrap()).0 {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
+
         // CARRIER CHECKS
         assert!(responder
             .carrier
-            .lock()
-            .unwrap()
             .get_issued_receipts()
             .is_empty());
 
         // Check that the carrier last_known_block_height has been updated
         assert_eq!(
-            responder.carrier.lock().unwrap().get_height(),
+            responder.carrier.get_height(),
             target_block_height
         );
 
@@ -1910,7 +1928,7 @@ mod tests {
             );
 
             // Check that the carrier block_height has been updated
-            assert_eq!(responder.carrier.lock().unwrap().get_height(), i);
+            assert_eq!(responder.carrier.get_height(), i);
         }
 
         // Check that all reorged trackers are still reorged

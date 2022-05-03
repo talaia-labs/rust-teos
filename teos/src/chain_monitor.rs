@@ -134,7 +134,6 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::HashSet;
     use std::iter::FromIterator;
-    use std::thread;
 
     use bitcoin::network::constants::Network;
     use bitcoin::BlockHash;
@@ -182,7 +181,7 @@ mod tests {
         let poller = ChainPoller::new(&mut chain, Network::Bitcoin);
         let cache = &mut UnboundedCache::new();
         let spv_client = SpvClient::new(tip, poller, cache, &listener);
-        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Notify::new()));
 
         let mut cm =
             ChainMonitor::new(spv_client, tip, dbm, 1, shutdown_signal, bitcoind_reachable).await;
@@ -206,7 +205,7 @@ mod tests {
         let poller = ChainPoller::new(&mut chain, Network::Bitcoin);
         let cache = &mut UnboundedCache::new();
         let spv_client = SpvClient::new(old_tip, poller, cache, &listener);
-        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Notify::new()));
 
         let mut cm = ChainMonitor::new(
             spv_client,
@@ -245,7 +244,7 @@ mod tests {
         let poller = ChainPoller::new(&mut chain, Network::Bitcoin);
         let cache = &mut UnboundedCache::new();
         let spv_client = SpvClient::new(best_tip, poller, cache, &listener);
-        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Notify::new()));
 
         let mut cm = ChainMonitor::new(
             spv_client,
@@ -287,7 +286,7 @@ mod tests {
         let poller = ChainPoller::new(&mut chain, Network::Bitcoin);
         let cache = &mut UnboundedCache::new();
         let spv_client = SpvClient::new(old_best, poller, cache, &listener);
-        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Notify::new()));
 
         let mut cm = ChainMonitor::new(
             spv_client,
@@ -326,7 +325,7 @@ mod tests {
         let poller = ChainPoller::new(&mut chain, Network::Bitcoin);
         let cache = &mut UnboundedCache::new();
         let spv_client = SpvClient::new(tip, poller, cache, &listener);
-        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Notify::new()));
 
         let mut cm = ChainMonitor::new(
             spv_client,
@@ -343,12 +342,13 @@ mod tests {
         let (reachable, _) = &*bitcoind_reachable.clone();
         assert!(!*reachable.lock().unwrap());
 
-        // Set a thread to block on bitcoind unreachable to check that it gets notified once bitcoind comes back online
-        let t = thread::spawn(move || {
-            let (lock, notifier) = &*bitcoind_reachable;
-            let mut reachable = lock.lock().unwrap();
-            while !*reachable {
-                reachable = notifier.wait(reachable).unwrap();
+        // Set an async task to block on bitcoind unreachable to check that it gets notified once bitcoind comes back online
+        let join_handle = tokio::spawn(async move {
+            let (lock, notify) = &*bitcoind_reachable;
+            let mut reachable = *lock.lock().unwrap(); 
+            while !reachable {
+                notify.notified().await;
+                reachable = *lock.lock().unwrap();
             }
         });
 
@@ -358,6 +358,9 @@ mod tests {
         assert!(*reachable.lock().unwrap());
 
         // This would hang if the cm didn't notify their subscribers about the bitcoind status, so it serves as out assert.
-        t.join().unwrap();
+        match join_handle.await {
+            Ok(_) => (),
+            Err(_) => assert!(false)
+        };
     }
 }
