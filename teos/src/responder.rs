@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::sync::{Arc, Mutex};
-use tokio::task::{JoinHandle};
+use tokio::task::JoinHandle;
 
 use bitcoin::consensus;
 use bitcoin::{BlockHeader, Transaction, Txid};
@@ -190,10 +190,7 @@ impl Responder {
             return tracker.status;
         }
 
-        let status = self
-            .carrier
-            .send_transaction(&breach.penalty_tx)
-            .await;
+        let status = self.carrier.send_transaction(&breach.penalty_tx).await;
         if !matches!(status, ConfirmationStatus::Rejected { .. }) {
             self.add_tracker(uuid, breach, user_id, status);
         }
@@ -376,7 +373,11 @@ impl Responder {
         for (uuid, (penalty_tx, dispute_tx)) in txs.into_iter() {
             let status = if let Some(dispute_tx) = dispute_tx {
                 // The tracker was reorged out, and the dispute may potentially not be in the chain anymore.
-                if carrier.get_block_hash_for_tx(&dispute_tx.txid()).await.is_some() {
+                if carrier
+                    .get_block_hash_for_tx(&dispute_tx.txid())
+                    .await
+                    .is_some()
+                {
                     // Dispute tx is on chain, so we only need to care about the penalty
                     carrier.send_transaction(&penalty_tx).await
                 } else {
@@ -430,16 +431,17 @@ impl Responder {
             uuids,
             reason,
             self.trackers.clone(),
-            self.tx_tracker_map.clone())
+            self.tx_tracker_map.clone(),
+        )
     }
 
     /// See [Responder::delete_trackers_from_memory]
     fn delete_trackers_from_memory_no_self(
-        uuids: &HashSet<UUID>, 
+        uuids: &HashSet<UUID>,
         reason: DeletionReason,
         trackers: Arc<Mutex<HashMap<UUID, TrackerSummary>>>,
-        tx_tracker_map: Arc<Mutex<HashMap<Txid, HashSet<UUID>>>>,)
-    {
+        tx_tracker_map: Arc<Mutex<HashMap<Txid, HashSet<UUID>>>>,
+    ) {
         let mut trackers_mutable = trackers.lock().unwrap();
         let mut tx_tracker_map_mutable = tx_tracker_map.lock().unwrap();
         for uuid in uuids.iter() {
@@ -451,7 +453,9 @@ impl Responder {
 
             match trackers_mutable.remove(uuid) {
                 Some(tracker) => {
-                    let trackers_mutable = tx_tracker_map_mutable.get_mut(&tracker.penalty_txid).unwrap();
+                    let trackers_mutable = tx_tracker_map_mutable
+                        .get_mut(&tracker.penalty_txid)
+                        .unwrap();
 
                     if trackers_mutable.len() == 1 {
                         tx_tracker_map_mutable.remove(&tracker.penalty_txid);
@@ -482,12 +486,13 @@ impl Responder {
         reason: DeletionReason,
     ) {
         Responder::delete_trackers_no_self(
-            uuids, 
+            uuids,
             updated_users,
             reason,
             self.dbm.clone(),
             self.trackers.clone(),
-            self.tx_tracker_map.clone())
+            self.tx_tracker_map.clone(),
+        )
     }
 
     /// See [Responder::delete_trackers]
@@ -499,21 +504,18 @@ impl Responder {
         trackers: Arc<Mutex<HashMap<UUID, TrackerSummary>>>,
         tx_tracker_map: Arc<Mutex<HashMap<Txid, HashSet<UUID>>>>,
     ) {
-        Responder::delete_trackers_from_memory_no_self(
-            uuids,
-            reason,
-            trackers,
-            tx_tracker_map);
-        dbm
-            .lock()
+        Responder::delete_trackers_from_memory_no_self(uuids, reason, trackers, tx_tracker_map);
+        dbm.lock()
             .unwrap()
             .batch_remove_appointments(uuids, updated_users);
     }
 
     /// See [Responder::block_connected]
-    fn block_connected_helper(&self, block: &bitcoin::Block, height: u32)
-        -> Option<JoinHandle<()>>
-    {
+    fn block_connected_helper(
+        &self,
+        block: &bitcoin::Block,
+        height: u32,
+    ) -> Option<JoinHandle<()>> {
         log::info!("New block received: {}", block.header.block_hash());
         self.carrier.update_height(height);
         let mut join_handle_option: Option<JoinHandle<_>> = None;
@@ -554,11 +556,9 @@ impl Responder {
             let dbm = self.dbm.clone();
             let tx_tracker_map = self.tx_tracker_map.clone();
             join_handle_option = Some(tokio::spawn(async move {
-                let (_, rejected_trackers) = Responder::rebroadcast(
-                    txs_to_rebroadcast,
-                    trackers.clone(),
-                    carrier.clone()
-                ).await;
+                let (_, rejected_trackers) =
+                    Responder::rebroadcast(txs_to_rebroadcast, trackers.clone(), carrier.clone())
+                        .await;
                 // Delete trackers rejected during rebroadcast
                 let trackers_to_delete_gk = rejected_trackers
                     .iter()
@@ -566,12 +566,11 @@ impl Responder {
                     .collect();
                 Responder::delete_trackers_no_self(
                     &rejected_trackers,
-                    &gatekeeper
-                        .delete_appointments_from_memory(&trackers_to_delete_gk),
+                    &gatekeeper.delete_appointments_from_memory(&trackers_to_delete_gk),
                     DeletionReason::Rejected,
                     dbm,
                     trackers.clone(),
-                    tx_tracker_map
+                    tx_tracker_map,
                 );
 
                 // Remove all receipts created in this block
@@ -624,7 +623,7 @@ mod tests {
 
     use std::ops::Deref;
     use std::sync::{Arc, Mutex};
-    use tokio::sync::{Notify};
+    use tokio::sync::Notify;
 
     use crate::dbm::{Error as DBError, DBM};
     use crate::gatekeeper::UserInfo;
@@ -687,11 +686,13 @@ mod tests {
         let tip = chain.tip();
         Responder::new(
             create_carrier(
-                query, 
-                tip.deref().height, 
-                Arc::new((Mutex::new(true), Notify::new()))), 
-            gatekeeper, 
-            dbm)
+                query,
+                tip.deref().height,
+                Arc::new((Mutex::new(true), Notify::new())),
+            ),
+            gatekeeper,
+            dbm,
+        )
     }
 
     fn init_responder_with_chain_and_dbm(
@@ -818,7 +819,9 @@ mod tests {
         // passed twice, the receipt corresponding to the first breach will be handed back.
         let another_breach = get_random_breach();
         assert_eq!(
-            responder.handle_breach(uuid, another_breach.clone(), user_id).await,
+            responder
+                .handle_breach(uuid, another_breach.clone(), user_id)
+                .await,
             ConfirmationStatus::InMempoolSince(start_height)
         );
 
@@ -1365,12 +1368,12 @@ mod tests {
         }
 
         // Check all are accepted
-        let (accepted, rejected) =
-            Responder::rebroadcast(
-                responder.get_txs_to_rebroadcast(current_height),
-                responder.trackers.clone(),
-                responder.carrier.clone()
-            ).await;
+        let (accepted, rejected) = Responder::rebroadcast(
+            responder.get_txs_to_rebroadcast(current_height),
+            responder.trackers.clone(),
+            responder.carrier.clone(),
+        )
+        .await;
         let accepted_uuids: HashSet<UUID> = accepted.keys().cloned().collect();
         assert_eq!(accepted_uuids, need_rebroadcast);
         assert!(rejected.is_empty());
@@ -1436,12 +1439,12 @@ mod tests {
         }
 
         // Check all are rejected
-        let (accepted, rejected) =
-            Responder::rebroadcast(
-                responder.get_txs_to_rebroadcast(current_height),
-                responder.trackers.clone(),
-                responder.carrier.clone()
-            ).await;
+        let (accepted, rejected) = Responder::rebroadcast(
+            responder.get_txs_to_rebroadcast(current_height),
+            responder.trackers.clone(),
+            responder.carrier.clone(),
+        )
+        .await;
         assert_eq!(rejected, need_rebroadcast);
         assert!(accepted.is_empty());
     }
@@ -1794,20 +1797,14 @@ mod tests {
         assert!(!join_handle_option.is_none());
         match tokio::join!(join_handle_option.unwrap()).0 {
             Ok(_) => (),
-            Err(_) => assert!(false)
+            Err(_) => assert!(false),
         };
 
         // CARRIER CHECKS
-        assert!(responder
-            .carrier
-            .get_issued_receipts()
-            .is_empty());
+        assert!(responder.carrier.get_issued_receipts().is_empty());
 
         // Check that the carrier last_known_block_height has been updated
-        assert_eq!(
-            responder.carrier.get_height(),
-            target_block_height
-        );
+        assert_eq!(responder.carrier.get_height(), target_block_height);
 
         // COMPLETED TRACKERS CHECKS
         // Data should have been removed

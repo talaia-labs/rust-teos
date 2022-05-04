@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
-use tokio::sync::{Notify};
+use tokio::sync::Notify;
 use tokio::task;
 use tonic::transport::Server;
 

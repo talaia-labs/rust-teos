@@ -4,7 +4,7 @@
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 use std::time;
-use tokio::sync::{Notify};
+use tokio::sync::Notify;
 use tokio::time::timeout;
 use triggered::Listener;
 
@@ -345,7 +345,7 @@ mod tests {
         // Set an async task to block on bitcoind unreachable to check that it gets notified once bitcoind comes back online
         let join_handle = tokio::spawn(async move {
             let (lock, notify) = &*bitcoind_reachable;
-            let mut reachable = *lock.lock().unwrap(); 
+            let mut reachable = *lock.lock().unwrap();
             while !reachable {
                 notify.notified().await;
                 reachable = *lock.lock().unwrap();
@@ -360,7 +360,7 @@ mod tests {
         // This would hang if the cm didn't notify their subscribers about the bitcoind status, so it serves as out assert.
         match join_handle.await {
             Ok(_) => (),
-            Err(_) => assert!(false)
+            Err(_) => assert!(false),
         };
     }
 }

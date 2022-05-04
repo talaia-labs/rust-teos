@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 use tonic::{Code, Request, Response, Status};
-use tokio::sync::{Notify};
 use triggered::Trigger;
 
 use crate::protos as msgs;

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{Notify};
+use tokio::sync::Notify;
 
 use crate::responder::ConfirmationStatus;
 use crate::{errors, rpc_errors};
@@ -89,35 +89,30 @@ impl Carrier {
 
             // Wait until bitcoind is reachable
             self.hang_until_bitcoind_reachable().await;
-        
-            if let Some(receipt) = self.issued_receipts
-                .lock()
-                .unwrap()
-                .get(&tx.txid())
-            {
+
+            if let Some(receipt) = self.issued_receipts.lock().unwrap().get(&tx.txid()) {
                 log::info!("Transaction already sent: {}", tx.txid());
                 return *receipt;
             }
 
             log::info!("Pushing transaction to the network: {}", tx.txid());
-            let send_raw_tx_option = self.bitcoin_cli
-                .lock()
-                .unwrap()
-                .send_raw_transaction(tx);
+            let send_raw_tx_option = self.bitcoin_cli.lock().unwrap().send_raw_transaction(tx);
             match send_raw_tx_option {
                 Ok(_) => {
                     // Here the transaction could, potentially, have been in mempool before the current height.
                     // This shouldn't really matter though.
                     log::info!("Transaction successfully delivered: {}", tx.txid());
                     receipt = Some(ConfirmationStatus::InMempoolSince(
-                        *self.block_height.lock().unwrap()
+                        *self.block_height.lock().unwrap(),
                     ));
                 }
                 Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                     // Since we're pushing a raw transaction to the network we can face several rejections
                     rpc_errors::RPC_VERIFY_REJECTED => {
                         log::error!("Transaction couldn't be broadcast. {:?}", rpcerr);
-                        receipt = Some(ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED));
+                        receipt = Some(ConfirmationStatus::Rejected(
+                            rpc_errors::RPC_VERIFY_REJECTED,
+                        ));
                     }
                     rpc_errors::RPC_VERIFY_ERROR => {
                         log::error!("Transaction couldn't be broadcast. {:?}", rpcerr);
@@ -130,17 +125,16 @@ impl Carrier {
                         );
 
                         receipt = Some(ConfirmationStatus::ConfirmedIn(
-                            self.get_tx_height(&tx.txid())
-                                .await
-                                .unwrap()
-                            )
-                        )
+                            self.get_tx_height(&tx.txid()).await.unwrap(),
+                        ))
                     }
                     rpc_errors::RPC_DESERIALIZATION_ERROR => {
                         // Adding this here just for completeness. We should never end up here. The Carrier only sends txs handed by the Responder,
                         // who receives them from the Watcher, who checks that the tx can be properly deserialized.
                         log::info!("Transaction cannot be deserialized: {}", tx.txid());
-                        receipt = Some(ConfirmationStatus::Rejected(rpc_errors::RPC_DESERIALIZATION_ERROR));
+                        receipt = Some(ConfirmationStatus::Rejected(
+                            rpc_errors::RPC_DESERIALIZATION_ERROR,
+                        ));
                     }
                     _ => {
                         // If something else happens (unlikely but possible) log it so we can treat it in future releases.
@@ -148,7 +142,9 @@ impl Carrier {
                             "Unexpected rpc error when calling sendrawtransaction: {:?}",
                             rpcerr
                         );
-                        receipt = Some(ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION));
+                        receipt = Some(ConfirmationStatus::Rejected(
+                            errors::UNKNOWN_JSON_RPC_EXCEPTION,
+                        ));
                     }
                 },
                 Err(JsonRpcError(TransportError(_))) => {
@@ -160,7 +156,9 @@ impl Carrier {
                 Err(e) => {
                     // TODO: This may need finer catching.
                     log::error!("Unexpected error when calling sendrawtransaction: {:?}", e);
-                    receipt = Some(ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION));
+                    receipt = Some(ConfirmationStatus::Rejected(
+                        errors::UNKNOWN_JSON_RPC_EXCEPTION,
+                    ));
                 }
             };
         }
@@ -185,7 +183,7 @@ impl Carrier {
     /// Queries the height of a given [Block](bitcoin::Block). Returns it if the block can be found. Returns [None] otherwise.
     async fn get_block_height(&self, block_hash: &BlockHash) -> Option<u32> {
         self.hang_until_bitcoind_reachable().await;
-        
+
         let mut continue_looping = true;
         let mut block_height: Option<u32> = None;
         while continue_looping {
@@ -193,14 +191,13 @@ impl Carrier {
             // issue
             continue_looping = false;
 
-            match self.bitcoin_cli
+            match self
+                .bitcoin_cli
                 .lock()
                 .unwrap()
-                .get_block_header_info(block_hash) 
+                .get_block_header_info(block_hash)
             {
-                Ok(header_data) => {
-                    block_height = Some(header_data.height as u32)
-                },
+                Ok(header_data) => block_height = Some(header_data.height as u32),
                 Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                     rpc_errors::RPC_INVALID_ADDRESS_OR_KEY => {
                         log::info!("Block not found: {}", block_hash);
@@ -235,14 +232,13 @@ impl Carrier {
             // We only need to loop once unless we have a bitcoind connectivity
             // issue
             continue_looping = false;
-            match self.bitcoin_cli
+            match self
+                .bitcoin_cli
                 .lock()
                 .unwrap()
-                .get_raw_transaction_info(txid, None) 
+                .get_raw_transaction_info(txid, None)
             {
-                Ok(tx_data) => {
-                    block_hash = tx_data.blockhash
-                },
+                Ok(tx_data) => block_hash = tx_data.blockhash,
                 Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                     rpc_errors::RPC_INVALID_ADDRESS_OR_KEY => {
                         log::info!("Transaction not found in mempool nor blockchain: {}", txid);
@@ -288,9 +284,9 @@ mod tests {
 
     impl Carrier {
         // Helper function to access issued_receipts in tests
-        pub(crate) fn get_issued_receipts(&self) 
-            -> std::sync::MutexGuard<'_, HashMap<Txid, ConfirmationStatus>> 
-        {
+        pub(crate) fn get_issued_receipts(
+            &self,
+        ) -> std::sync::MutexGuard<'_, HashMap<Txid, ConfirmationStatus>> {
             self.issued_receipts.lock().unwrap()
         }
 
@@ -331,17 +327,9 @@ mod tests {
         }
 
         // Check it empties on request
-        assert!(!carrier
-            .issued_receipts
-            .lock()
-            .unwrap()
-            .is_empty());
+        assert!(!carrier.issued_receipts.lock().unwrap().is_empty());
         carrier.clear_receipts();
-        assert!(carrier
-            .issued_receipts
-            .lock()
-            .unwrap()
-            .is_empty());
+        assert!(carrier.issued_receipts.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -359,13 +347,15 @@ mod tests {
         assert_eq!(r, ConfirmationStatus::InMempoolSince(start_height));
 
         // Check the receipt is on the cache
-        assert_eq!(carrier
-            .issued_receipts
-            .lock()
-            .unwrap()
-            .get(&tx.txid())
-            .unwrap(), 
-            &r);
+        assert_eq!(
+            carrier
+                .issued_receipts
+                .lock()
+                .unwrap()
+                .get(&tx.txid())
+                .unwrap(),
+            &r
+        );
     }
 
     #[tokio::test]
@@ -388,13 +378,15 @@ mod tests {
         );
 
         // Check the receipt is on the cache
-        assert_eq!(carrier
-            .issued_receipts
-            .lock()
-            .unwrap()
-            .get(&tx.txid())
-            .unwrap(), 
-            &r);
+        assert_eq!(
+            carrier
+                .issued_receipts
+                .lock()
+                .unwrap()
+                .get(&tx.txid())
+                .unwrap(),
+            &r
+        );
     }
 
     #[tokio::test]
@@ -416,13 +408,15 @@ mod tests {
         );
 
         // Check the receipt is on the cache
-        assert_eq!(carrier
-            .issued_receipts
-            .lock()
-            .unwrap()
-            .get(&tx.txid())
-            .unwrap(), 
-            &r);
+        assert_eq!(
+            carrier
+                .issued_receipts
+                .lock()
+                .unwrap()
+                .get(&tx.txid())
+                .unwrap(),
+            &r
+        );
     }
 
     #[tokio::test]
@@ -444,13 +438,15 @@ mod tests {
         assert_eq!(r, ConfirmationStatus::ConfirmedIn(start_height));
 
         // Check the receipt is on the cache
-        assert_eq!(carrier
-            .issued_receipts
-            .lock()
-            .unwrap()
-            .get(&tx.txid())
-            .unwrap(), 
-            &r);
+        assert_eq!(
+            carrier
+                .issued_receipts
+                .lock()
+                .unwrap()
+                .get(&tx.txid())
+                .unwrap(),
+            &r
+        );
     }
 
     #[tokio::test]
@@ -472,13 +468,15 @@ mod tests {
         );
 
         // Check the receipt is on the cache
-        assert_eq!(carrier
-            .issued_receipts
-            .lock()
-            .unwrap()
-            .get(&tx.txid())
-            .unwrap(),
-            &r);
+        assert_eq!(
+            carrier
+                .issued_receipts
+                .lock()
+                .unwrap()
+                .get(&tx.txid())
+                .unwrap(),
+            &r
+        );
     }
 
     #[tokio::test]
@@ -505,7 +503,7 @@ mod tests {
         carrier.send_transaction(&tx).await;
 
         // Check the request has hanged for ~delay and bitcoind is now
-        // reachable (even though this test would not complete if 
+        // reachable (even though this test would not complete if
         // bitcoind_reachable != true)
         assert_eq!(
             (std::time::Instant::now() - before).as_secs(),
@@ -587,7 +585,10 @@ mod tests {
 
         let tx = consensus::deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        assert_eq!(carrier.get_block_hash_for_tx(&tx.txid()).await, Some(block_hash));
+        assert_eq!(
+            carrier.get_block_hash_for_tx(&tx.txid()).await,
+            Some(block_hash)
+        );
     }
 
     #[tokio::test]

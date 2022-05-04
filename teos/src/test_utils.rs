@@ -12,7 +12,7 @@ use std::convert::TryInto;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tokio::sync::{Notify};
+use tokio::sync::Notify;
 
 use jsonrpc_http_server::jsonrpc_core::error::ErrorCode as JsonRpcErrorCode;
 use jsonrpc_http_server::jsonrpc_core::{Error as JsonRpcError, IoHandler, Params, Value};
@@ -406,9 +406,7 @@ pub(crate) enum MockedServerQuery {
     Error(i64),
 }
 
-pub(crate) fn start_bitcoind(
-    query: MockedServerQuery,
-) -> BitcoindClient {
+pub(crate) fn start_bitcoind(query: MockedServerQuery) -> BitcoindClient {
     // Create a new bitcoind client/server
     let bitcoind_mock = match query {
         MockedServerQuery::Regular => BitcoindMock::new(MockOptions::empty()),
@@ -440,7 +438,7 @@ pub(crate) fn reset_carrier(
 pub(crate) fn create_carrier(
     query: MockedServerQuery,
     height: u32,
-    bitcoind_reachable: Arc<(Mutex<bool>, Notify)>
+    bitcoind_reachable: Arc<(Mutex<bool>, Notify)>,
 ) -> Carrier {
     let bitcoin_cli = start_bitcoind(query);
     Carrier::new(bitcoin_cli, bitcoind_reachable, height)
