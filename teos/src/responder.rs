@@ -567,13 +567,15 @@ mod tests {
     use std::ops::Deref;
     use std::sync::{Arc, Mutex};
 
+    use teos_common::test_utils::get_random_user_id;
+
     use crate::dbm::{Error as DBError, DBM};
     use crate::gatekeeper::UserInfo;
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, generate_dummy_appointment_with_user, generate_uuid, get_random_breach,
-        get_random_tracker, get_random_tx, get_random_user_id, store_appointment_and_fks_to_db,
-        Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        get_random_tracker, get_random_tx, store_appointment_and_fks_to_db, Blockchain,
+        MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
 
     impl PartialEq for Responder {

@@ -123,9 +123,9 @@ pub(crate) fn compute_appointment_slots(blob_size: usize, blob_max_size: usize) 
 mod tests {
     use super::*;
 
-    use crate::test_utils::get_random_user_id;
     use teos_common::appointment::Appointment;
     use teos_common::cryptography::get_random_bytes;
+    use teos_common::test_utils::get_random_user_id;
 
     #[test]
     fn test_get_summary() {

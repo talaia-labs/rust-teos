@@ -377,16 +377,19 @@ mod tests_private_api {
     use std::collections::HashSet;
     use std::iter::FromIterator;
 
+    use bitcoin::hashes::Hash;
+    use bitcoin::Txid;
+
     use crate::extended_appointment::UUID;
     use crate::responder::{ConfirmationStatus, TransactionTracker};
     use crate::test_utils::{
-        create_api, generate_dummy_appointment, generate_uuid, get_random_tx, get_random_user_id,
-        DURATION, SLOTS, START_HEIGHT,
+        create_api, generate_dummy_appointment, generate_uuid, get_random_tx, DURATION, SLOTS,
+        START_HEIGHT,
     };
     use crate::watcher::Breach;
-    use bitcoin::hashes::Hash;
-    use bitcoin::Txid;
+
     use teos_common::cryptography::{self, get_random_keypair};
+    use teos_common::test_utils::get_random_user_id;
 
     #[tokio::test]
     async fn test_get_all_appointments() {

@@ -220,9 +220,8 @@ mod tests {
     use super::*;
     use std::thread;
 
-    use crate::test_utils::{
-        get_random_tx, start_server, BitcoindMock, MockOptions, START_HEIGHT, TX_HEX,
-    };
+    use crate::test_utils::{get_random_tx, start_server, BitcoindMock, MockOptions, START_HEIGHT};
+    use teos_common::test_utils::TX_HEX;
 
     use bitcoin::consensus;
     use bitcoin::hashes::hex::FromHex;

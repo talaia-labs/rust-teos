@@ -12,6 +12,7 @@ pub mod cryptography;
 pub mod errors;
 pub mod receipts;
 pub mod ser;
+pub mod test_utils;
 
 use std::fmt;
 use std::{convert::TryFrom, str::FromStr};

@@ -414,10 +414,10 @@ mod test_helpers {
 
 #[cfg(test)]
 mod tests_failures {
+    use super::test_helpers::{check_api_error, run_tower_in_background, RequestBody};
     use super::*;
 
-    use super::test_helpers::{check_api_error, run_tower_in_background, RequestBody};
-    use crate::test_utils::get_random_user_id;
+    use teos_common::test_utils::get_random_user_id;
 
     #[tokio::test]
     async fn test_no_json_request_body() {
@@ -622,16 +622,16 @@ mod tests_failures {
 
 #[cfg(test)]
 mod tests_methods {
-    use super::*;
-
     use super::test_helpers::{
         check_api_error, request_to_api, run_tower_in_background,
         run_tower_in_background_with_config, RequestBody,
     };
+    use super::*;
+
     use crate::extended_appointment::UUID;
-    use crate::test_utils::{
-        generate_dummy_appointment, get_random_user_id, ApiConfig, DURATION, SLOTS,
-    };
+    use crate::test_utils::{generate_dummy_appointment, ApiConfig, DURATION, SLOTS};
+
+    use teos_common::test_utils::get_random_user_id;
     use teos_common::{cryptography, UserId};
 
     #[tokio::test]

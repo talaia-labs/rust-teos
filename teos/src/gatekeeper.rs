@@ -333,10 +333,11 @@ impl chain::Listen for Gatekeeper {
 mod tests {
     use super::*;
 
+    use teos_common::test_utils::get_random_user_id;
+
     use crate::dbm::Error as DBError;
     use crate::test_utils::{
-        generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_user_id, Blockchain,
+        generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid, Blockchain,
     };
     use lightning::chain::Listen;
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};

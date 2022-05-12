@@ -617,13 +617,15 @@ impl DBM {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::iter::FromIterator;
+
+    use teos_common::cryptography::get_random_bytes;
+    use teos_common::test_utils::get_random_user_id;
 
     use crate::test_utils::{
         generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_tracker, get_random_tx, get_random_user_id,
+        get_random_tracker, get_random_tx,
     };
-    use std::iter::FromIterator;
-    use teos_common::cryptography::get_random_bytes;
 
     impl DBM {
         pub(crate) fn in_memory() -> Result<Self, SqliteError> {
