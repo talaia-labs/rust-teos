@@ -67,6 +67,28 @@ For regtest, it should look like:
 btc_network = regtest
 ```
 
+### Running TEOS with tor
+
+This requires a tor deamon running on the same machine as teos and a control port open on that deamon.
+
+Download tor from the torproject site here: [torproject](https://www.torproject.org/download/)
+
+To open tor's control port, follow the instructions here on how to update the configuration file [tor conf](https://2019.www.torproject.org/docs/faq.html.en#torrc)
+
+Add the following lines to the file:
+```
+## The port on which Tor will listen for local connections from Tor
+## controller applications, as documented in control-spec.txt.
+ControlPort 9051
+
+## If you enable the controlport, be sure to enable one of these
+## authentication methods, to prevent attackers from accessing it.
+CookieAuthentication 1
+CookieAuthFileGroupReadable 1
+```
+
+Once the tor deamon is running, and the control port is open, make sure to change `tor_support` flag to true in teos conf.
+
 ### Tower id and signing key
 
 `teos` needs a pair of keys that will serve as tower id and signing key. The former can be used by users to identify the tower, whereas the latter is used by the tower to sign responses. These keys are automatically generated on the first run, and can be refreshed by running `teos` with the `--overwritekey` flag. Notice that once a key is overwritten you won't be able to use the previous key again*.
