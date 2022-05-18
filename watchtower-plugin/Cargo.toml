@@ -21,10 +21,10 @@ tokio = { version = "1.5", features = [ "rt-multi-thread", "fs" ] }
 
 # Bitcoin and Lightning
 bitcoin = "0.27"
+cln-plugin = "0.1.0"
 
 # Local
 teos-common = { path = "../teos-common" }
-cln-plugin = { path = "../../lightning/plugins" }
 
 [dev-dependencies]
 httpmock = "0.6"

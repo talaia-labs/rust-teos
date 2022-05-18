@@ -368,6 +368,9 @@ async fn main() -> Result<(), Error> {
     )
     .hook("commitment_revocation", on_commitment_revocation);
 
-    let plugin = builder.start().await.unwrap();
-    plugin.join().await
+    if let Some(plugin) = builder.start().await? {
+        plugin.join().await
+    } else {
+        Ok(())
+    }
 }
