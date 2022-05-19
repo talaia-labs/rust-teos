@@ -114,8 +114,11 @@ To run `teos-cli` remotely, you'll need to take one extra step. When `teosd` is 
 The files are generated to the data directory (by default stored at `~/.teos`). To run remotely, users need to copy the `client.pem`, `client-key.pem`, and `ca.pem` files to the corresponding watchtower data directory on the machine where the CLI is being run.
 
 ## Interacting with TEOS as a client
+## TEOS clients
 
-FIXME: Add client and docs
+Here is a list of the available clients for `teos`:
+
+- [watchtower-plugin for CLN](watchtower-plugin/)
 
 ## Contributing 
 Refer to [CONTRIBUTING.md](CONTRIBUTING.md)
