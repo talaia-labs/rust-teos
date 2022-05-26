@@ -68,11 +68,12 @@ async fn register(
     log::info!("Registering in the Eye of Satoshi (tower_id={})", tower_id);
 
     let receipt = process_post_response(
-        post_request(reqwest::Client::new().post(register_endpoint).json(
+        post_request(
+            &register_endpoint,
             &common_msgs::RegisterRequest {
                 user_id: user_id.to_vec(),
             },
-        ))
+        )
         .await,
     )
     .await
@@ -140,12 +141,13 @@ async fn get_appointment(
     .unwrap();
 
     let response: ApiResponse<common_msgs::GetAppointmentResponse> = process_post_response(
-        post_request(reqwest::Client::new().post(get_appointment_endpoint).json(
+        post_request(
+            &get_appointment_endpoint,
             &common_msgs::GetAppointmentRequest {
                 locator: params.locator.to_vec(),
                 signature,
             },
-        ))
+        )
         .await,
     )
     .await

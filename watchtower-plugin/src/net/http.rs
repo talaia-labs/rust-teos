@@ -1,4 +1,4 @@
-use reqwest::{RequestBuilder, Response};
+use reqwest::Response;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use teos_common::appointment::Appointment;
@@ -87,9 +87,8 @@ pub async fn send_appointment(
 
     match process_post_response(
         post_request(
-            reqwest::Client::new()
-                .post(format!("{}/add_appointment", tower_net_addr))
-                .json(&request_data),
+            &format!("{}/add_appointment", tower_net_addr),
+            &request_data,
         )
         .await,
     )
@@ -119,15 +118,22 @@ pub async fn send_appointment(
 }
 
 /// Generic function to post different types of requests to the tower.
-pub async fn post_request(builder: RequestBuilder) -> Result<Response, RequestError> {
-    builder.send().await.map_err(|e| {
-        log::error!("{}", e);
-        if e.is_connect() | e.is_timeout() {
-            RequestError::ConnectionError("Cannot connect to the tower. Connection refused".into())
-        } else {
-            RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".into())
-        }
-    })
+pub async fn post_request<S: Serialize>(endpoint: &str, data: S) -> Result<Response, RequestError> {
+    reqwest::Client::new()
+        .post(endpoint)
+        .json(&data)
+        .send()
+        .await
+        .map_err(|e| {
+            log::error!("{}", e);
+            if e.is_connect() | e.is_timeout() {
+                RequestError::ConnectionError(
+                    "Cannot connect to the tower. Connection refused".into(),
+                )
+            } else {
+                RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".into())
+            }
+        })
 }
 
 /// Generic function to process the response of a given post request.
@@ -402,8 +408,10 @@ mod tests {
             when.method(POST);
             then.status(200).header("content-type", "application/json");
         });
-        let builder = reqwest::Client::new().post(&format!("http://{}", server.address()));
-        let response = post_request(builder).await.unwrap();
+
+        let response = post_request(&format!("http://{}", server.address()), json!(""))
+            .await
+            .unwrap();
 
         api_mock.assert();
         assert!(matches!(response, Response { .. }));
@@ -412,10 +420,11 @@ mod tests {
     #[tokio::test]
     async fn test_post_request_connection_error() {
         let unreachable_server_url = "http://server_addr";
-        let builder = reqwest::Client::new().post(unreachable_server_url);
 
         assert!(matches!(
-            post_request(builder).await.unwrap_err(),
+            post_request(unreachable_server_url, json!(""))
+                .await
+                .unwrap_err(),
             RequestError::ConnectionError { .. }
         ));
     }
@@ -423,10 +432,11 @@ mod tests {
     #[tokio::test]
     async fn test_post_request_unexpected_error() {
         let malformed_server_url = "server_addr";
-        let builder = reqwest::Client::new().post(malformed_server_url);
 
         assert!(matches!(
-            post_request(builder).await.unwrap_err(),
+            post_request(malformed_server_url, json!(""))
+                .await
+                .unwrap_err(),
             RequestError::Unexpected { .. }
         ));
     }
@@ -440,11 +450,10 @@ mod tests {
             when.method(POST);
             then.status(200).header("content-type", "application/json");
         });
-        let builder = reqwest::Client::new().post(&format!("http://{}", server.address()));
 
         // Any expected response work here as long as it cannot be properly deserialized
         let error = process_post_response::<ApiResponse<common_msgs::GetAppointmentResponse>>(
-            post_request(builder).await,
+            post_request(&format!("http://{}", server.address()), json!("")).await,
         )
         .await
         .unwrap_err();
