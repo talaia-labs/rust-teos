@@ -155,7 +155,8 @@ async fn main() {
     );
     let mut derefed = bitcoin_cli.deref();
     // Load last known block from DB if found. Poll it from Bitcoind otherwise.
-    let tip = if let Ok(block_hash) = dbm.lock().unwrap().load_last_known_block() {
+    let last_known_block = dbm.lock().unwrap().load_last_known_block();
+    let tip = if let Ok(block_hash) = last_known_block {
         derefed
             .get_header(&block_hash, None)
             .await
