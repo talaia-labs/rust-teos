@@ -1,7 +1,8 @@
 use serde_json::to_string_pretty as pretty_json;
-use std::fs;
 use std::str::FromStr;
 use structopt::StructOpt;
+use tokio::fs;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use tonic::Request;
 
 use teos::cli_config::{Command, Config, Opt};
@@ -17,7 +18,7 @@ async fn main() {
     let path = config::data_dir_absolute_path(opt.data_dir.clone());
 
     // Create data dir if it does not exist
-    fs::create_dir_all(&path).unwrap_or_else(|e| {
+    fs::create_dir_all(&path).await.unwrap_or_else(|e| {
         eprintln!("Cannot create data dir: {:?}", e);
         std::process::exit(1);
     });
@@ -28,17 +29,38 @@ async fn main() {
     let mut conf = config::from_file::<Config>(path.join("teos.toml"));
     conf.patch_with_options(opt);
 
-    // Create gRPC client and send request
-    let mut client =
-        PrivateTowerServicesClient::connect(format!("http://{}:{}", conf.rpc_bind, conf.rpc_port))
+    let key = fs::read(&path.join("client-key.pem"))
+        .await
+        .expect("unable to read client key from disk");
+    let certificate = fs::read(path.join("client.pem"))
+        .await
+        .expect("unable to read client cert from disk");
+    let ca_cert = Certificate::from_pem(
+        fs::read(path.join("ca.pem"))
             .await
-            .unwrap_or_else(|e| {
-                eprintln!("Cannot connect to the tower. Connection refused");
-                if conf.debug {
-                    eprintln!("{:?}", e);
-                }
-                std::process::exit(1);
-            });
+            .expect("unable to read ca cert from disk"),
+    );
+
+    let tls = ClientTlsConfig::new()
+        .domain_name("localhost")
+        .ca_certificate(ca_cert)
+        .identity(Identity::from_pem(certificate, key));
+
+    let channel = Channel::from_shared(format!("http://{}:{}", conf.rpc_bind, conf.rpc_port))
+        .expect("Cannot create channel from endpoint")
+        .tls_config(tls)
+        .unwrap_or_else(|e| {
+            eprintln!("Could not configure tls: {:?}", e);
+            std::process::exit(1);
+        })
+        .connect()
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("Could not connect to tower: {:?}", e);
+            std::process::exit(1);
+        });
+
+    let mut client = PrivateTowerServicesClient::new(channel);
 
     match command {
         Command::GetAllAppointments => {
