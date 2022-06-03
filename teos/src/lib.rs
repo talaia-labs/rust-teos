@@ -19,6 +19,7 @@ pub mod gatekeeper;
 pub mod responder;
 #[doc(hidden)]
 mod rpc_errors;
+pub mod tls;
 pub mod watcher;
 
 #[cfg(test)]
