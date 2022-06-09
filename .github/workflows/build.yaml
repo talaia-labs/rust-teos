@@ -9,6 +9,9 @@ jobs:
       matrix:
         platform: [ ubuntu-latest, macos-latest, windows-latest ]
         toolchain: [ stable ]
+        include:
+           - platform: windows-latest
+             arguments: --workspace --exclude watchtower-plugin
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -22,10 +25,10 @@ jobs:
           profile: minimal
       - name: Build on Rust ${{ matrix.toolchain }}
         run: |
-          cargo build --verbose --color always
+          cargo build ${{ matrix.arguments }} --verbose --color always
       - name: Test on Rust ${{ matrix.toolchain }}
         run: |
-          cargo test --verbose --color always
+          cargo test ${{ matrix.arguments }} --verbose --color always
 
   lint:
     runs-on: ubuntu-latest
