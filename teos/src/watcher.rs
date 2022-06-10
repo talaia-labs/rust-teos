@@ -269,7 +269,7 @@ impl Watcher {
     ) -> Self {
         let mut appointments = HashMap::new();
         let mut locator_uuid_map: HashMap<Locator, HashSet<UUID>> = HashMap::new();
-        for (uuid, appointment) in dbm.lock().unwrap().load_all_appointments() {
+        for (uuid, appointment) in dbm.lock().unwrap().load_appointments(None) {
             appointments.insert(uuid, appointment.get_summary());
 
             if let Some(map) = locator_uuid_map.get_mut(&appointment.locator()) {
@@ -702,12 +702,28 @@ impl Watcher {
 
     /// Gets all the appointments stored in the [Watcher] (from the database).
     pub(crate) fn get_all_watcher_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
-        self.dbm.lock().unwrap().load_all_appointments()
+        self.dbm.lock().unwrap().load_appointments(None)
+    }
+
+    /// Gets all the appointments matching a specific locator from the [Watcher] (from the database).
+    pub(crate) fn get_watcher_appointments_with_locator(
+        &self,
+        locator: Locator,
+    ) -> HashMap<UUID, ExtendedAppointment> {
+        self.dbm.lock().unwrap().load_appointments(Some(locator))
     }
 
     /// Gets all the trackers stored in the [Responder] (from the database).
     pub(crate) fn get_all_responder_trackers(&self) -> HashMap<UUID, TransactionTracker> {
-        self.dbm.lock().unwrap().load_all_trackers()
+        self.dbm.lock().unwrap().load_trackers(None)
+    }
+
+    /// Gets all the trackers matching s specific locator from the [Responder] (from the database).
+    pub(crate) fn get_responder_trackers_with_locator(
+        &self,
+        locator: Locator,
+    ) -> HashMap<UUID, TransactionTracker> {
+        self.dbm.lock().unwrap().load_trackers(Some(locator))
     }
 
     /// Gets the list of all registered user ids.
@@ -896,10 +912,18 @@ mod tests {
     impl Eq for Watcher {}
 
     impl Watcher {
-        pub(crate) fn add_random_tracker_to_responder(&self, uuid: UUID) {
+        pub(crate) fn add_dummy_tracker_to_responder(
+            &self,
+            uuid: UUID,
+            tracker: &TransactionTracker,
+        ) {
+            self.responder.add_dummy_tracker(uuid, tracker)
+        }
+
+        pub(crate) fn add_random_tracker_to_responder(&self, uuid: UUID) -> TransactionTracker {
             // The confirmation status can be whatever here. Using the most common.
             self.responder
-                .add_random_tracker(uuid, ConfirmationStatus::ConfirmedIn(100));
+                .add_random_tracker(uuid, ConfirmationStatus::ConfirmedIn(100))
         }
     }
 

@@ -246,6 +246,49 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         }))
     }
 
+    /// Get appointments endpoint. Gets the appointments with a specific locator. Part of the private API.
+    /// Internally calls [Watcher::get_watcher_appointments_using_locator] and [Watcher::get_responder_trackers_using_locator].
+    async fn get_appointments(
+        &self,
+        request: tonic::Request<msgs::GetAppointmentsRequest>,
+    ) -> Result<tonic::Response<msgs::GetAppointmentsResponse>, Status> {
+        let mut matching_appointments = vec![];
+        let locator = Locator::deserialize(&request.into_inner().locator).map_err(|_| {
+            Status::new(
+                Code::InvalidArgument,
+                "The provided locator does not match the expected format (16-byte hexadecimal string)",
+            )
+        })?;
+
+        for (_, appointment) in self
+            .watcher
+            .get_watcher_appointments_with_locator(locator)
+            .into_iter()
+        {
+            matching_appointments.push(msgs::AppointmentData {
+                appointment_data: Some(msgs::appointment_data::AppointmentData::Appointment(
+                    appointment.inner.into(),
+                )),
+            })
+        }
+
+        for (_, tracker) in self
+            .watcher
+            .get_responder_trackers_with_locator(locator)
+            .into_iter()
+        {
+            matching_appointments.push(msgs::AppointmentData {
+                appointment_data: Some(msgs::appointment_data::AppointmentData::Tracker(
+                    tracker.into(),
+                )),
+            })
+        }
+
+        Ok(Response::new(msgs::GetAppointmentsResponse {
+            appointments: matching_appointments,
+        }))
+    }
+
     /// Get tower info endpoint. Gets information about the tower state. Part of the private API.
     /// Internally calls [Watcher::get_registered_users_count], [Watcher::get_appointments_count]
     /// and [Watcher::get_trackers_count].
@@ -329,9 +372,14 @@ mod tests_private_api {
     use std::iter::FromIterator;
 
     use crate::extended_appointment::UUID;
+    use crate::responder::{ConfirmationStatus, TransactionTracker};
     use crate::test_utils::{
-        create_api, generate_dummy_appointment, DURATION, SLOTS, START_HEIGHT,
+        create_api, generate_dummy_appointment, generate_uuid, get_random_tx, get_random_user_id,
+        DURATION, SLOTS, START_HEIGHT,
     };
+    use crate::watcher::Breach;
+    use bitcoin::hashes::Hash;
+    use bitcoin::Txid;
     use teos_common::cryptography::{self, get_random_keypair};
 
     #[tokio::test]
@@ -380,14 +428,9 @@ mod tests_private_api {
         let internal_api = create_api().await;
 
         // Add data to the Responser so we can retrieve it later on
-        let (_, user_pk) = get_random_keypair();
-        let user_id = UserId(user_pk);
-        internal_api.watcher.register(user_id).unwrap();
-
-        let appointment = generate_dummy_appointment(None).inner;
         internal_api
             .watcher
-            .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
+            .add_random_tracker_to_responder(generate_uuid());
 
         let response = internal_api
             .get_all_appointments(Request::new(()))
@@ -400,6 +443,121 @@ mod tests_private_api {
             response.appointments[0].appointment_data,
             Some(msgs::appointment_data::AppointmentData::Tracker { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn test_get_appointments() {
+        let internal_api = create_api().await;
+
+        let locator = Locator::new(get_random_tx().txid()).serialize();
+        let response = internal_api
+            .get_appointments(Request::new(msgs::GetAppointmentsRequest { locator }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(matches!(response, msgs::GetAppointmentsResponse { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_get_appointments_watcher() {
+        let internal_api = create_api().await;
+
+        for i in 0..3 {
+            // Create a dispute tx to be used for creating different dummy appointments with the same locator.
+            let dispute_txid = get_random_tx().txid();
+
+            // The number of different appointments to create for this dispute tx.
+            let appointments_to_create = 4 * i + 7;
+
+            // Add that many appointments to the watcher.
+            for _ in 0..appointments_to_create {
+                let (user_sk, user_pk) = get_random_keypair();
+                internal_api.watcher.register(UserId(user_pk)).unwrap();
+                let appointment = generate_dummy_appointment(Some(&dispute_txid)).inner;
+                let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+                internal_api
+                    .watcher
+                    .add_appointment(appointment, signature)
+                    .unwrap();
+            }
+
+            let locator = Locator::new(dispute_txid);
+
+            // Query for the current locator and assert it retrieves correct appointments.
+            let response = internal_api
+                .get_appointments(Request::new(msgs::GetAppointmentsRequest {
+                    locator: locator.serialize(),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+
+            // The response should contain `appointments_to_create` appointments, all having the locator of the current iteration.
+            assert_eq!(response.appointments.len(), appointments_to_create);
+            for app_data in response.appointments {
+                assert!(matches!(
+                    app_data.appointment_data,
+                    Some(msgs::appointment_data::AppointmentData::Appointment(
+                        msgs::Appointment {
+                            locator: ref app_loc,
+                            ..
+                        }
+                    )) if Locator::deserialize(app_loc).unwrap() == locator
+                ));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_appointments_responder() {
+        let internal_api = create_api().await;
+
+        for i in 0..3 {
+            // Create a dispute tx to be used for creating different trackers.
+            let dispute_tx = get_random_tx();
+            let breach = Breach::new(dispute_tx.clone(), get_random_tx());
+
+            // The number of different trackers to create for this dispute tx.
+            let trackers_to_create = 4 * i + 7;
+
+            // Add that many trackers to the responder.
+            for _ in 0..trackers_to_create {
+                let tracker = TransactionTracker::new(
+                    breach.clone(),
+                    get_random_user_id(),
+                    ConfirmationStatus::ConfirmedIn(100),
+                );
+                internal_api
+                    .watcher
+                    .add_dummy_tracker_to_responder(generate_uuid(), &tracker);
+            }
+
+            let locator = Locator::new(dispute_tx.txid());
+
+            // Query for the current locator and assert it retrieves correct trackers.
+            let response = internal_api
+                .get_appointments(Request::new(msgs::GetAppointmentsRequest {
+                    locator: locator.serialize(),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+
+            // The response should contain `trackers_to_create` trackers, all with dispute txid that matches with the locator of the current iteration.
+            assert_eq!(response.appointments.len(), trackers_to_create);
+            for app_data in response.appointments {
+                assert!(matches!(
+                    app_data.appointment_data,
+                    Some(msgs::appointment_data::AppointmentData::Tracker(
+                        msgs::Tracker {
+                            ref dispute_txid,
+                            ..
+                        }
+                    )) if Locator::new(Txid::from_slice(dispute_txid).unwrap()) == locator
+                ));
+            }
+        }
     }
 
     #[tokio::test]
@@ -439,10 +597,9 @@ mod tests_private_api {
 
         // And the Responder
         for _ in 0..3 {
-            let appointment = generate_dummy_appointment(None).inner;
             internal_api
                 .watcher
-                .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
+                .add_random_tracker_to_responder(generate_uuid());
         }
 
         let response = internal_api

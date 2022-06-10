@@ -8,6 +8,8 @@ use structopt::StructOpt;
 pub enum Command {
     /// Gets information about all appointments stored in the tower
     GetAllAppointments,
+    /// Gets information about specific appointments stored in the tower using a locator
+    GetAppointments(GetAppointmentsData),
     /// Gets generic information about the tower, like tower id and aggregate data on users and appointments
     GetTowerInfo,
     /// Gets an array with the user ids of all the users registered to the tower
@@ -23,6 +25,12 @@ pub enum Command {
 pub struct GetUserData {
     /// The user identifier (33-byte compressed public key).
     pub user_id: String,
+}
+
+#[derive(Debug, StructOpt, Clone)]
+pub struct GetAppointmentsData {
+    /// The locator of the appointments (16-byte hexadecimal string).
+    pub locator: String,
 }
 
 /// Holds all the command line options and commands.

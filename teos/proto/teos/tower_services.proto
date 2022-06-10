@@ -28,6 +28,7 @@ service PrivateTowerServices {
   // Private tower services, only reachable from the private API.
 
   rpc get_all_appointments(google.protobuf.Empty) returns (GetAllAppointmentsResponse) {}
+  rpc get_appointments(GetAppointmentsRequest) returns (GetAppointmentsResponse) {}
   rpc get_tower_info(google.protobuf.Empty) returns (GetTowerInfoResponse) {}
   rpc get_users(google.protobuf.Empty) returns (GetUsersResponse) {}
   rpc get_user(GetUserRequest) returns (GetUserResponse) {}
