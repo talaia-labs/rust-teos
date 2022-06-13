@@ -107,6 +107,12 @@ For help on the available arguments and commands, you can run:
 teos-cli -h
 ```
 
+### Running teos-cli remotely
+
+To run `teos-cli` remotely, you'll need to take one extra step. When `teosd` is started up, self-signed certificates are automatically generated for a user to make a secure connection to the TEOS watchtower. When the CLI is run locally, it knows where to find these files. But if run remotely, these files need to be copied over to the machine where the CLI is being run.
+
+The files are generated to the data directory (by default stored at `~/.teos`). To run remotely, users need to copy the `client.pem`, `client-key.pem`, and `ca.pem` files to the corresponding watchtower data directory on the machine where the CLI is being run.
+
 ## Interacting with TEOS as a client
 
 FIXME: Add client and docs
