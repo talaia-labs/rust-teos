@@ -15,9 +15,50 @@ where
     seq.end()
 }
 
-pub mod serde_status {
+pub mod serde_be {
+    use super::*;
     use serde::de::{self, Deserializer};
-    use serde::ser::Serializer;
+
+    pub fn serialize<S>(v: &[u8], s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut v = v.to_owned();
+        v.reverse();
+        hex::serialize(v, s)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BEVisitor;
+
+        impl<'de> de::Visitor<'de> for BEVisitor {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a hex encoded string")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                let mut v =
+                    hex::decode(v).map_err(|_| E::custom("cannot deserialize the given value"))?;
+                v.reverse();
+                Ok(v)
+            }
+        }
+
+        deserializer.deserialize_any(BEVisitor)
+    }
+}
+
+pub mod serde_status {
+    use super::*;
+    use serde::de::{self, Deserializer};
     use std::str::FromStr;
 
     use crate::appointment::AppointmentStatus;
