@@ -285,9 +285,12 @@ impl Responder {
 
         for (uuid, tracker) in self.trackers.lock().unwrap().iter_mut() {
             if let ConfirmationStatus::ConfirmedIn(h) = tracker.status {
-                if current_height - h == constants::IRREVOCABLY_RESOLVED {
+                let confirmations = current_height - h;
+                if confirmations == constants::IRREVOCABLY_RESOLVED {
                     // Tracker is deep enough in the chain, it can be deleted
                     completed_trackers.insert(*uuid);
+                } else {
+                    log::info!("{} received a confirmation (count={})", uuid, confirmations);
                 }
             } else if txids.contains(&tracker.penalty_txid) {
                 // First confirmation was received
