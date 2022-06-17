@@ -23,20 +23,12 @@ pub fn from_file<T: Default + serde::de::DeserializeOwned>(path: PathBuf) -> T {
     match std::fs::read(&path) {
         Ok(file_content) => toml::from_slice::<T>(&file_content).map_or_else(
             |e| {
-                println!("Couldn't parse config file: {}", e);
-                println!("Loading default configuration");
+                eprintln!("Couldn't parse config file: {}", e);
                 T::default()
             },
-            |config| {
-                println!("Loading configuration from file");
-                config
-            },
+            |config| config,
         ),
-        Err(e) => {
-            println!("Couldn't read config file: {}", e);
-            println!("Loading default configuration");
-            T::default()
-        }
+        Err(_) => T::default(),
     }
 }
 
@@ -240,6 +232,11 @@ impl Config {
                 self.btc_network)))
             }
         }
+    }
+
+    /// Checks whether the config has been set with only with default values.
+    pub fn is_default(&self) -> bool {
+        self == &Config::default()
     }
 }
 

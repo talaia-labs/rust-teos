@@ -75,6 +75,7 @@ async fn main() {
 
     // Load conf (from file or defaults) and patch it with the command line parameters received (if any)
     let mut conf = config::from_file::<Config>(path.join("teos.toml"));
+    let is_default = conf.is_default();
     conf.patch_with_options(opt);
     conf.verify().unwrap_or_else(|e| {
         eprintln!("{}", e);
@@ -86,6 +87,12 @@ async fn main() {
         init_with_level(log::Level::Debug).unwrap()
     } else {
         init_with_level(log::Level::Info).unwrap()
+    }
+
+    if is_default {
+        log::info!("Loading default configuration")
+    } else {
+        log::info!("Loading configuration from file")
     }
 
     // Create network dir
