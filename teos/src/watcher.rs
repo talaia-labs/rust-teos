@@ -532,7 +532,7 @@ impl Watcher {
             self.responder
                 .get_tracker(uuid)
                 .map(AppointmentInfo::Tracker)
-                .ok_or({
+                .ok_or_else(|| {
                     log::info!("Cannot find {}", locator);
                     GetAppointmentFailure::NotFound
                 })
