@@ -20,8 +20,8 @@ rand = "0.8.4"
 chacha20poly1305 = "0.8.0"
 
 # Bitcoin and Lightning
-bitcoin = { version = "0.27", features = [ "use-serde" ] }
-lightning = "0.0.105"
+bitcoin = { version = "0.28.0", features = [ "use-serde" ] }
+lightning = "0.0.108"
 
 [build-dependencies]
 tonic-build = "0.6"

@@ -34,11 +34,11 @@ warp = "0.3.2"
 torut = "0.2.1"
 
 # Bitcoin and Lightning
-bitcoin = { version = "0.27", features = [ "base64" ] }
-bitcoincore-rpc = "0.14.0"
-lightning = "0.0.105"
-lightning-net-tokio = "0.0.105"
-lightning-block-sync = { version = "0.0.105", features = [ "rpc-client" ] }
+bitcoin = { version = "0.28.0", features = [ "base64" ] }
+bitcoincore-rpc = "0.15.0"
+lightning = "0.0.108"
+lightning-net-tokio = "0.0.108"
+lightning-block-sync = { version = "0.0.108", features = [ "rpc-client" ] }
 
 # Local
 teos-common = { path = "../teos-common" }

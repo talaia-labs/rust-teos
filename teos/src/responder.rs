@@ -499,11 +499,7 @@ impl chain::Listen for Responder {
         if self.trackers.lock().unwrap().len() > 0 {
             // Complete those appointments that are due at this height
             let completed_trackers = self.check_confirmations(
-                &block
-                    .txdata
-                    .iter()
-                    .map(|tx| tx.txid())
-                    .collect::<Vec<Txid>>(),
+                &txdata.iter().map(|(_, tx)| tx.txid()).collect::<Vec<_>>(),
                 height,
             );
             let trackers_to_delete_gk = completed_trackers
@@ -559,6 +555,10 @@ impl chain::Listen for Responder {
                 tracker.status = ConfirmationStatus::ReorgedOut;
             }
         }
+    }
+
+    fn filtered_block_connected(&self, header: &BlockHeader, txdata: &chain::transaction::TransactionData, height: u32) {
+        
     }
 }
 
