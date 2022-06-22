@@ -17,6 +17,7 @@ pub async fn manage_retry(
     mut unreachable_towers: UnboundedReceiver<TowerId>,
     wt_client: Arc<Mutex<WTClient>>,
     max_elapsed_time_secs: u16,
+    max_interval_time_secs: u16,
 ) {
     log::info!("Starting retry manager");
 
@@ -31,6 +32,7 @@ pub async fn manage_retry(
         match retry_notify(
             ExponentialBackoff {
                 max_elapsed_time: Some(Duration::from_secs(max_elapsed_time_secs as u64)),
+                max_interval: Duration::from_secs(max_interval_time_secs as u64),
                 ..ExponentialBackoff::default()
             },
             || async { retry_add_appointment(tower_id, wt_client.clone()).await },
@@ -219,8 +221,10 @@ mod tests {
         // Start the task and send the tower to the channel for retry
         let wt_client_clone = wt_client.clone();
         let max_elapsed_time = 2;
-        let task =
-            tokio::spawn(async move { manage_retry(rx, wt_client_clone, max_elapsed_time).await });
+        let max_interval_time = 1;
+        let task = tokio::spawn(async move {
+            manage_retry(rx, wt_client_clone, max_elapsed_time, max_interval_time).await
+        });
         tx.send(tower_id).unwrap();
 
         // Wait for the elapsed time and check how the tower status changed
@@ -276,8 +280,10 @@ mod tests {
         // Start the task and send the tower to the channel for retry
         let wt_client_clone = wt_client.clone();
         let max_elapsed_time = 3;
-        let task =
-            tokio::spawn(async move { manage_retry(rx, wt_client_clone, max_elapsed_time).await });
+        let max_interval_time = 1;
+        let task = tokio::spawn(async move {
+            manage_retry(rx, wt_client_clone, max_elapsed_time, max_interval_time).await
+        });
         tx.send(tower_id).unwrap();
 
         // Wait for the elapsed time and check how the tower status changed
@@ -347,8 +353,10 @@ mod tests {
         // Start the task and send the tower to the channel for retry
         let wt_client_clone = wt_client.clone();
         let max_elapsed_time = 2;
-        let task =
-            tokio::spawn(async move { manage_retry(rx, wt_client_clone, max_elapsed_time).await });
+        let max_interval_time = 1;
+        let task = tokio::spawn(async move {
+            manage_retry(rx, wt_client_clone, max_elapsed_time, max_interval_time).await
+        });
         tx.send(tower_id).unwrap();
 
         // Wait for the elapsed time and check how the tower status changed
@@ -427,8 +435,10 @@ mod tests {
         // Start the task and send the tower to the channel for retry
         let wt_client_clone = wt_client.clone();
         let max_elapsed_time = 2;
-        let task =
-            tokio::spawn(async move { manage_retry(rx, wt_client_clone, max_elapsed_time).await });
+        let max_interval_time = 1;
+        let task = tokio::spawn(async move {
+            manage_retry(rx, wt_client_clone, max_elapsed_time, max_interval_time).await
+        });
         tx.send(tower_id).unwrap();
 
         // Wait for the elapsed time and check how the tower status changed
