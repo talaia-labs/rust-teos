@@ -1,8 +1,6 @@
 //! Logic related to appointments shared between users and the towers.
 
-use hex;
 use serde::{Deserialize, Serialize};
-
 use std::array::TryFromSliceError;
 use std::{convert::TryInto, fmt};
 

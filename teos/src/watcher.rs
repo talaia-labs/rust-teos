@@ -877,6 +877,10 @@ impl chain::Listen for Watcher {
         self.last_known_block_height
             .store(height - 1, Ordering::Release);
     }
+
+    fn filtered_block_connected(&self, header: &BlockHeader, txdata: &chain::transaction::TransactionData, height: u32) {
+        
+    }
 }
 
 #[cfg(test)]

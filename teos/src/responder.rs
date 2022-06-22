@@ -560,6 +560,14 @@ impl chain::Listen for Responder {
             }
         }
     }
+
+    fn filtered_block_connected(
+        &self,
+        header: &BlockHeader,
+        txdata: &chain::transaction::TransactionData,
+        height: u32,
+    ) {
+    }
 }
 
 #[cfg(test)]

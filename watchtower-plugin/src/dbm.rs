@@ -118,7 +118,7 @@ impl DBM {
     /// When a new key is generated, old keys are not overwritten but are not retrievable from the API either.
     pub fn store_client_key(&self, sk: &SecretKey) -> Result<(), Error> {
         let query = "INSERT INTO keys (key) VALUES (?)";
-        self.store_data(query, params![sk.to_string()])
+        self.store_data(query, params![sk.display_secret().to_string()])
     }
 
     /// Loads the last known client secret key from the database.
@@ -132,7 +132,6 @@ impl DBM {
                 "SELECT key FROM keys WHERE id = (SELECT seq FROM sqlite_sequence WHERE name=(?))",
             )
             .unwrap();
-
         stmt.query_row(["keys"], |row| {
             let sk: String = row.get(0).unwrap();
             Ok(SecretKey::from_str(&sk).unwrap())
@@ -600,6 +599,7 @@ impl DBM {
 mod tests {
     use super::*;
 
+    use teos_common::cryptography::get_random_keypair;
     use teos_common::test_utils::{
         generate_random_appointment, get_random_registration_receipt, get_random_user_id,
         get_registration_receipt_from_previous,
@@ -1176,5 +1176,17 @@ mod tests {
     fn test_exists_misbehaving_proof_false() {
         let dbm = DBM::in_memory().unwrap();
         assert!(!dbm.exists_misbehaving_proof(get_random_user_id()));
+    }
+
+    #[test]
+    fn test_store_load_client_key() {
+        let dbm = DBM::in_memory().unwrap();
+
+        assert!(matches!(dbm.load_client_key(), Err(Error::NotFound)));
+        for _ in 0..7 {
+            let sk = get_random_keypair().0;
+            dbm.store_client_key(&sk).unwrap();
+            assert_eq!(dbm.load_client_key().unwrap(), sk);
+        }
     }
 }

@@ -167,6 +167,10 @@ mod tests {
                 .borrow_mut()
                 .insert(header.block_hash());
         }
+
+        fn filtered_block_connected(&self, header: &bitcoin::BlockHeader, txdata: &chain::transaction::TransactionData, height: u32) {
+            
+        }
     }
 
     #[tokio::test]
