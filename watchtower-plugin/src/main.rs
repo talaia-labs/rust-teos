@@ -380,6 +380,11 @@ async fn main() -> Result<(), Error> {
             Value::Integer(900),
             "the time (in seconds) after where the retrier will give up trying to send data to a temporary unreachable tower",
         ))
+        .option(ConfigOption::new(
+            "dev-watchtower-max-retry-interval",
+            Value::Integer(60),
+            "the maximum time (in seconds) for a retrier wait interval",
+        ))
         .rpcmethod(
             "registertower",
             "Registers the client public key (user id) with the tower.",
@@ -413,7 +418,17 @@ async fn main() -> Result<(), Error> {
                 // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
                 900
             };
-        tokio::spawn(async move { retrier::manage_retry(rx, state_clone, max_elapsed_time).await });
+        let max_interval_time = if let Value::Integer(x) =
+            plugin.option("dev-watchtower-max-retry-interval").unwrap()
+        {
+            x as u16
+        } else {
+            // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
+            60
+        };
+        tokio::spawn(async move {
+            retrier::manage_retry(rx, state_clone, max_elapsed_time, max_interval_time).await
+        });
         plugin.join().await
     } else {
         Ok(())
