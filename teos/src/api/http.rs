@@ -2,6 +2,7 @@ use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 use std::convert::Infallible;
 use std::error::Error;
 use std::net::SocketAddr;
+use tokio::time::Duration;
 use tonic::transport::Channel;
 use triggered::Listener;
 use warp::{http::StatusCode, reject, reply, Filter, Rejection, Reply};
@@ -299,7 +300,15 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
 }
 
 pub async fn serve(http_bind: SocketAddr, grpc_bind: String, shutdown_signal: Listener) {
-    let grpc_conn = PublicTowerServicesClient::connect(grpc_bind).await.unwrap();
+    let grpc_conn = loop {
+        match PublicTowerServicesClient::connect(grpc_bind.clone()).await {
+            Ok(conn) => break conn,
+            Err(_) => {
+                log::error!("Cannot connect to the gRPC server. Retrying shortly");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    };
     let (_, server) = warp::serve(router(grpc_conn))
         .bind_with_graceful_shutdown(http_bind, async { shutdown_signal.await });
     server.await
