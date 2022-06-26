@@ -493,7 +493,30 @@ impl chain::Listen for Responder {
     /// data deletion is performed accordingly. Moreover, lack of confirmations is check for the tracked transactions and
     /// rebroadcasting is performed for those that have missed too many.
     fn block_connected(&self, block: &bitcoin::Block, height: u32) {
-        log::info!("New block received: {}", block.header.block_hash());
+        let txdata: Vec<_> = block.txdata.iter().enumerate().collect();
+        self.filtered_block_connected(&block.header, &txdata, height);
+    }
+
+    /// Handles reorgs in the [Responder].
+    fn block_disconnected(&self, header: &BlockHeader, height: u32) {
+        log::warn!("Block disconnected: {}", header.block_hash());
+        self.carrier.lock().unwrap().update_height(height);
+
+        for tracker in self.trackers.lock().unwrap().values_mut() {
+            // The transaction has been unconfirmed. Flag it as reorged out so we can rebroadcast it.
+            if tracker.status == ConfirmationStatus::ConfirmedIn(height) {
+                tracker.status = ConfirmationStatus::ReorgedOut;
+            }
+        }
+    }
+
+    fn filtered_block_connected(
+        &self,
+        header: &BlockHeader,
+        txdata: &chain::transaction::TransactionData,
+        height: u32,
+    ) {
+        log::info!("New block received: {}", header.block_hash());
         self.carrier.lock().unwrap().update_height(height);
 
         if self.trackers.lock().unwrap().len() > 0 {
@@ -542,23 +565,6 @@ impl chain::Listen for Responder {
                 log::info!("No more pending trackers");
             }
         }
-    }
-
-    /// Handles reorgs in the [Responder].
-    fn block_disconnected(&self, header: &BlockHeader, height: u32) {
-        log::warn!("Block disconnected: {}", header.block_hash());
-        self.carrier.lock().unwrap().update_height(height);
-
-        for tracker in self.trackers.lock().unwrap().values_mut() {
-            // The transaction has been unconfirmed. Flag it as reorged out so we can rebroadcast it.
-            if tracker.status == ConfirmationStatus::ConfirmedIn(height) {
-                tracker.status = ConfirmationStatus::ReorgedOut;
-            }
-        }
-    }
-
-    fn filtered_block_connected(&self, header: &BlockHeader, txdata: &chain::transaction::TransactionData, height: u32) {
-        
     }
 }
 

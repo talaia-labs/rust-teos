@@ -168,8 +168,15 @@ mod tests {
                 .insert(header.block_hash());
         }
 
-        fn filtered_block_connected(&self, header: &bitcoin::BlockHeader, txdata: &chain::transaction::TransactionData, height: u32) {
-            
+        fn filtered_block_connected(
+            &self,
+            header: &bitcoin::BlockHeader,
+            _: &chain::transaction::TransactionData,
+            _: u32,
+        ) {
+            self.connected_blocks
+                .borrow_mut()
+                .insert(header.block_hash());
         }
     }
 

@@ -797,18 +797,37 @@ impl chain::Listen for Watcher {
     /// This also takes care of updating the [LocatorCache] and removing outdated data from the [Watcher] when
     /// told by the [Gatekeeper].
     fn block_connected(&self, block: &Block, height: u32) {
-        log::info!("New block received: {}", block.header.block_hash());
+        let txdata: Vec<_> = block.txdata.iter().enumerate().collect();
+        self.filtered_block_connected(&block.header, &txdata, height);
+    }
 
-        let locator_tx_map = block
-            .txdata
+    /// Handle reorgs in the [Watcher].
+    ///
+    /// Fixes the [LocatorCache] by removing the disconnected data and updates the last_known_block_height.
+    fn block_disconnected(&self, header: &BlockHeader, height: u32) {
+        log::warn!("Block disconnected: {}", header.block_hash());
+        self.locator_cache.lock().unwrap().fix(header);
+        self.last_known_block_height
+            .store(height - 1, Ordering::Release);
+    }
+
+    fn filtered_block_connected(
+        &self,
+        header: &BlockHeader,
+        txdata: &chain::transaction::TransactionData,
+        height: u32,
+    ) {
+        log::info!("New block received: {}", header.block_hash());
+
+        let locator_tx_map = txdata
             .iter()
-            .map(|tx| (Locator::new(tx.txid()), tx.clone()))
+            .map(|(_, tx)| (Locator::new(tx.txid()), (*tx).clone()))
             .collect();
 
         self.locator_cache
             .lock()
             .unwrap()
-            .update(block.header, &locator_tx_map);
+            .update(*header, &locator_tx_map);
 
         if !self.appointments.lock().unwrap().is_empty() {
             // Start by removing outdated data so it is not taken into account from this point on
@@ -866,20 +885,6 @@ impl chain::Listen for Watcher {
         // Update last known block
         self.last_known_block_height
             .store(height, Ordering::Release);
-    }
-
-    /// Handle reorgs in the [Watcher].
-    ///
-    /// Fixes the [LocatorCache] by removing the disconnected data and updates the last_known_block_height.
-    fn block_disconnected(&self, header: &BlockHeader, height: u32) {
-        log::warn!("Block disconnected: {}", header.block_hash());
-        self.locator_cache.lock().unwrap().fix(header);
-        self.last_known_block_height
-            .store(height - 1, Ordering::Release);
-    }
-
-    fn filtered_block_connected(&self, header: &BlockHeader, txdata: &chain::transaction::TransactionData, height: u32) {
-        
     }
 }
 
