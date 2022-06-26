@@ -312,8 +312,13 @@ impl chain::Listen for Gatekeeper {
     /// Handles the monitoring process by the [Gatekeeper].
     ///
     /// This is mainly used to keep track of time and expire / outdate subscriptions when needed.
-    fn block_connected(&self, block: &bitcoin::Block, height: u32) {
-        log::info!("New block received: {}", block.block_hash());
+    fn filtered_block_connected(
+        &self,
+        header: &bitcoin::BlockHeader,
+        _: &chain::transaction::TransactionData,
+        height: u32,
+    ) {
+        log::info!("New block received: {}", header.block_hash());
 
         // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
         let outdated_users = self.get_outdated_user_ids(height);
@@ -334,10 +339,6 @@ impl chain::Listen for Gatekeeper {
         // There's nothing to be done here but updating the last known block
         self.last_known_block_height
             .store(height - 1, Ordering::Release);
-    }
-
-    fn filtered_block_connected(&self, header: &bitcoin::BlockHeader, txdata: &chain::transaction::TransactionData, height: u32) {
-        
     }
 }
 
@@ -821,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn test_block_connected() {
+    fn test_filtered_block_connected() {
         // block_connected in the Gatekeeper is used to keep track of time in order to manage the users' subscription expiry.
         // Remove users that get outdated at the new block's height from registered_users and the database.
         let mut chain = Blockchain::default().with_height(START_HEIGHT);

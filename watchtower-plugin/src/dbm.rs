@@ -132,6 +132,7 @@ impl DBM {
                 "SELECT key FROM keys WHERE id = (SELECT seq FROM sqlite_sequence WHERE name=(?))",
             )
             .unwrap();
+
         stmt.query_row(["keys"], |row| {
             let sk: String = row.get(0).unwrap();
             Ok(SecretKey::from_str(&sk).unwrap())

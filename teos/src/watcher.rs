@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use bitcoin::hash_types::BlockHash;
 use bitcoin::secp256k1::SecretKey;
-use bitcoin::{Block, BlockHeader, Transaction};
+use bitcoin::{BlockHeader, Transaction};
 use lightning::chain;
 use lightning_block_sync::poll::ValidatedBlock;
 
@@ -796,19 +796,23 @@ impl chain::Listen for Watcher {
     ///
     /// This also takes care of updating the [LocatorCache] and removing outdated data from the [Watcher] when
     /// told by the [Gatekeeper].
-    fn block_connected(&self, block: &Block, height: u32) {
-        log::info!("New block received: {}", block.header.block_hash());
+    fn filtered_block_connected(
+        &self,
+        header: &BlockHeader,
+        txdata: &chain::transaction::TransactionData,
+        height: u32,
+    ) {
+        log::info!("New block received: {}", header.block_hash());
 
-        let locator_tx_map = block
-            .txdata
+        let locator_tx_map = txdata
             .iter()
-            .map(|tx| (Locator::new(tx.txid()), tx.clone()))
+            .map(|(_, tx)| (Locator::new(tx.txid()), (*tx).clone()))
             .collect();
 
         self.locator_cache
             .lock()
             .unwrap()
-            .update(block.header, &locator_tx_map);
+            .update(*header, &locator_tx_map);
 
         if !self.appointments.lock().unwrap().is_empty() {
             // Start by removing outdated data so it is not taken into account from this point on
@@ -877,10 +881,6 @@ impl chain::Listen for Watcher {
         self.last_known_block_height
             .store(height - 1, Ordering::Release);
     }
-
-    fn filtered_block_connected(&self, header: &BlockHeader, txdata: &chain::transaction::TransactionData, height: u32) {
-        
-    }
 }
 
 #[cfg(test)]
@@ -905,6 +905,7 @@ mod tests {
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
+    use bitcoin::Block;
     use lightning::chain::Listen;
 
     impl PartialEq for Watcher {
@@ -1883,7 +1884,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_block_connected() {
+    async fn test_filtered_block_connected() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let watcher = init_watcher(&mut chain).await;
 
