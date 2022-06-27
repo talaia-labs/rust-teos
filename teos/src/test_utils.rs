@@ -200,19 +200,20 @@ impl Blockchain {
             None => vec![],
         };
         let hashes = txdata.iter().map(|obj| obj.txid().as_hash());
-
-        let block = Block {
-            header: BlockHeader {
-                version: 0,
-                prev_blockhash,
-                merkle_root: bitcoin_merkle_root(hashes).into(),
-                time,
-                bits,
-                nonce: 0,
-            },
-            txdata,
+        let mut header = BlockHeader {
+            version: 0,
+            prev_blockhash,
+            merkle_root: bitcoin_merkle_root(hashes).into(),
+            time,
+            bits,
+            nonce: 0,
         };
 
+        while header.validate_pow(&header.target()).is_err() {
+            header.nonce += 1;
+        }
+
+        let block = Block { header, txdata };
         self.blocks.push(block.clone());
 
         block
