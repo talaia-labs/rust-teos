@@ -244,6 +244,15 @@ impl DBM {
         Ok(receipt)
     }
 
+    /// Removes a tower record from the database.
+    ///
+    /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
+    /// reference to them.
+    pub fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), Error> {
+        let query = "DELETE FROM towers WHERE tower_id=?";
+        self.remove_data(query, params![tower_id.to_vec()])
+    }
+
     /// Loads all tower records from the database.
     pub fn load_towers(&self) -> HashMap<TowerId, TowerSummary> {
         let mut towers = HashMap::new();
@@ -316,7 +325,32 @@ impl DBM {
         tx.commit()
     }
 
-    /// Loads the appointment receipts associated to a given tower
+    /// Loads a given appointment receipt of a given tower from the database.
+    pub fn load_appointment_receipt(
+        &self,
+        tower_id: TowerId,
+        locator: Locator,
+    ) -> Result<AppointmentReceipt, Error> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT * FROM appointment_receipts WHERE tower_id = ?1 and locator = ?2")
+            .unwrap();
+
+        stmt.query_row(params![tower_id.to_vec(), locator.to_vec()], |row| {
+            let start_block = row.get::<_, u32>(2).unwrap();
+            let user_sig = row.get::<_, String>(3).unwrap();
+            let tower_sig = row.get::<_, String>(4).unwrap();
+
+            Ok(AppointmentReceipt::with_signature(
+                user_sig,
+                start_block,
+                tower_sig,
+            ))
+        })
+        .map_err(|_| Error::NotFound)
+    }
+
+    /// Loads the appointment receipts associated to a given tower.
     ///
     /// TODO: Currently this is only loading a summary of the receipt, if we need to really load all the information
     /// for any reason this method may need to be renamed.
@@ -623,6 +657,19 @@ mod tests {
                 .unwrap();
             stmt.exists(params![locator.to_vec()]).unwrap()
         }
+
+        pub(crate) fn appointment_receipt_exists(
+            &self,
+            locator: Locator,
+            tower_id: TowerId,
+        ) -> bool {
+            let mut stmt = self
+                .connection
+                .prepare("SELECT * FROM appointment_receipts WHERE locator=?1 AND tower_id=?2 ")
+                .unwrap();
+            stmt.exists(params![locator.to_vec(), tower_id.to_vec()])
+                .unwrap()
+        }
     }
 
     #[test]
@@ -777,6 +824,29 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_tower_record() {
+        let mut dbm = DBM::in_memory().unwrap();
+
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+        let receipt = get_random_registration_receipt();
+        dbm.store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        assert!(matches!(dbm.remove_tower_record(tower_id), Ok(())));
+    }
+
+    #[test]
+    fn test_remove_tower_record_inexistent() {
+        let dbm = DBM::in_memory().unwrap();
+
+        assert!(matches!(
+            dbm.remove_tower_record(get_random_user_id()),
+            Err(Error::NotFound)
+        ));
+    }
+
+    #[test]
     fn test_store_load_appointment_receipts() {
         let mut dbm = DBM::in_memory().unwrap();
 
@@ -821,6 +891,57 @@ mod tests {
         }
 
         assert_eq!(dbm.load_appointment_receipts(tower_id), receipts);
+    }
+
+    #[test]
+    fn test_load_appointment_receipt() {
+        let mut dbm = DBM::in_memory().unwrap();
+        let tower_id = get_random_user_id();
+        let appointment = generate_random_appointment(None);
+
+        // If there is no appointment receipt for the given (locator, tower_id) pair, Error::NotFound is returned
+        // Try first with both being unknown
+        assert!(matches!(
+            dbm.load_appointment_receipt(tower_id, appointment.locator),
+            Err(Error::NotFound)
+        ));
+
+        // Add the tower but not the appointment and try again
+        let net_addr = "talaia.watch";
+        let receipt = get_random_registration_receipt();
+        dbm.store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        assert!(matches!(
+            dbm.load_appointment_receipt(tower_id, appointment.locator),
+            Err(Error::NotFound)
+        ));
+
+        // Add both
+        let tower_summary = TowerSummary::new(
+            net_addr.into(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        let appointment_receipt = AppointmentReceipt::with_signature(
+            "user_signature".into(),
+            42,
+            "tower_signature".into(),
+        );
+        dbm.store_appointment_receipt(
+            tower_id,
+            appointment.locator,
+            tower_summary.available_slots,
+            &appointment_receipt,
+        )
+        .unwrap();
+
+        assert_eq!(
+            dbm.load_appointment_receipt(tower_id, appointment.locator)
+                .unwrap(),
+            appointment_receipt
+        );
     }
 
     #[test]
