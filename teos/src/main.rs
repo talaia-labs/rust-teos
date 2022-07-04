@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Condvar, Mutex};
 use structopt::StructOpt;
 use tokio::task;
-use tonic::transport::Server;
+use tonic::transport::{Certificate, Server, ServerTlsConfig};
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
@@ -28,6 +28,7 @@ use teos::gatekeeper::Gatekeeper;
 use teos::protos::private_tower_services_server::PrivateTowerServicesServer;
 use teos::protos::public_tower_services_server::PublicTowerServicesServer;
 use teos::responder::Responder;
+use teos::tls::tls_init;
 use teos::watcher::Watcher;
 
 use teos_common::cryptography::get_random_keypair;
@@ -245,9 +246,22 @@ async fn main() {
         .parse()
         .unwrap();
 
+    // Generate mtls certificates to data directory so the admin can securely connect
+    // to the server to perform administrative tasks.
+    let (identity, ca_cert) = tls_init(&path).unwrap_or_else(|e| {
+        eprintln!("Couldn't generate tls certificates: {:?}", e);
+        std::process::exit(1);
+    });
+
+    let tls = ServerTlsConfig::new()
+        .identity(identity)
+        .client_ca_root(Certificate::from_pem(ca_cert));
+
     // Start tasks
     let private_api_task = task::spawn(async move {
         Server::builder()
+            .tls_config(tls)
+            .expect("couldn't configure tls")
             .add_service(PrivateTowerServicesServer::new(rpc_api))
             .serve_with_shutdown(rpc_api_addr, shutdown_signal_rpc_api)
             .await
