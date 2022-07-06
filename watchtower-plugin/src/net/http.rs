@@ -155,7 +155,7 @@ mod tests {
     use httpmock::prelude::*;
     use serde_json::json;
 
-    use teos_common::appointment::Locator;
+    use crate::test_utils::get_dummy_add_appointment_response;
     use teos_common::test_utils::{
         generate_random_appointment, get_random_appointment_receipt, get_random_user_id,
     };
@@ -177,19 +177,6 @@ mod tests {
                     assert!(!error.is_connection())
                 }
             }
-        }
-    }
-
-    fn get_dummy_add_appointment_response(
-        locator: Locator,
-        receipt: &AppointmentReceipt,
-    ) -> common_msgs::AddAppointmentResponse {
-        common_msgs::AddAppointmentResponse {
-            locator: locator.to_vec(),
-            start_block: receipt.start_block(),
-            signature: receipt.signature().unwrap(),
-            available_slots: 21,
-            subscription_expiry: 1000,
         }
     }
 
