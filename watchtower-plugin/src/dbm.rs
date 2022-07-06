@@ -189,6 +189,8 @@ impl DBM {
         if let Ok(proof) = self.load_misbehaving_proof(tower_id) {
             tower.status = TowerStatus::Misbehaving;
             tower.set_misbehaving_proof(proof);
+        } else if !tower.pending_appointments.is_empty() {
+            tower.status = TowerStatus::TemporaryUnreachable;
         }
 
         Ok(tower)
@@ -217,6 +219,8 @@ impl DBM {
 
             if self.exists_misbehaving_proof(tower_id) {
                 tower.status = TowerStatus::Misbehaving;
+            } else if !tower.pending_appointments.is_empty() {
+                tower.status = TowerStatus::TemporaryUnreachable;
             }
 
             towers.insert(tower_id, tower);
@@ -277,7 +281,7 @@ impl DBM {
     ///
     /// The loaded locators can be loaded either from appointment_receipts, pending_appointments or invalid_appointments
     ///  depending on `status`.
-    fn load_appointment_locators(
+    pub fn load_appointment_locators(
         &self,
         tower_id: TowerId,
         status: AppointmentStatus,
@@ -336,12 +340,60 @@ impl DBM {
     ) -> Result<(), SqliteError> {
         let tx = self.get_mut_connection().transaction().unwrap();
 
-        Self::store_appointment(&tx, appointment)?;
+        // If the appointment already exists (because it was added by another tower as either pending or invalid) we simply
+        // ignore the error.
+        Self::store_appointment(&tx, appointment).ok();
         tx.execute(
             "INSERT INTO pending_appointments (locator, tower_id) VALUES (?1, ?2)",
             params![appointment.locator.to_vec(), tower_id.to_vec(),],
         )?;
 
+        tx.commit()
+    }
+
+    /// Removes a pending appointment from the database.
+    ///
+    /// If the pending appointment is the only instance of the appointment, the appointment will also be deleted form the appointments table.
+    pub fn delete_pending_appointment(
+        &mut self,
+        tower_id: TowerId,
+        locator: Locator,
+    ) -> Result<(), SqliteError> {
+        // We will delete data from pending_appointments or from appointments depending on whether the later has a single reference
+        // to it or not. If that's the case, deleting the entry from appointments will trigger a cascade deletion of the entry in pending.
+        // If there are other references, this will be deleted when removing the last one.
+        let count = {
+            let mut stmt = self
+                .connection
+                .prepare("SELECT COUNT(*) FROM pending_appointments WHERE locator=?")
+                .unwrap();
+            let pending = stmt
+                .query_row(params![locator.to_vec()], |row| row.get::<_, u32>(0))
+                .unwrap();
+
+            let mut stmt = self
+                .connection
+                .prepare("SELECT COUNT(*) FROM invalid_appointments WHERE locator=?")
+                .unwrap();
+            let invalid = stmt
+                .query_row(params![locator.to_vec()], |row| row.get::<_, u32>(0))
+                .unwrap_or(0);
+
+            pending + invalid
+        };
+
+        let tx = self.get_mut_connection().transaction().unwrap();
+        if count == 1 {
+            tx.execute(
+                "DELETE FROM appointments WHERE locator=?",
+                params![locator.to_vec()],
+            )?;
+        } else {
+            tx.execute(
+                "DELETE FROM pending_appointments WHERE locator=?1 AND tower_id=?2",
+                params![locator.to_vec(), tower_id.to_vec()],
+            )?;
+        };
         tx.commit()
     }
 
@@ -357,7 +409,9 @@ impl DBM {
     ) -> Result<(), SqliteError> {
         let tx = self.get_mut_connection().transaction().unwrap();
 
-        Self::store_appointment(&tx, appointment)?;
+        // If the appointment already exists (because it was added by another tower as either pending or invalid) we simply
+        // ignore the error.
+        Self::store_appointment(&tx, appointment).ok();
         tx.execute(
             "INSERT INTO invalid_appointments (locator, tower_id) VALUES (?1, ?2)",
             params![appointment.locator.to_vec(), tower_id.to_vec(),],
@@ -493,6 +547,14 @@ mod tests {
             dbm.create_tables(Vec::from_iter(TABLES))?;
 
             Ok(dbm)
+        }
+
+        pub(crate) fn appointment_exists(&self, locator: Locator) -> bool {
+            let mut stmt = self
+                .connection
+                .prepare("SELECT * FROM appointments WHERE locator=? ")
+                .unwrap();
+            stmt.exists(params![locator.to_vec()]).unwrap()
         }
     }
 
@@ -699,7 +761,8 @@ mod tests {
             net_addr.into(),
             receipt.available_slots(),
             receipt.subscription_expiry(),
-        );
+        )
+        .with_status(TowerStatus::TemporaryUnreachable);
         dbm.store_tower_record(tower_id, net_addr, &receipt)
             .unwrap();
 
@@ -718,6 +781,100 @@ mod tests {
                 tower_summary
             );
         }
+    }
+
+    #[test]
+    fn test_store_pending_appointment_twice() {
+        let mut dbm = DBM::in_memory().unwrap();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id_1 = get_random_user_id();
+        let tower_id_2 = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        dbm.store_tower_record(tower_id_1, net_addr, &receipt)
+            .unwrap();
+        dbm.store_tower_record(tower_id_2, net_addr, &receipt)
+            .unwrap();
+
+        // If the same appointment is stored twice (by different towers) it should go through
+        // Since the appointment data will be stored only once and this will create two references
+        let appointment = generate_random_appointment(None);
+        dbm.store_pending_appointment(tower_id_1, &appointment)
+            .unwrap();
+        dbm.store_pending_appointment(tower_id_2, &appointment)
+            .unwrap();
+
+        // If this is called twice with for the same tower it will fail, since two identical references
+        // can not exist. This is intended behavior and should not happen
+        assert!(dbm
+            .store_pending_appointment(tower_id_2, &appointment)
+            .is_err());
+    }
+
+    #[test]
+    fn test_delete_pending_appointment() {
+        let mut dbm = DBM::in_memory().unwrap();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        dbm.store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        // Add a single one, remove it later
+        let appointment = generate_random_appointment(None);
+        dbm.store_pending_appointment(tower_id, &appointment)
+            .unwrap();
+        assert!(dbm
+            .delete_pending_appointment(tower_id, appointment.locator)
+            .is_ok());
+
+        // The appointment should be completely gone
+        assert!(!dbm
+            .load_appointment_locators(tower_id, AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(!dbm.appointment_exists(appointment.locator));
+
+        // Try again with more than one reference
+        let another_tower_id = get_random_user_id();
+        dbm.store_tower_record(another_tower_id, net_addr, &receipt)
+            .unwrap();
+
+        // Add two
+        dbm.store_pending_appointment(tower_id, &appointment)
+            .unwrap();
+        dbm.store_pending_appointment(another_tower_id, &appointment)
+            .unwrap();
+        // Delete one
+        assert!(dbm
+            .delete_pending_appointment(tower_id, appointment.locator)
+            .is_ok());
+        // Check
+        assert!(!dbm
+            .load_appointment_locators(tower_id, AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(dbm
+            .load_appointment_locators(another_tower_id, AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(dbm.appointment_exists(appointment.locator));
+
+        // Add an invalid reference and check again
+        dbm.store_invalid_appointment(tower_id, &appointment)
+            .unwrap();
+        assert!(dbm
+            .delete_pending_appointment(another_tower_id, appointment.locator)
+            .is_ok());
+        assert!(!dbm
+            .load_appointment_locators(another_tower_id, AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(dbm
+            .load_appointment_locators(tower_id, AppointmentStatus::Invalid)
+            .contains(&appointment.locator));
+        assert!(dbm.appointment_exists(appointment.locator));
     }
 
     #[test]
@@ -752,6 +909,34 @@ mod tests {
                 tower_summary
             );
         }
+    }
+
+    #[test]
+    fn test_store_invalid_appointment_twice() {
+        let mut dbm = DBM::in_memory().unwrap();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id_1 = get_random_user_id();
+        let tower_id_2 = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        dbm.store_tower_record(tower_id_1, net_addr, &receipt)
+            .unwrap();
+        dbm.store_tower_record(tower_id_2, net_addr, &receipt)
+            .unwrap();
+
+        // Same as with pending appointments. Two references from different towers is allowed
+        let appointment = generate_random_appointment(None);
+        dbm.store_invalid_appointment(tower_id_1, &appointment)
+            .unwrap();
+        dbm.store_invalid_appointment(tower_id_2, &appointment)
+            .unwrap();
+
+        // Two references from the same tower is not.
+        assert!(dbm
+            .store_invalid_appointment(tower_id_2, &appointment)
+            .is_err());
     }
 
     #[test]

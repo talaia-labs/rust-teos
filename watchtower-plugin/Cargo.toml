@@ -9,6 +9,7 @@ edition = "2018"
 
 [dependencies]
 # General
+backoff = { version = "0.4.0", features = ["tokio"] }
 hex = { version = "0.4.3", features = [ "serde" ] }
 home = "0.5.3"
 reqwest = { version = "0.11", features = [ "blocking", "json" ] }
