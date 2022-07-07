@@ -300,7 +300,7 @@ mod tests {
         );
 
         // Wait until the task gives up and check again
-        tokio::time::sleep(Duration::from_secs(2 * max_elapsed_time as u64 / 3)).await;
+        tokio::time::sleep(Duration::from_secs(max_elapsed_time as u64)).await;
         assert_eq!(
             wt_client
                 .lock()
