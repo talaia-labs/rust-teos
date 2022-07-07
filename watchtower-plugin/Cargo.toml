@@ -5,6 +5,10 @@ authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
 license = "MIT"
 edition = "2018"
 
+[[bin]]
+name = "watchtower-client"
+path = "src/main.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

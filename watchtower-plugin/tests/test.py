@@ -26,7 +26,7 @@ def test_watchtower(node_factory, bitcoind, teosd):
     commitment transaction.
     """
 
-    l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": "watchtower-plugin"}])
+    l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": "watchtower-client"}])
 
     # We need to register l2 with the tower
     tower_id = teosd.cli.get_tower_info()["tower_id"]
@@ -85,7 +85,7 @@ def test_unreachable_watchtower(node_factory, bitcoind, teosd):
         opts=[
             {},
             {
-                "plugin": "watchtower-plugin",
+                "plugin": "watchtower-client",
                 "allow_broken_log": True,
                 "dev-watchtower-max-retry-interval": max_interval_time,
             },
@@ -114,7 +114,7 @@ def test_unreachable_watchtower(node_factory, bitcoind, teosd):
 def test_retry_watchtower(node_factory, bitcoind, teosd):
     # The plugin is set to give up on retrying straight-away so we can test this fast.
     l1, l2 = node_factory.line_graph(
-        2, opts=[{}, {"plugin": "watchtower-plugin", "allow_broken_log": True, "watchtower-max-retry-time": 0}]
+        2, opts=[{}, {"plugin": "watchtower-client", "allow_broken_log": True, "watchtower-max-retry-time": 0}]
     )
 
     # We need to register l2 with the tower
@@ -139,7 +139,7 @@ def test_retry_watchtower(node_factory, bitcoind, teosd):
 
 
 def test_misbehaving_watchtower(node_factory, bitcoind, teosd, directory):
-    l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": "watchtower-plugin", "allow_broken_log": True}])
+    l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": "watchtower-client", "allow_broken_log": True}])
 
     # We need to register l2 with the tower
     tower_id = teosd.cli.get_tower_info()["tower_id"]
