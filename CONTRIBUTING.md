@@ -9,7 +9,7 @@ We use `rustfmt` as our base code formatter. Before submitting a PR make sure yo
 cargo fmt
 ```
 
-In addition, we use [clippy](https://github.com/rust-lang/rust-clippy/) to detect catch common mistakes and improve the code:
+In addition, we use [clippy](https://github.com/rust-lang/rust-clippy/) to catch common mistakes and improve the code:
 
 ```bash
 cargo clippy
@@ -70,8 +70,8 @@ pub struct Responder {
 ```
 
 ## Test Coverage
-Tests should be provided to cover both positive and negative conditions. Test should cover both the proper execution as well as all the covered error paths. PR with no proper test coverage will be rejected. 
+Tests should be provided to cover both positive and negative conditions. Tests should cover both the proper execution as well as all the covered error paths. PR with no proper test coverage will not be merged.
 
 ## Signing Commits
 
-We require that all commits to be merge into master are signed. You can enable commit signing on GitHub by following [Signing commits](https://help.github.com/en/github/authenticating-to-github/signing-commits).
+We require that all commits to be merged into master are signed. You can enable commit signing on GitHub by following [Signing commits](https://help.github.com/en/github/authenticating-to-github/signing-commits).
