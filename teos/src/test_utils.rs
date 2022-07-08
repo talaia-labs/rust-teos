@@ -52,6 +52,10 @@ pub(crate) const DURATION: u32 = 500;
 pub(crate) const EXPIRY_DELTA: u32 = 42;
 pub(crate) const START_HEIGHT: usize = 100;
 
+pub(crate) const AVAILABLE_SLOTS: u32 = 21;
+pub(crate) const SUBSCRIPTION_START: u32 = START_HEIGHT as u32;
+pub(crate) const SUBSCRIPTION_EXPIRY: u32 = SUBSCRIPTION_START + 42;
+
 #[derive(Clone, Default, Debug)]
 pub(crate) struct Blockchain {
     pub blocks: Vec<Block>,
@@ -349,8 +353,11 @@ pub(crate) fn store_appointment_and_fks_to_db(
     uuid: UUID,
     appointment: &ExtendedAppointment,
 ) {
-    dbm.store_user(appointment.user_id, &UserInfo::new(21, 42))
-        .unwrap();
+    dbm.store_user(
+        appointment.user_id,
+        &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
+    )
+    .unwrap();
     dbm.store_appointment(uuid, appointment).unwrap();
 }
 

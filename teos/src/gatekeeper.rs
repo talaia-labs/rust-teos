@@ -21,7 +21,9 @@ use crate::extended_appointment::{ExtendedAppointment, UUID};
 pub(crate) struct UserInfo {
     /// Number of appointment slots available for a given user.
     pub(crate) available_slots: u32,
-    /// Block height where the user subscription will expire.
+    /// Block height where the user subscription starts.
+    pub(crate) subscription_start: u32,
+    /// Block height where the user subscription expires.
     pub(crate) subscription_expiry: u32,
     /// Map of appointment ids and the how many slots they take from the subscription.
     pub(crate) appointments: HashMap<UUID, u32>,
@@ -29,9 +31,10 @@ pub(crate) struct UserInfo {
 
 impl UserInfo {
     /// Creates a new [UserInfo] instance.
-    pub fn new(available_slots: u32, subscription_expiry: u32) -> Self {
+    pub fn new(available_slots: u32, subscription_start: u32, subscription_expiry: u32) -> Self {
         UserInfo {
             available_slots,
+            subscription_start,
             subscription_expiry,
             appointments: HashMap::new(),
         }
@@ -40,11 +43,13 @@ impl UserInfo {
     /// Creates a new [UserInfo] instance with some associated appointments.
     pub fn with_appointments(
         available_slots: u32,
+        subscription_start: u32,
         subscription_expiry: u32,
         appointments: HashMap<UUID, u32>,
     ) -> Self {
         UserInfo {
             available_slots,
+            subscription_start,
             subscription_expiry,
             appointments,
         }
@@ -179,6 +184,7 @@ impl Gatekeeper {
             None => {
                 let user_info = UserInfo::new(
                     self.subscription_slots,
+                    block_count,
                     block_count + self.subscription_duration,
                 );
                 self.dbm
@@ -195,6 +201,7 @@ impl Gatekeeper {
         Ok(RegistrationReceipt::new(
             user_id,
             user_info.available_slots,
+            user_info.subscription_start,
             user_info.subscription_expiry,
         ))
     }
@@ -473,7 +480,11 @@ mod tests {
         // The data should have been also added to the database
         assert_eq!(
             gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap(),
-            UserInfo::new(receipt.available_slots(), receipt.subscription_expiry())
+            UserInfo::new(
+                receipt.available_slots(),
+                receipt.subscription_start(),
+                receipt.subscription_expiry()
+            )
         );
 
         // Let generate a new block and add the user again to check that both the slots and expiry are updated.
@@ -497,6 +508,7 @@ mod tests {
             gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap(),
             UserInfo::new(
                 updated_receipt.available_slots(),
+                updated_receipt.subscription_start(),
                 updated_receipt.subscription_expiry()
             )
         );
@@ -520,6 +532,7 @@ mod tests {
             gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap(),
             UserInfo::new(
                 updated_receipt.available_slots(),
+                updated_receipt.subscription_start(),
                 updated_receipt.subscription_expiry()
             )
         );

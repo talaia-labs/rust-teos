@@ -576,7 +576,8 @@ mod tests {
     use crate::test_utils::{
         create_carrier, generate_dummy_appointment_with_user, generate_uuid, get_random_breach,
         get_random_tracker, get_random_tx, store_appointment_and_fks_to_db, Blockchain,
-        MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
     };
 
     use teos_common::dbm::Error as DBError;
@@ -1118,7 +1119,10 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(user_id, &UserInfo::new(21, 42))
+            .store_user(
+                user_id,
+                &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
+            )
             .unwrap();
 
         // Transactions are flagged to be rebroadcast when they've been in mempool for longer than CONFIRMATIONS_BEFORE_RETRY
@@ -1163,7 +1167,10 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(user_id, &UserInfo::new(21, 42))
+            .store_user(
+                user_id,
+                &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
+            )
             .unwrap();
 
         // Transactions are flagged to be rebroadcast when they've been in mempool for longer than CONFIRMATIONS_BEFORE_RETRY
@@ -1272,7 +1279,10 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(user_id, &UserInfo::new(21, 42))
+            .store_user(
+                user_id,
+                &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
+            )
             .unwrap();
 
         // Transactions are rebroadcast once they've been in mempool for CONFIRMATIONS_BEFORE_RETRY or they've been reorged out
@@ -1339,7 +1349,10 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(user_id, &UserInfo::new(21, 42))
+            .store_user(
+                user_id,
+                &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
+            )
             .unwrap();
 
         // Transactions are rebroadcast once they've been in mempool for CONFIRMATIONS_BEFORE_RETRY or they've been reorged out
@@ -1400,7 +1413,10 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(user_id, &UserInfo::new(21, 42))
+            .store_user(
+                user_id,
+                &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
+            )
             .unwrap();
 
         // Add some trackers both to memory and to the database
@@ -1454,7 +1470,10 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(user_id, &UserInfo::new(21, 42))
+            .store_user(
+                user_id,
+                &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
+            )
             .unwrap();
 
         // Delete trackers removes data from the trackers, tx_tracker_map maps, the database. The deletion of the later is
@@ -1504,7 +1523,14 @@ mod tests {
                 // Users will also be updated once the data is deleted.
                 // We can made up the numbers here just to check they are updated.
                 target_trackers.insert(uuid);
-                updated_users.insert(appointment.user_id, UserInfo::new(i, 42));
+                updated_users.insert(
+                    appointment.user_id,
+                    UserInfo::new(
+                        AVAILABLE_SLOTS + i,
+                        SUBSCRIPTION_START + i,
+                        SUBSCRIPTION_EXPIRY + i,
+                    ),
+                );
             }
         }
 
@@ -1826,7 +1852,10 @@ mod tests {
             .dbm
             .lock()
             .unwrap()
-            .store_user(user_id, &UserInfo::new(21, 42))
+            .store_user(
+                user_id,
+                &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
+            )
             .unwrap();
 
         let mut reorged = Vec::new();

@@ -206,7 +206,8 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt);
+            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .unwrap();
 
         // Add appointment to pending
         let appointment = generate_random_appointment(None);
@@ -276,11 +277,11 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let receipt = get_random_registration_receipt();
-        wt_client.lock().unwrap().add_update_tower(
-            tower_id,
-            "http://unreachable.tower".into(),
-            &receipt,
-        );
+        wt_client
+            .lock()
+            .unwrap()
+            .add_update_tower(tower_id, "http://unreachable.tower".into(), &receipt)
+            .unwrap();
 
         // Add appointment to pending
         let appointment = generate_random_appointment(None);
@@ -344,7 +345,8 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt);
+            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .unwrap();
 
         // Add appointment to pending
         let appointment = generate_random_appointment(None);
@@ -421,7 +423,8 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt);
+            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .unwrap();
 
         // Add appointment to pending
         let appointment = generate_random_appointment(None);
@@ -486,7 +489,8 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt);
+            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .unwrap();
 
         // Add appointment to pending
         let appointment = generate_random_appointment(None);
@@ -532,7 +536,8 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt);
+            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .unwrap();
 
         // If there are no pending appointments the method will simply return
         let r = Retrier::dummy(wt_client).add_appointment(tower_id).await;
@@ -557,7 +562,8 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt);
+            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .unwrap();
 
         // Add appointment to pending
         let appointment = generate_random_appointment(None);
@@ -598,11 +604,11 @@ mod tests {
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
         let receipt = get_random_registration_receipt();
-        wt_client.lock().unwrap().add_update_tower(
-            tower_id,
-            "http://unreachable.tower".into(),
-            &receipt,
-        );
+        wt_client
+            .lock()
+            .unwrap()
+            .add_update_tower(tower_id, "http://unreachable.tower".into(), &receipt)
+            .unwrap();
 
         // Add some pending appointments and try again (with an unreachable tower).
         let appointment = generate_random_appointment(None);
@@ -631,7 +637,8 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt);
+            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .unwrap();
 
         let api_mock = server.mock(|when, then| {
             when.method(POST).path("/add_appointment");
@@ -672,7 +679,8 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt);
+            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .unwrap();
 
         let api_mock = server.mock(|when, then| {
             when.method(POST).path("/add_appointment");

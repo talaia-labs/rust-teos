@@ -27,6 +27,7 @@ const TABLES: [&str; 5] = [
     "CREATE TABLE IF NOT EXISTS users (
     user_id INT PRIMARY KEY,
     available_slots INT NOT NULL,
+    subscription_start INT NOT NULL,
     subscription_expiry INT NOT NULL
 )",
     "CREATE TABLE IF NOT EXISTS appointments (
@@ -94,13 +95,14 @@ impl DBM {
     /// Stores a user ([UserInfo]) into the database.
     pub(crate) fn store_user(&self, user_id: UserId, user_info: &UserInfo) -> Result<(), Error> {
         let query =
-            "INSERT INTO users (user_id, available_slots, subscription_expiry) VALUES (?1, ?2, ?3)";
+        "INSERT INTO users (user_id, available_slots, subscription_start, subscription_expiry) VALUES (?1, ?2, ?3, ?4)";
 
         match self.store_data(
             query,
             params![
                 user_id.to_vec(),
                 user_info.available_slots,
+                user_info.subscription_start,
                 user_info.subscription_expiry,
             ],
         ) {
@@ -118,11 +120,12 @@ impl DBM {
     /// Updates an existing user ([UserInfo]) in the database.
     pub(crate) fn update_user(&self, user_id: UserId, user_info: &UserInfo) {
         let query =
-            "UPDATE users SET available_slots=(?1), subscription_expiry=(?2) WHERE user_id=(?3)";
+        "UPDATE users SET available_slots=(?1), subscription_start=(?2), subscription_expiry=(?3) WHERE user_id=(?4)";
         match self.update_data(
             query,
             params![
                 user_info.available_slots,
+                user_info.subscription_start,
                 user_info.subscription_expiry,
                 user_id.to_vec(),
             ],
@@ -169,11 +172,17 @@ impl DBM {
             let raw_userid: Vec<u8> = row.get(0).unwrap();
             let user_id = UserId::from_slice(&raw_userid).unwrap();
             let slots = row.get(1).unwrap();
-            let expiry = row.get(2).unwrap();
+            let start = row.get(2).unwrap();
+            let expiry = row.get(3).unwrap();
 
             users.insert(
                 user_id,
-                UserInfo::with_appointments(slots, expiry, self.load_user_appointments(user_id)),
+                UserInfo::with_appointments(
+                    slots,
+                    start,
+                    expiry,
+                    self.load_user_appointments(user_id),
+                ),
             );
         }
 
@@ -566,7 +575,8 @@ mod tests {
 
     use crate::test_utils::{
         generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_tracker, get_random_tx,
+        get_random_tracker, get_random_tx, AVAILABLE_SLOTS, SUBSCRIPTION_EXPIRY,
+        SUBSCRIPTION_START,
     };
 
     impl DBM {
@@ -583,14 +593,16 @@ mod tests {
             let key = user_id.to_vec();
             let mut stmt = self
                 .connection
-                .prepare("SELECT available_slots, subscription_expiry FROM users WHERE user_id=(?)")
+                .prepare("SELECT * FROM users WHERE user_id=(?)")
                 .unwrap();
             let user = stmt
                 .query_row([&key], |row| {
-                    let slots = row.get(0).unwrap();
-                    let expiry = row.get(1).unwrap();
+                    let slots = row.get(1).unwrap();
+                    let start = row.get(2).unwrap();
+                    let expiry = row.get(3).unwrap();
                     Ok(UserInfo::with_appointments(
                         slots,
+                        start,
                         expiry,
                         self.load_user_appointments(user_id),
                     ))
@@ -613,13 +625,13 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let user_id = get_random_user_id();
-        let mut user = UserInfo::new(21, 42);
+        let mut user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
 
         assert!(matches!(dbm.store_user(user_id, &user), Ok { .. }));
         assert_eq!(dbm.load_user(user_id).unwrap(), user);
 
         // User info should be updatable but only via the update_user method
-        user = UserInfo::new(42, 21);
+        user = UserInfo::new(AVAILABLE_SLOTS * 2, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         assert!(matches!(
             dbm.store_user(user_id, &user),
             Err(Error::AlreadyExists)
@@ -631,7 +643,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let user_id = get_random_user_id();
-        let mut user = UserInfo::new(21, 42);
+        let mut user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
 
         dbm.store_user(user_id, &user).unwrap();
 
@@ -660,7 +672,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let user_id = get_random_user_id();
-        let mut user = UserInfo::new(21, 42);
+        let mut user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
 
         dbm.store_user(user_id, &user).unwrap();
         assert_eq!(dbm.load_user(user_id).unwrap(), user);
@@ -677,7 +689,11 @@ mod tests {
 
         for i in 1..11 {
             let user_id = get_random_user_id();
-            let user = UserInfo::new(i, i * 2);
+            let user = UserInfo::new(
+                AVAILABLE_SLOTS + i,
+                SUBSCRIPTION_START + i,
+                SUBSCRIPTION_EXPIRY + i,
+            );
             users.insert(user_id, user.clone());
             dbm.store_user(user_id, &user).unwrap();
 
@@ -710,7 +726,7 @@ mod tests {
         let mut rest = HashSet::new();
         for i in 1..100 {
             let user_id = get_random_user_id();
-            let user = UserInfo::new(21, 42);
+            let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
             dbm.store_user(user_id, &user).unwrap();
 
             if i % 2 == 0 {
@@ -737,7 +753,7 @@ mod tests {
 
         // Add the user and link an appointment (this is usually done once the appointment)
         // is added after the user creation, but for the test purpose it can be done all at once.
-        let info = UserInfo::new(21, 42);
+        let info = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(appointment.user_id, &info).unwrap();
 
         // Appointment only
@@ -785,7 +801,7 @@ mod tests {
 
         // In order to add an appointment we need the associated user to be present
         let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -830,7 +846,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -863,7 +879,11 @@ mod tests {
 
         for i in 1..11 {
             let user_id = get_random_user_id();
-            let user = UserInfo::new(i, i * 2);
+            let user = UserInfo::new(
+                AVAILABLE_SLOTS + i,
+                SUBSCRIPTION_START + i,
+                SUBSCRIPTION_EXPIRY + i,
+            );
             dbm.store_user(user_id, &user).unwrap();
 
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -876,7 +896,7 @@ mod tests {
         // If an appointment has an associated tracker, it should not be loaded since it is seen
         // as a triggered appointment
         let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -900,7 +920,11 @@ mod tests {
 
         for i in 1..11 {
             let user_id = get_random_user_id();
-            let user = UserInfo::new(i, i * 2);
+            let user = UserInfo::new(
+                AVAILABLE_SLOTS + i,
+                SUBSCRIPTION_START + i,
+                SUBSCRIPTION_EXPIRY + i,
+            );
             dbm.store_user(user_id, &user).unwrap();
 
             // Let some appointments belong to a specific dispute tx and some with random ones.
@@ -923,7 +947,7 @@ mod tests {
         // If an appointment has an associated tracker, it should not be loaded since it is seen
         // as a triggered appointment
         let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(user_id, &user).unwrap();
 
         // Generate an appointment for our dispute tx, thus it gets the same locator as the ones generated above.
@@ -950,7 +974,11 @@ mod tests {
             .set_limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER, limit);
 
         let user_id = get_random_user_id();
-        let mut user = UserInfo::new(500, 42);
+        let mut user = UserInfo::new(
+            AVAILABLE_SLOTS + 123,
+            SUBSCRIPTION_START,
+            SUBSCRIPTION_EXPIRY,
+        );
         dbm.store_user(user_id, &user).unwrap();
 
         let mut rest = HashSet::new();
@@ -994,7 +1022,7 @@ mod tests {
         // The confirmation status doesn't really matter here, it can be any of {ConfirmedIn, InMempoolSince}.
         let tracker = get_random_tracker(appointment.user_id, ConfirmationStatus::ConfirmedIn(21));
 
-        let info = UserInfo::new(21, 42);
+        let info = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
 
         // Add the user b/c of FK restrictions
         dbm.store_user(appointment.user_id, &info).unwrap();
@@ -1040,7 +1068,7 @@ mod tests {
 
         // In order to add an appointment we need the associated user to be present
         let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -1069,7 +1097,7 @@ mod tests {
         // In order to add a tracker we need the associated appointment to be present (which
         // at the same time requires an associated user to be present)
         let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -1086,7 +1114,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let user_id = get_random_user_id();
-        let user = UserInfo::new(21, 42);
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(user_id, &user).unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -1134,7 +1162,11 @@ mod tests {
 
         for i in 1..11 {
             let user_id = get_random_user_id();
-            let user = UserInfo::new(i, i * 2);
+            let user = UserInfo::new(
+                AVAILABLE_SLOTS + i,
+                SUBSCRIPTION_START + i,
+                SUBSCRIPTION_EXPIRY + i,
+            );
             dbm.store_user(user_id, &user).unwrap();
 
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -1160,7 +1192,11 @@ mod tests {
 
         for i in 1..11 {
             let user_id = get_random_user_id();
-            let user = UserInfo::new(i, i * 2);
+            let user = UserInfo::new(
+                AVAILABLE_SLOTS + i,
+                SUBSCRIPTION_START + i,
+                SUBSCRIPTION_EXPIRY + i,
+            );
             dbm.store_user(user_id, &user).unwrap();
             let tracker = get_random_tracker(user_id, status);
 
