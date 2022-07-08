@@ -10,8 +10,9 @@
 use rand::Rng;
 use std::convert::TryInto;
 use std::ops::Deref;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
+use tokio::sync::Notify;
 
 use jsonrpc_http_server::jsonrpc_core::error::ErrorCode as JsonRpcErrorCode;
 use jsonrpc_http_server::jsonrpc_core::{Error as JsonRpcError, IoHandler, Params, Value};
@@ -405,15 +406,41 @@ pub(crate) enum MockedServerQuery {
     Error(i64),
 }
 
-pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> Carrier {
+pub(crate) fn start_bitcoind(query: MockedServerQuery) -> BitcoindClient {
+    // Create a new bitcoind client/server
     let bitcoind_mock = match query {
         MockedServerQuery::Regular => BitcoindMock::new(MockOptions::empty()),
         MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
     };
-    let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
-    let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+    let bitcoin_cli = BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap();
     start_server(bitcoind_mock);
+    bitcoin_cli
+}
 
+pub(crate) fn reset_carrier(
+    carrier: Arc<Carrier>,
+    query: MockedServerQuery,
+    height: u32,
+    bitcoind_reachable: bool,
+) {
+    // Create a new bitcoind client/server
+    let bitcoin_cli = start_bitcoind(query);
+
+    // Update the carrier with the new values
+    carrier.update_bitcoind_cli(bitcoin_cli);
+    carrier.update_height(height);
+    carrier.clear_receipts();
+    let (lock, _) = &*carrier.get_bitcoind_reachable();
+    let mut reachable = lock.lock().unwrap();
+    *reachable = bitcoind_reachable;
+}
+
+pub(crate) fn create_carrier(
+    query: MockedServerQuery,
+    height: u32,
+    bitcoind_reachable: Arc<(Mutex<bool>, Notify)>,
+) -> Carrier {
+    let bitcoin_cli = start_bitcoind(query);
     Carrier::new(bitcoin_cli, bitcoind_reachable, height)
 }
 
@@ -423,8 +450,8 @@ pub(crate) fn create_responder(
     dbm: Arc<Mutex<DBM>>,
     server_url: &str,
 ) -> Responder {
-    let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
-    let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+    let bitcoin_cli = BitcoindClient::new(server_url, Auth::None).unwrap();
+    let bitcoind_reachable = Arc::new((Mutex::new(true), Notify::new()));
     let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, tip.deref().height);
 
     Responder::new(carrier, gatekeeper, dbm)
@@ -506,7 +533,7 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
     )
     .await;
 
-    let bitcoind_reachable = Arc::new((Mutex::new(api_config.bitcoind_reachable), Condvar::new()));
+    let bitcoind_reachable = Arc::new((Mutex::new(api_config.bitcoind_reachable), Notify::new()));
     let (shutdown_trigger, _) = triggered::trigger();
     Arc::new(InternalAPI::new(
         Arc::new(watcher),
