@@ -1,36 +1,65 @@
-//! Logic related to the database manager (DBM), component in charge of persisting data on disk.
+//! Logic related to the tower database manager (DBM), component in charge of persisting data on disk.
 //!
 
 use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use rusqlite::ffi::{SQLITE_CONSTRAINT_FOREIGNKEY, SQLITE_CONSTRAINT_PRIMARYKEY};
 use rusqlite::limits::Limit;
-use rusqlite::{params, params_from_iter, Connection, Error as SqliteError, ErrorCode, Params};
+use rusqlite::{params, params_from_iter, Connection, Error as SqliteError};
 
 use bitcoin::consensus;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::BlockHash;
 
-use teos_common::appointment::{Appointment, Locator};
+use teos_common::appointment::{compute_appointment_slots, Appointment, Locator};
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
+use teos_common::dbm::{DatabaseConnection, DatabaseManager, Error};
 use teos_common::UserId;
 
-use crate::extended_appointment::{compute_appointment_slots, ExtendedAppointment, UUID};
+use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::UserInfo;
 use crate::responder::{ConfirmationStatus, TransactionTracker};
 
-/// Packs the errors than can raise when interacting with the underlying database.
-#[derive(Debug)]
-pub enum Error {
-    AlreadyExists,
-    MissingForeignKey,
-    MissingField,
-    NotFound,
-    Unknown(SqliteError),
-}
+const TABLES: [&str; 5] = [
+    "CREATE TABLE IF NOT EXISTS users (
+    user_id INT PRIMARY KEY,
+    available_slots INT NOT NULL,
+    subscription_expiry INT NOT NULL
+)",
+    "CREATE TABLE IF NOT EXISTS appointments (
+    UUID INT PRIMARY KEY,
+    locator INT NOT NULL,
+    encrypted_blob BLOB NOT NULL,
+    to_self_delay INT NOT NULL,
+    user_signature BLOB NOT NULL,
+    start_block INT NOT NULL,
+    user_id INT NOT NULL,
+    FOREIGN KEY(user_id)
+        REFERENCES users(user_id)
+        ON DELETE CASCADE
+)",
+    "CREATE TABLE IF NOT EXISTS trackers (
+    UUID INT PRIMARY KEY,
+    dispute_tx BLOB NOT NULL,
+    penalty_tx BLOB NOT NULL,
+    height INT NOT NULL,
+    confirmed BOOL NOT NULL,
+    FOREIGN KEY(UUID)
+        REFERENCES appointments(UUID)
+        ON DELETE CASCADE
+)",
+    "CREATE TABLE IF NOT EXISTS last_known_block (
+    id INT PRIMARY KEY,
+    block_hash INT NOT NULL
+)",
+    "CREATE TABLE IF NOT EXISTS keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key INT NOT NULL
+)",
+];
 
 /// Component in charge of interacting with the underlying database.
 ///
@@ -41,112 +70,25 @@ pub struct DBM {
     connection: Connection,
 }
 
+impl DatabaseConnection for DBM {
+    fn get_connection(&self) -> &Connection {
+        &self.connection
+    }
+
+    fn get_mut_connection(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+}
+
 impl DBM {
     /// Creates a new [DBM] instance.
     pub fn new(db_path: PathBuf) -> Result<Self, SqliteError> {
         let connection = Connection::open(db_path)?;
         connection.execute("PRAGMA foreign_keys=1;", [])?;
         let mut dbm = Self { connection };
-        dbm.create_tables()?;
+        dbm.create_tables(Vec::from_iter(TABLES))?;
 
         Ok(dbm)
-    }
-
-    /// Creates the database tables if not present.
-    ///
-    /// The database consists of the following tables:
-    /// - users
-    /// - appointments
-    /// - trackers
-    /// - last_known_block
-    /// - keys
-    fn create_tables(&mut self) -> Result<(), SqliteError> {
-        let tx = self.connection.transaction().unwrap();
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS users (
-                    user_id INT PRIMARY KEY,
-                    available_slots INT NOT NULL,
-                    subscription_expiry INT NOT NULL
-                )",
-            [],
-        )?;
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS appointments (
-                UUID INT PRIMARY KEY,
-                locator INT NOT NULL,
-                encrypted_blob BLOB NOT NULL,
-                to_self_delay INT NOT NULL,
-                user_signature BLOB NOT NULL,
-                start_block INT NOT NULL,
-                user_id INT NOT NULL,
-                FOREIGN KEY(user_id)
-                    REFERENCES users(user_id)
-                    ON DELETE CASCADE
-            )",
-            [],
-        )?;
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS trackers (
-                UUID INT PRIMARY KEY,
-                dispute_tx BLOB NOT NULL,
-                penalty_tx BLOB NOT NULL,
-                height INT NOT NULL,
-                confirmed BOOL NOT NULL,
-                FOREIGN KEY(UUID)
-                    REFERENCES appointments(UUID)
-                    ON DELETE CASCADE
-            )",
-            [],
-        )?;
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS last_known_block (
-                id INT PRIMARY KEY,
-                block_hash INT NOT NULL
-            )",
-            [],
-        )?;
-
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS keys (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key INT NOT NULL
-            )",
-            [],
-        )?;
-        tx.commit()
-    }
-
-    /// Generic method to store data into the database.
-    fn store_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
-        match self.connection.execute(query, params) {
-            Ok(_) => Ok(()),
-            Err(e) => match e {
-                SqliteError::SqliteFailure(ie, _) => match ie.code {
-                    ErrorCode::ConstraintViolation => match ie.extended_code {
-                        SQLITE_CONSTRAINT_FOREIGNKEY => Err(Error::MissingForeignKey),
-                        SQLITE_CONSTRAINT_PRIMARYKEY => Err(Error::AlreadyExists),
-                        _ => Err(Error::Unknown(e)),
-                    },
-                    _ => Err(Error::Unknown(e)),
-                },
-                _ => Err(Error::Unknown(e)),
-            },
-        }
-    }
-
-    /// Generic method to remove data from the database.
-    fn remove_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
-        match self.connection.execute(query, params).unwrap() {
-            0 => Err(Error::NotFound),
-            _ => Ok(()),
-        }
-    }
-
-    /// Generic method to update data from the database.
-    fn update_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
-        // Updating data is fundamentally the same as deleting it in terms of interface.
-        // A query is sent and either no row is modified or some rows are
-        self.remove_data(query, params)
     }
 
     /// Stores a user ([UserInfo]) into the database.
@@ -157,7 +99,7 @@ impl DBM {
         match self.store_data(
             query,
             params![
-                user_id.serialize(),
+                user_id.to_vec(),
                 user_info.available_slots,
                 user_info.subscription_expiry,
             ],
@@ -182,7 +124,7 @@ impl DBM {
             params![
                 user_info.available_slots,
                 user_info.subscription_expiry,
-                user_id.serialize(),
+                user_id.to_vec(),
             ],
         ) {
             Ok(_) => {
@@ -200,12 +142,12 @@ impl DBM {
             .connection
             .prepare("SELECT UUID, encrypted_blob FROM appointments WHERE user_id=(?)")
             .unwrap();
-        let mut rows = stmt.query([user_id.serialize()]).unwrap();
+        let mut rows = stmt.query([user_id.to_vec()]).unwrap();
 
         let mut appointments = HashMap::new();
         while let Ok(Some(inner_row)) = rows.next() {
             let raw_uuid: Vec<u8> = inner_row.get(0).unwrap();
-            let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
+            let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
             let e_blob: Vec<u8> = inner_row.get(1).unwrap();
 
             appointments.insert(
@@ -225,7 +167,7 @@ impl DBM {
 
         while let Ok(Some(row)) = rows.next() {
             let raw_userid: Vec<u8> = row.get(0).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
             let slots = row.get(1).unwrap();
             let expiry = row.get(2).unwrap();
 
@@ -244,7 +186,7 @@ impl DBM {
         let tx = self.connection.transaction().unwrap();
         let iter = users
             .iter()
-            .map(|uuid| uuid.serialize())
+            .map(|uuid| uuid.to_vec())
             .collect::<Vec<Vec<u8>>>();
 
         for chunk in iter.chunks(limit) {
@@ -278,13 +220,13 @@ impl DBM {
         match self.store_data(
             query,
             params![
-                uuid.serialize(),
-                appointment.locator().serialize(),
+                uuid.to_vec(),
+                appointment.locator().to_vec(),
                 appointment.encrypted_blob(),
                 appointment.to_self_delay(),
                 appointment.user_signature,
                 appointment.start_block,
-                appointment.user_id.serialize(),
+                appointment.user_id.to_vec(),
             ],
         ) {
             Ok(x) => {
@@ -310,7 +252,7 @@ impl DBM {
                 appointment.to_self_delay(),
                 appointment.user_signature,
                 appointment.start_block,
-                uuid.serialize(),
+                uuid.to_vec(),
             ],
         ) {
             Ok(_) => {
@@ -324,7 +266,7 @@ impl DBM {
 
     /// Loads an [Appointment] from the database.
     pub(crate) fn load_appointment(&self, uuid: UUID) -> Result<ExtendedAppointment, Error> {
-        let key = uuid.serialize();
+        let key = uuid.to_vec();
         let mut stmt = self
             .connection
             .prepare("SELECT * FROM appointments WHERE UUID=(?)")
@@ -332,9 +274,9 @@ impl DBM {
 
         stmt.query_row([key], |row| {
             let raw_locator: Vec<u8> = row.get(1).unwrap();
-            let locator = Locator::deserialize(&raw_locator).unwrap();
+            let locator = Locator::from_slice(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(6).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             let appointment = Appointment::new(locator, row.get(2).unwrap(), row.get(3).unwrap());
             Ok(ExtendedAppointment::new(
@@ -363,18 +305,18 @@ impl DBM {
         let mut stmt = self.connection.prepare(&sql).unwrap();
 
         let mut rows = if let Some(locator) = locator {
-            stmt.query([locator.serialize()]).unwrap()
+            stmt.query([locator.to_vec()]).unwrap()
         } else {
             stmt.query([]).unwrap()
         };
 
         while let Ok(Some(row)) = rows.next() {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
-            let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
+            let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
             let raw_locator: Vec<u8> = row.get(1).unwrap();
-            let locator = Locator::deserialize(&raw_locator).unwrap();
+            let locator = Locator::from_slice(&raw_locator).unwrap();
             let raw_userid: Vec<u8> = row.get(6).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             let appointment = Appointment::new(locator, row.get(2).unwrap(), row.get(3).unwrap());
 
@@ -395,7 +337,7 @@ impl DBM {
     /// Removes an [Appointment] from the database.
     pub(crate) fn remove_appointment(&self, uuid: UUID) {
         let query = "DELETE FROM appointments WHERE UUID=(?)";
-        match self.remove_data(query, params![uuid.serialize()]) {
+        match self.remove_data(query, params![uuid.to_vec()]) {
             Ok(_) => {
                 log::debug!("Appointment successfully removed: {}", uuid);
             }
@@ -416,7 +358,7 @@ impl DBM {
         let tx = self.connection.transaction().unwrap();
         let iter = appointments
             .iter()
-            .map(|uuid| uuid.serialize())
+            .map(|uuid| uuid.to_vec())
             .collect::<Vec<Vec<u8>>>();
 
         for chunk in iter.chunks(limit) {
@@ -434,7 +376,7 @@ impl DBM {
 
         for (id, info) in updated_users.iter() {
             let query = "UPDATE users SET available_slots=(?1) WHERE user_id=(?2)";
-            match tx.execute(query, params![info.available_slots, id.serialize(),]) {
+            match tx.execute(query, params![info.available_slots, id.to_vec(),]) {
                 Ok(_) => log::debug!("User update added to db transaction"),
                 Err(e) => log::error!("Couldn't add update query to transaction. Error: {:?}", e),
             };
@@ -455,9 +397,9 @@ impl DBM {
             .prepare("SELECT locator FROM appointments WHERE UUID=(?)")
             .unwrap();
 
-        stmt.query_row([uuid.serialize()], |row| {
+        stmt.query_row([uuid.to_vec()], |row| {
             let raw_locator: Vec<u8> = row.get(0).unwrap();
-            Ok(Locator::deserialize(&raw_locator).unwrap())
+            Ok(Locator::from_slice(&raw_locator).unwrap())
         })
         .map_err(|_| Error::NotFound)
     }
@@ -475,7 +417,7 @@ impl DBM {
         match self.store_data(
             query,
             params![
-                uuid.serialize(),
+                uuid.to_vec(),
                 consensus::serialize(&tracker.dispute_tx),
                 consensus::serialize(&tracker.penalty_tx),
                 height,
@@ -495,7 +437,7 @@ impl DBM {
 
     /// Loads a [TransactionTracker] from the database.
     pub(crate) fn load_tracker(&self, uuid: UUID) -> Result<TransactionTracker, Error> {
-        let key = uuid.serialize();
+        let key = uuid.to_vec();
         let mut stmt = self.connection.prepare(
             "SELECT t.*, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID WHERE t.UUID=(?)").unwrap();
 
@@ -507,7 +449,7 @@ impl DBM {
             let height: u32 = row.get(3).unwrap();
             let confirmed: bool = row.get(4).unwrap();
             let raw_userid: Vec<u8> = row.get(5).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             Ok(TransactionTracker {
                 dispute_tx,
@@ -535,14 +477,14 @@ impl DBM {
         let mut stmt = self.connection.prepare(&sql).unwrap();
 
         let mut rows = if let Some(locator) = locator {
-            stmt.query([locator.serialize()]).unwrap()
+            stmt.query([locator.to_vec()]).unwrap()
         } else {
             stmt.query([]).unwrap()
         };
 
         while let Ok(Some(row)) = rows.next() {
             let raw_uuid: Vec<u8> = row.get(0).unwrap();
-            let uuid = UUID::deserialize(&raw_uuid[0..20]).unwrap();
+            let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
             let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
             let dispute_tx = consensus::deserialize(&raw_dispute_tx).unwrap();
             let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
@@ -550,7 +492,7 @@ impl DBM {
             let height: u32 = row.get(3).unwrap();
             let confirmed: bool = row.get(4).unwrap();
             let raw_userid: Vec<u8> = row.get(5).unwrap();
-            let user_id = UserId::deserialize(&raw_userid).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             trackers.insert(
                 uuid,
@@ -617,26 +559,28 @@ impl DBM {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::iter::FromIterator;
+
+    use teos_common::cryptography::get_random_bytes;
+    use teos_common::test_utils::get_random_user_id;
 
     use crate::test_utils::{
         generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_tracker, get_random_tx, get_random_user_id,
+        get_random_tracker, get_random_tx,
     };
-    use std::iter::FromIterator;
-    use teos_common::cryptography::get_random_bytes;
 
     impl DBM {
         pub(crate) fn in_memory() -> Result<Self, SqliteError> {
             let connection = Connection::open_in_memory()?;
             connection.execute("PRAGMA foreign_keys=1;", [])?;
             let mut dbm = Self { connection };
-            dbm.create_tables()?;
+            dbm.create_tables(Vec::from_iter(TABLES))?;
 
             Ok(dbm)
         }
 
         pub(crate) fn load_user(&self, user_id: UserId) -> Result<UserInfo, Error> {
-            let key = user_id.serialize();
+            let key = user_id.to_vec();
             let mut stmt = self
                 .connection
                 .prepare("SELECT available_slots, subscription_expiry FROM users WHERE user_id=(?)")
@@ -661,7 +605,7 @@ mod tests {
     fn test_create_tables() {
         let connection = Connection::open_in_memory().unwrap();
         let mut dbm = DBM { connection };
-        dbm.create_tables().unwrap();
+        dbm.create_tables(Vec::from_iter(TABLES)).unwrap();
     }
 
     #[test]

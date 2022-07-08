@@ -1,3 +1,4 @@
+use hex::FromHex;
 use serde_json::to_string_pretty as pretty_json;
 use std::str::FromStr;
 use structopt::StructOpt;
@@ -68,11 +69,11 @@ async fn main() {
             println!("{}", pretty_json(&appointments.into_inner()).unwrap());
         }
         Command::GetAppointments(appointments_data) => {
-            match Locator::from_str(&appointments_data.locator) {
+            match Locator::from_hex(&appointments_data.locator) {
                 Ok(locator) => {
                     match client
                         .get_appointments(Request::new(msgs::GetAppointmentsRequest {
-                            locator: locator.serialize(),
+                            locator: locator.to_vec(),
                         }))
                         .await
                     {
@@ -98,7 +99,7 @@ async fn main() {
                 Ok(user_id) => {
                     match client
                         .get_user(Request::new(msgs::GetUserRequest {
-                            user_id: user_id.serialize(),
+                            user_id: user_id.to_vec(),
                         }))
                         .await
                     {

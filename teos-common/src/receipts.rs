@@ -1,14 +1,17 @@
 //! Receipts issued  by towers and handed to users as commitment proof.
 
+use serde::Serialize;
+
 use bitcoin::secp256k1::SecretKey;
 
 use crate::{cryptography, UserId};
 
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 pub struct RegistrationReceipt {
     user_id: UserId,
     available_slots: u32,
     subscription_expiry: u32,
+    #[serde(skip)]
     signature: Option<String>,
 }
 
@@ -19,6 +22,20 @@ impl RegistrationReceipt {
             available_slots,
             subscription_expiry,
             signature: None,
+        }
+    }
+
+    pub fn with_signature(
+        user_id: UserId,
+        available_slots: u32,
+        subscription_expiry: u32,
+        signature: String,
+    ) -> Self {
+        RegistrationReceipt {
+            user_id,
+            available_slots,
+            subscription_expiry,
+            signature: Some(signature),
         }
     }
 
@@ -38,9 +55,9 @@ impl RegistrationReceipt {
         self.signature.clone()
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    pub fn to_vec(&self) -> Vec<u8> {
         let mut ser = Vec::new();
-        ser.extend_from_slice(&self.user_id.serialize());
+        ser.extend_from_slice(&self.user_id.to_vec());
         ser.extend_from_slice(&self.available_slots.to_be_bytes());
         ser.extend_from_slice(&self.subscription_expiry.to_be_bytes());
 
@@ -49,10 +66,19 @@ impl RegistrationReceipt {
 
     pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
-        self.signature = Some(cryptography::sign(&self.serialize(), sk).unwrap());
+        self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
+    }
+
+    pub fn verify(&self, id: &UserId) -> bool {
+        if let Some(signature) = self.signature() {
+            cryptography::verify(&self.to_vec(), &signature, &id.0)
+        } else {
+            false
+        }
     }
 }
-#[derive(Debug)]
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppointmentReceipt {
     user_signature: String,
     start_block: u32,
@@ -68,6 +94,14 @@ impl AppointmentReceipt {
         }
     }
 
+    pub fn with_signature(user_signature: String, start_block: u32, signature: String) -> Self {
+        AppointmentReceipt {
+            user_signature,
+            start_block,
+            signature: Some(signature),
+        }
+    }
+
     pub fn user_signature(&self) -> &str {
         &self.user_signature
     }
@@ -80,7 +114,7 @@ impl AppointmentReceipt {
         self.signature.clone()
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
+    pub fn to_vec(&self) -> Vec<u8> {
         let mut ser = Vec::new();
         ser.extend_from_slice(self.user_signature.as_bytes());
         ser.extend_from_slice(&self.start_block.to_be_bytes());
@@ -90,6 +124,14 @@ impl AppointmentReceipt {
 
     pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
-        self.signature = Some(cryptography::sign(&self.serialize(), sk).unwrap());
+        self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
+    }
+
+    pub fn verify(&self, id: &UserId) -> bool {
+        if let Some(signature) = self.signature() {
+            cryptography::verify(&self.to_vec(), &signature, &id.0)
+        } else {
+            false
+        }
     }
 }

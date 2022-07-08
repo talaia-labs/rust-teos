@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex};
 
 use lightning::chain;
 
+use teos_common::appointment::compute_appointment_slots;
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
 use teos_common::cryptography;
 use teos_common::receipts::RegistrationReceipt;
 use teos_common::UserId;
 
 use crate::dbm::DBM;
-use crate::extended_appointment::{compute_appointment_slots, ExtendedAppointment, UUID};
+use crate::extended_appointment::{ExtendedAppointment, UUID};
 
 /// Data regarding a user subscription with the tower.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,13 +334,13 @@ impl chain::Listen for Gatekeeper {
 mod tests {
     use super::*;
 
-    use crate::dbm::Error as DBError;
     use crate::test_utils::{
-        generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_user_id, Blockchain,
+        generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid, Blockchain,
     };
     use lightning::chain::Listen;
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
+    use teos_common::dbm::Error as DBError;
+    use teos_common::test_utils::get_random_user_id;
 
     const SLOTS: u32 = 21;
     const DURATION: u32 = 500;

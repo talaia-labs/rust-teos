@@ -9,13 +9,13 @@ use bitcoin::{BlockHeader, Transaction, Txid};
 use lightning::chain;
 
 use teos_common::constants;
+use teos_common::protos as common_msgs;
 use teos_common::UserId;
 
 use crate::carrier::Carrier;
 use crate::dbm::DBM;
 use crate::extended_appointment::UUID;
 use crate::gatekeeper::{Gatekeeper, UserInfo};
-use crate::protos as msgs;
 use crate::watcher::Breach;
 
 /// Number of missed confirmations to wait before rebroadcasting a transaction.
@@ -108,9 +108,9 @@ impl TransactionTracker {
     }
 }
 
-impl From<TransactionTracker> for msgs::Tracker {
+impl From<TransactionTracker> for common_msgs::Tracker {
     fn from(t: TransactionTracker) -> Self {
-        msgs::Tracker {
+        common_msgs::Tracker {
             dispute_txid: t.dispute_tx.txid().to_vec(),
             penalty_txid: t.penalty_tx.txid().to_vec(),
             penalty_rawtx: consensus::serialize(&t.penalty_tx),
@@ -285,9 +285,12 @@ impl Responder {
 
         for (uuid, tracker) in self.trackers.lock().unwrap().iter_mut() {
             if let ConfirmationStatus::ConfirmedIn(h) = tracker.status {
-                if current_height - h == constants::IRREVOCABLY_RESOLVED {
+                let confirmations = current_height - h;
+                if confirmations == constants::IRREVOCABLY_RESOLVED {
                     // Tracker is deep enough in the chain, it can be deleted
                     completed_trackers.insert(*uuid);
+                } else {
+                    log::info!("{} received a confirmation (count={})", uuid, confirmations);
                 }
             } else if txids.contains(&tracker.penalty_txid) {
                 // First confirmation was received
@@ -567,14 +570,17 @@ mod tests {
     use std::ops::Deref;
     use std::sync::{Arc, Mutex};
 
-    use crate::dbm::{Error as DBError, DBM};
+    use crate::dbm::DBM;
     use crate::gatekeeper::UserInfo;
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, generate_dummy_appointment_with_user, generate_uuid, get_random_breach,
-        get_random_tracker, get_random_tx, get_random_user_id, store_appointment_and_fks_to_db,
-        Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        get_random_tracker, get_random_tx, store_appointment_and_fks_to_db, Blockchain,
+        MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
+
+    use teos_common::dbm::Error as DBError;
+    use teos_common::test_utils::get_random_user_id;
 
     impl PartialEq for Responder {
         fn eq(&self, other: &Self) -> bool {

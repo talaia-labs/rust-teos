@@ -8,7 +8,6 @@
 */
 
 use rand::Rng;
-use std::convert::TryInto;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -23,10 +22,8 @@ use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::blockdata::script::{Builder, Script};
 use bitcoin::blockdata::transaction::{OutPoint, Transaction, TxIn, TxOut};
-use bitcoin::consensus;
 use bitcoin::hash_types::BlockHash;
 use bitcoin::hash_types::Txid;
-use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::util::hash::bitcoin_merkle_root;
@@ -38,8 +35,8 @@ use lightning_block_sync::{
     AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError, UnboundedCache,
 };
 
-use teos_common::appointment::{Appointment, Locator};
-use teos_common::cryptography::{encrypt, get_random_bytes, get_random_keypair};
+use teos_common::cryptography::{get_random_bytes, get_random_keypair};
+use teos_common::test_utils::{generate_random_appointment, get_random_user_id, TXID_HEX, TX_HEX};
 use teos_common::UserId;
 
 use crate::api::internal::InternalAPI;
@@ -49,10 +46,6 @@ use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, UserInfo};
 use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
 use crate::watcher::{Breach, Watcher};
-
-pub(crate) static TX_HEX: &str =  "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff54038e830a1b4d696e656420627920416e74506f6f6c373432c2005b005e7a0ae3fabe6d6d7841cd582ead8ea5dd8e3de1173cae6fcd2a53c7362ebb7fb6f815604fe07cbe0200000000000000ac0e060005f90000ffffffff04d9476026000000001976a91411dbe48cc6b617f9c6adaf4d9ed5f625b1c7cb5988ac0000000000000000266a24aa21a9ed7248c6efddd8d99bfddd7f499f0b915bffa8253003cc934df1ff14a81301e2340000000000000000266a24b9e11b6d7054937e13f39529d6ad7e685e9dd4efa426f247d5f5a5bed58cdddb2d0fa60100000000000000002b6a2952534b424c4f434b3a054a68aa5368740e8b3e3c67bce45619c2cfd07d4d4f0936a5612d2d0034fa0a0120000000000000000000000000000000000000000000000000000000000000000000000000";
-pub(crate) static TXID_HEX: &str =
-    "338bda693c4a26e0d41a01f7f2887aaf48bf0bdf93e6415c9110b29349349d3e";
 
 pub(crate) const SLOTS: u32 = 21;
 pub(crate) const DURATION: u32 = 500;
@@ -290,13 +283,7 @@ impl BlockSource for Blockchain {
 pub(crate) fn generate_uuid() -> UUID {
     let mut rng = rand::thread_rng();
 
-    UUID::deserialize(&rng.gen::<[u8; 20]>()).unwrap()
-}
-
-pub(crate) fn get_random_user_id() -> UserId {
-    let (_, pk) = get_random_keypair();
-
-    UserId(pk)
+    UUID::from_slice(&rng.gen::<[u8; 20]>()).unwrap()
 }
 
 pub(crate) fn get_random_tx() -> Transaction {
@@ -323,23 +310,7 @@ pub(crate) fn get_random_tx() -> Transaction {
 }
 
 pub(crate) fn generate_dummy_appointment(dispute_txid: Option<&Txid>) -> ExtendedAppointment {
-    let dispute_txid = match dispute_txid {
-        Some(l) => *l,
-        None => {
-            let prev_txid_bytes = get_random_bytes(32);
-            Txid::from_slice(&prev_txid_bytes).unwrap()
-        }
-    };
-
-    let tx_bytes = Vec::from_hex(TX_HEX).unwrap();
-    let penalty_tx = consensus::deserialize(&tx_bytes).unwrap();
-
-    let mut raw_locator: [u8; 16] = get_random_bytes(16).try_into().unwrap();
-    raw_locator.copy_from_slice(&dispute_txid[..16]);
-    let locator = Locator::deserialize(&raw_locator).unwrap();
-
-    let encrypted_blob = encrypt(&penalty_tx, &dispute_txid).unwrap();
-    let appointment = Appointment::new(locator, encrypted_blob, 21);
+    let appointment = generate_random_appointment(dispute_txid);
     let user_id = get_random_user_id();
     let user_signature = String::new();
     let start_block = 42;

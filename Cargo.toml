@@ -3,4 +3,5 @@
 members = [
     "teos",
     "teos-common",
+    "watchtower-plugin"
 ]

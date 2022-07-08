@@ -1,0 +1,64 @@
+name: CI tests for CLN watchtower-plugin
+
+on: [push, pull_request]
+
+env:
+  bitcoind_version: 0.20.1
+  cln_version: 0.11.0.1
+
+jobs:
+  cache-cln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v2
+      - name: Create CLN cache
+        id: cache-cln
+        uses: actions/cache@v3
+        env:
+          cache-name: cache-cln-dev
+        with:
+          path: lightning
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-v${{ env.cln_version }}
+      - name: Compile CLN
+        if: ${{ steps.cache-cln.outputs.cache-hit != 'true' }}
+        run: |
+          sudo apt-get update && sudo apt-get install gettext
+          git clone https://github.com/ElementsProject/lightning.git && cd lightning && git checkout v${{ env.cln_version }}
+          pip install --user poetry && poetry install
+          ./configure --enable-developer && poetry run make
+
+  cln-plugin:
+    needs: cache-cln
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v2
+      - name: Install bitcoind
+        run: |
+          wget https://bitcoincore.org/bin/bitcoin-core-${{ env.bitcoind_version }}/bitcoin-${{ env.bitcoind_version }}-x86_64-linux-gnu.tar.gz
+          tar -xzf bitcoin-${{ env.bitcoind_version }}-x86_64-linux-gnu.tar.gz
+          ln -s $(pwd)/bitcoin-${{ env.bitcoind_version }}/bin/bitcoin* /usr/local/bin
+      - name: Load CLN cache
+        id: cache-cln
+        uses: actions/cache@v3
+        env:
+          cache-name: cache-cln-dev
+        with:
+          path: lightning
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-v${{ env.cln_version }}
+      - name: Link CLN
+        run: |
+          cd lightning && sudo make install
+      - name: Install teos and the plugin
+        run: |
+          cargo install --path teos 
+          cargo install --path watchtower-plugin
+      - name: Add test dependencies
+        run: |
+          cd watchtower-plugin/tests
+          pip install --user poetry && poetry install
+      - name: Run tests
+        run: |
+          cd watchtower-plugin/tests
+          DEVELOPER=1 poetry run pytest test.py -s

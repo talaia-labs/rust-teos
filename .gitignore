@@ -1,4 +1,5 @@
 target
-*/target
+__pycache__
 Cargo.lock
 .vscode
+.idea

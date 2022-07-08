@@ -1,15 +1,19 @@
 //! Logic related to appointments shared between users and the towers.
 
 use hex;
+use serde::{Deserialize, Serialize};
+
 use std::array::TryFromSliceError;
 use std::{convert::TryInto, fmt};
 
 use bitcoin::Txid;
 
+use crate::protos as msgs;
+
 pub const LOCATOR_LEN: usize = 16;
 
 /// User identifier for appointments.
-#[derive(Debug, Eq, PartialEq, Copy, Clone, Hash)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone, Hash, Serialize, Deserialize)]
 pub struct Locator([u8; LOCATOR_LEN]);
 
 impl Locator {
@@ -19,36 +23,42 @@ impl Locator {
     }
 
     /// Encodes a locator into its byte representation.
-    pub fn serialize(&self) -> Vec<u8> {
+    pub fn to_vec(&self) -> Vec<u8> {
         self.0.to_vec()
     }
 
     /// Builds a locator from its byte representation.
-    pub fn deserialize(data: &[u8]) -> Result<Self, TryFromSliceError> {
+    pub fn from_slice(data: &[u8]) -> Result<Self, TryFromSliceError> {
         data.try_into().map(Self)
-    }
-}
-
-impl std::str::FromStr for Locator {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let raw_locator = hex::decode(s).map_err(|_| "Locator is not hex encoded")?;
-        Locator::deserialize(&raw_locator)
-            .map_err(|_| "Locator cannot be built from the given data".into())
     }
 }
 
 impl fmt::Display for Locator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", hex::encode(self.serialize()))
+        write!(f, "{}", hex::encode(self.to_vec()))
+    }
+}
+
+impl AsRef<[u8]> for Locator {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl hex::FromHex for Locator {
+    type Error = String;
+
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
+        let raw_locator = hex::decode(hex).map_err(|_| "Locator is not hex encoded")?;
+        Locator::from_slice(&raw_locator)
+            .map_err(|_| "Locator cannot be built from the given data".into())
     }
 }
 
 /// Contains data regarding an appointment between a client and the tower.
 ///
 /// An appointment is requested for every new channel update.
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct Appointment {
     /// The user identifier for the appointment.
     pub locator: Locator,
@@ -62,6 +72,7 @@ pub struct Appointment {
 }
 
 /// Represents all the possible states of an appointment in the tower, or in a response to a client request.
+#[derive(Serialize, Deserialize, Debug)]
 pub enum AppointmentStatus {
     NotFound = 0,
     BeingWatched = 1,
@@ -118,10 +129,27 @@ impl Appointment {
     /// `locator || encrypted_blob || to_self_delay`
     ///
     /// All values are big endian.
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut result = self.locator.serialize();
+    pub fn to_vec(&self) -> Vec<u8> {
+        let mut result = self.locator.to_vec();
         result.extend(&self.encrypted_blob);
         result.extend(self.to_self_delay.to_be_bytes().to_vec());
         result
     }
+}
+
+impl From<Appointment> for msgs::Appointment {
+    fn from(a: Appointment) -> Self {
+        Self {
+            locator: a.locator.to_vec(),
+            encrypted_blob: a.encrypted_blob.clone(),
+            to_self_delay: a.to_self_delay,
+        }
+    }
+}
+
+/// Computes the number of slots an appointment takes from a user subscription.
+///
+/// This is based on the [encrypted_blob](Appointment::encrypted_blob) size and the slot size that was defined by the [Gatekeeper](crate::gatekeeper::Gatekeeper).
+pub fn compute_appointment_slots(blob_size: usize, blob_max_size: usize) -> u32 {
+    (blob_size as f32 / blob_max_size as f32).ceil() as u32
 }

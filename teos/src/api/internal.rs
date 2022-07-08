@@ -5,13 +5,13 @@ use triggered::Trigger;
 use crate::protos as msgs;
 use crate::protos::private_tower_services_server::PrivateTowerServices;
 use crate::protos::public_tower_services_server::PublicTowerServices;
-
 use crate::watcher::{
     AddAppointmentFailure, AppointmentInfo, GetAppointmentFailure, GetSubscriptionInfoFailure,
     Watcher,
 };
 
 use teos_common::appointment::{Appointment, AppointmentStatus, Locator};
+use teos_common::protos as common_msgs;
 use teos_common::UserId;
 
 /// Internal API of the tower.
@@ -61,12 +61,12 @@ impl PublicTowerServices for Arc<InternalAPI> {
     /// Register endpoint. Part of the public API. Internally calls [Watcher::register].
     async fn register(
         &self,
-        request: Request<msgs::RegisterRequest>,
-    ) -> Result<Response<msgs::RegisterResponse>, Status> {
+        request: Request<common_msgs::RegisterRequest>,
+    ) -> Result<Response<common_msgs::RegisterResponse>, Status> {
         self.check_service_unavailable()?;
         let req_data = request.into_inner();
 
-        let user_id = UserId::deserialize(&req_data.user_id).map_err(|_| {
+        let user_id = UserId::from_slice(&req_data.user_id).map_err(|_| {
             Status::new(
                 Code::InvalidArgument,
                 "Provided public key does not match expected format (33-byte compressed key)",
@@ -74,7 +74,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
         })?;
 
         match self.watcher.register(user_id) {
-            Ok(receipt) => Ok(Response::new(msgs::RegisterResponse {
+            Ok(receipt) => Ok(Response::new(common_msgs::RegisterResponse {
                 user_id: req_data.user_id,
                 available_slots: receipt.available_slots(),
                 subscription_expiry: receipt.subscription_expiry(),
@@ -90,14 +90,14 @@ impl PublicTowerServices for Arc<InternalAPI> {
     /// Add appointment endpoint. Part of the public API. Internally calls [Watcher::add_appointment].
     async fn add_appointment(
         &self,
-        request: Request<msgs::AddAppointmentRequest>,
-    ) -> Result<Response<msgs::AddAppointmentResponse>, Status> {
+        request: Request<common_msgs::AddAppointmentRequest>,
+    ) -> Result<Response<common_msgs::AddAppointmentResponse>, Status> {
         self.check_service_unavailable()?;
         let req_data = request.into_inner();
         let app_data = req_data.appointment.unwrap();
 
         let appointment = Appointment::new(
-            Locator::deserialize(&app_data.locator).unwrap(),
+            Locator::from_slice(&app_data.locator).unwrap(),
             app_data.encrypted_blob,
             app_data.to_self_delay,
         );
@@ -108,8 +108,8 @@ impl PublicTowerServices for Arc<InternalAPI> {
             .add_appointment(appointment, req_data.signature)
         {
             Ok((receipt, available_slots, subscription_expiry)) => {
-                Ok(Response::new(msgs::AddAppointmentResponse {
-                    locator: locator.serialize(),
+                Ok(Response::new(common_msgs::AddAppointmentResponse {
+                    locator: locator.to_vec(),
                     start_block: receipt.start_block(),
                     signature: receipt.signature().unwrap(),
                     available_slots,
@@ -137,19 +137,19 @@ impl PublicTowerServices for Arc<InternalAPI> {
     /// Get appointment endpoint. Part of the public API. Internally calls [Watcher::get_appointment].
     async fn get_appointment(
         &self,
-        request: Request<msgs::GetAppointmentRequest>,
-    ) -> Result<Response<msgs::GetAppointmentResponse>, Status> {
+        request: Request<common_msgs::GetAppointmentRequest>,
+    ) -> Result<Response<common_msgs::GetAppointmentResponse>, Status> {
         self.check_service_unavailable()?;
         let req_data = request.into_inner();
-        let locator = Locator::deserialize(&req_data.locator).unwrap();
+        let locator = Locator::from_slice(&req_data.locator).unwrap();
 
         match self.watcher.get_appointment(locator, &req_data.signature) {
             Ok(info) => {
                 let (appointment_data, status) = match info {
                     AppointmentInfo::Appointment(appointment) => (
-                        msgs::AppointmentData {
+                        common_msgs::AppointmentData {
                             appointment_data: Some(
-                                msgs::appointment_data::AppointmentData::Appointment(
+                                common_msgs::appointment_data::AppointmentData::Appointment(
                                     appointment.into(),
                                 ),
                             ),
@@ -157,15 +157,17 @@ impl PublicTowerServices for Arc<InternalAPI> {
                         AppointmentStatus::BeingWatched,
                     ),
                     AppointmentInfo::Tracker(tracker) => (
-                        msgs::AppointmentData {
+                        common_msgs::AppointmentData {
                             appointment_data: Some(
-                                msgs::appointment_data::AppointmentData::Tracker(tracker.into()),
+                                common_msgs::appointment_data::AppointmentData::Tracker(
+                                    tracker.into(),
+                                ),
                             ),
                         },
                         AppointmentStatus::DisputeResponded,
                     ),
                 };
-                Ok(Response::new(msgs::GetAppointmentResponse {
+                Ok(Response::new(common_msgs::GetAppointmentResponse {
                     appointment_data: Some(appointment_data),
                     status: status as i32,
                 }))
@@ -189,8 +191,8 @@ impl PublicTowerServices for Arc<InternalAPI> {
     /// Get subscription info endpoint. Part of the public API. Internally calls [Watcher::get_subscription_info].
     async fn get_subscription_info(
         &self,
-        request: Request<msgs::GetSubscriptionInfoRequest>,
-    ) -> Result<Response<msgs::GetSubscriptionInfoResponse>, Status> {
+        request: Request<common_msgs::GetSubscriptionInfoRequest>,
+    ) -> Result<Response<common_msgs::GetSubscriptionInfoResponse>, Status> {
         self.check_service_unavailable()?;
         let (subscription_info, locators) = self
             .watcher
@@ -206,10 +208,10 @@ impl PublicTowerServices for Arc<InternalAPI> {
                 ),
             })?;
 
-        Ok(Response::new(msgs::GetSubscriptionInfoResponse {
+        Ok(Response::new(common_msgs::GetSubscriptionInfoResponse {
             available_slots: subscription_info.available_slots,
             subscription_expiry: subscription_info.subscription_expiry,
-            locators: locators.iter().map(|x| x.serialize()).collect(),
+            locators: locators.iter().map(|x| x.to_vec()).collect(),
         }))
     }
 }
@@ -226,16 +228,18 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         let mut all_appointments = Vec::new();
 
         for (_, appointment) in self.watcher.get_all_watcher_appointments().into_iter() {
-            all_appointments.push(msgs::AppointmentData {
-                appointment_data: Some(msgs::appointment_data::AppointmentData::Appointment(
-                    appointment.inner.into(),
-                )),
+            all_appointments.push(common_msgs::AppointmentData {
+                appointment_data: Some(
+                    common_msgs::appointment_data::AppointmentData::Appointment(
+                        appointment.inner.into(),
+                    ),
+                ),
             })
         }
 
         for (_, tracker) in self.watcher.get_all_responder_trackers().into_iter() {
-            all_appointments.push(msgs::AppointmentData {
-                appointment_data: Some(msgs::appointment_data::AppointmentData::Tracker(
+            all_appointments.push(common_msgs::AppointmentData {
+                appointment_data: Some(common_msgs::appointment_data::AppointmentData::Tracker(
                     tracker.into(),
                 )),
             })
@@ -253,7 +257,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         request: tonic::Request<msgs::GetAppointmentsRequest>,
     ) -> Result<tonic::Response<msgs::GetAppointmentsResponse>, Status> {
         let mut matching_appointments = vec![];
-        let locator = Locator::deserialize(&request.into_inner().locator).map_err(|_| {
+        let locator = Locator::from_slice(&request.into_inner().locator).map_err(|_| {
             Status::new(
                 Code::InvalidArgument,
                 "The provided locator does not match the expected format (16-byte hexadecimal string)",
@@ -265,10 +269,12 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             .get_watcher_appointments_with_locator(locator)
             .into_iter()
         {
-            matching_appointments.push(msgs::AppointmentData {
-                appointment_data: Some(msgs::appointment_data::AppointmentData::Appointment(
-                    appointment.inner.into(),
-                )),
+            matching_appointments.push(common_msgs::AppointmentData {
+                appointment_data: Some(
+                    common_msgs::appointment_data::AppointmentData::Appointment(
+                        appointment.inner.into(),
+                    ),
+                ),
             })
         }
 
@@ -277,8 +283,8 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             .get_responder_trackers_with_locator(locator)
             .into_iter()
         {
-            matching_appointments.push(msgs::AppointmentData {
-                appointment_data: Some(msgs::appointment_data::AppointmentData::Tracker(
+            matching_appointments.push(common_msgs::AppointmentData {
+                appointment_data: Some(common_msgs::appointment_data::AppointmentData::Tracker(
                     tracker.into(),
                 )),
             })
@@ -297,7 +303,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         _: Request<()>,
     ) -> Result<Response<msgs::GetTowerInfoResponse>, Status> {
         Ok(Response::new(msgs::GetTowerInfoResponse {
-            tower_id: self.watcher.tower_id.serialize(),
+            tower_id: self.watcher.tower_id.to_vec(),
             n_registered_users: self.watcher.get_registered_users_count() as u32,
             n_watcher_appointments: self.watcher.get_appointments_count() as u32,
             n_responder_trackers: self.watcher.get_trackers_count() as u32,
@@ -312,7 +318,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             .watcher
             .get_user_ids()
             .iter()
-            .map(|x| x.serialize())
+            .map(|x| x.to_vec())
             .collect();
 
         Ok(Response::new(msgs::GetUsersResponse { user_ids }))
@@ -324,7 +330,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         &self,
         request: Request<msgs::GetUserRequest>,
     ) -> Result<Response<msgs::GetUserResponse>, Status> {
-        let user_id = UserId::deserialize(&request.into_inner().user_id).map_err(|_| {
+        let user_id = UserId::from_slice(&request.into_inner().user_id).map_err(|_| {
             Status::new(
                 Code::InvalidArgument,
                 "Provided public key does not match expected format (33-byte compressed key)",
@@ -338,7 +344,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
                 appointments: info
                     .appointments
                     .iter()
-                    .map(|(uuid, _)| uuid.serialize())
+                    .map(|(uuid, _)| uuid.to_vec())
                     .collect(),
             })),
             None => Err(Status::new(Code::NotFound, "User not found")),
@@ -371,16 +377,19 @@ mod tests_private_api {
     use std::collections::HashSet;
     use std::iter::FromIterator;
 
+    use bitcoin::hashes::Hash;
+    use bitcoin::Txid;
+
     use crate::extended_appointment::UUID;
     use crate::responder::{ConfirmationStatus, TransactionTracker};
     use crate::test_utils::{
-        create_api, generate_dummy_appointment, generate_uuid, get_random_tx, get_random_user_id,
-        DURATION, SLOTS, START_HEIGHT,
+        create_api, generate_dummy_appointment, generate_uuid, get_random_tx, DURATION, SLOTS,
+        START_HEIGHT,
     };
     use crate::watcher::Breach;
-    use bitcoin::hashes::Hash;
-    use bitcoin::Txid;
+
     use teos_common::cryptography::{self, get_random_keypair};
+    use teos_common::test_utils::get_random_user_id;
 
     #[tokio::test]
     async fn test_get_all_appointments() {
@@ -404,7 +413,7 @@ mod tests_private_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
@@ -419,7 +428,7 @@ mod tests_private_api {
         assert_eq!(response.appointments.len(), 1);
         assert!(matches!(
             response.appointments[0].appointment_data,
-            Some(msgs::appointment_data::AppointmentData::Appointment { .. })
+            Some(common_msgs::appointment_data::AppointmentData::Appointment { .. })
         ));
     }
 
@@ -441,7 +450,7 @@ mod tests_private_api {
         assert_eq!(response.appointments.len(), 1);
         assert!(matches!(
             response.appointments[0].appointment_data,
-            Some(msgs::appointment_data::AppointmentData::Tracker { .. })
+            Some(common_msgs::appointment_data::AppointmentData::Tracker { .. })
         ));
     }
 
@@ -449,7 +458,7 @@ mod tests_private_api {
     async fn test_get_appointments() {
         let internal_api = create_api().await;
 
-        let locator = Locator::new(get_random_tx().txid()).serialize();
+        let locator = Locator::new(get_random_tx().txid()).to_vec();
         let response = internal_api
             .get_appointments(Request::new(msgs::GetAppointmentsRequest { locator }))
             .await
@@ -475,7 +484,7 @@ mod tests_private_api {
                 let (user_sk, user_pk) = get_random_keypair();
                 internal_api.watcher.register(UserId(user_pk)).unwrap();
                 let appointment = generate_dummy_appointment(Some(&dispute_txid)).inner;
-                let signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+                let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
                 internal_api
                     .watcher
                     .add_appointment(appointment, signature)
@@ -487,7 +496,7 @@ mod tests_private_api {
             // Query for the current locator and assert it retrieves correct appointments.
             let response = internal_api
                 .get_appointments(Request::new(msgs::GetAppointmentsRequest {
-                    locator: locator.serialize(),
+                    locator: locator.to_vec(),
                 }))
                 .await
                 .unwrap()
@@ -498,12 +507,12 @@ mod tests_private_api {
             for app_data in response.appointments {
                 assert!(matches!(
                     app_data.appointment_data,
-                    Some(msgs::appointment_data::AppointmentData::Appointment(
-                        msgs::Appointment {
+                    Some(common_msgs::appointment_data::AppointmentData::Appointment(
+                        common_msgs::Appointment {
                             locator: ref app_loc,
                             ..
                         }
-                    )) if Locator::deserialize(app_loc).unwrap() == locator
+                    )) if Locator::from_slice(app_loc).unwrap() == locator
                 ));
             }
         }
@@ -538,7 +547,7 @@ mod tests_private_api {
             // Query for the current locator and assert it retrieves correct trackers.
             let response = internal_api
                 .get_appointments(Request::new(msgs::GetAppointmentsRequest {
-                    locator: locator.serialize(),
+                    locator: locator.to_vec(),
                 }))
                 .await
                 .unwrap()
@@ -549,8 +558,8 @@ mod tests_private_api {
             for app_data in response.appointments {
                 assert!(matches!(
                     app_data.appointment_data,
-                    Some(msgs::appointment_data::AppointmentData::Tracker(
-                        msgs::Tracker {
+                    Some(common_msgs::appointment_data::AppointmentData::Tracker(
+                        common_msgs::Tracker {
                             ref dispute_txid,
                             ..
                         }
@@ -570,7 +579,7 @@ mod tests_private_api {
             .unwrap()
             .into_inner();
 
-        assert_eq!(response.tower_id, internal_api.watcher.tower_id.serialize());
+        assert_eq!(response.tower_id, internal_api.watcher.tower_id.to_vec());
         assert_eq!(response.n_registered_users, 0);
         assert_eq!(response.n_watcher_appointments, 0);
         assert_eq!(response.n_responder_trackers, 0);
@@ -588,7 +597,7 @@ mod tests_private_api {
         // Add data to the Watcher
         for _ in 0..2 {
             let appointment = generate_dummy_appointment(None).inner;
-            let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+            let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
             internal_api
                 .watcher
                 .add_appointment(appointment.clone(), user_signature)
@@ -609,7 +618,7 @@ mod tests_private_api {
             .into_inner();
 
         // Given get_tower_info checks data in memory, the data added to the Responder in the test won't be added to the Watcher too.
-        assert_eq!(response.tower_id, internal_api.watcher.tower_id.serialize());
+        assert_eq!(response.tower_id, internal_api.watcher.tower_id.to_vec());
         assert_eq!(response.n_registered_users, 1);
         assert_eq!(response.n_watcher_appointments, 2);
         assert_eq!(response.n_responder_trackers, 3);
@@ -625,7 +634,7 @@ mod tests_private_api {
             let (_, user_pk) = get_random_keypair();
             let user_id = UserId(user_pk);
             internal_api.watcher.register(user_id).unwrap();
-            users.insert(user_id.serialize());
+            users.insert(user_id.to_vec());
         }
 
         let response = internal_api
@@ -661,7 +670,7 @@ mod tests_private_api {
 
         let response = internal_api
             .get_user(Request::new(msgs::GetUserRequest {
-                user_id: user_id.serialize(),
+                user_id: user_id.to_vec(),
             }))
             .await
             .unwrap()
@@ -674,7 +683,7 @@ mod tests_private_api {
         // Add an appointment and check back
         let appointment = generate_dummy_appointment(None).inner;
         let uuid = UUID::new(appointment.locator, user_id);
-        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
@@ -682,7 +691,7 @@ mod tests_private_api {
 
         let response = internal_api
             .get_user(Request::new(msgs::GetUserRequest {
-                user_id: user_id.serialize(),
+                user_id: user_id.to_vec(),
             }))
             .await
             .unwrap()
@@ -690,7 +699,7 @@ mod tests_private_api {
 
         assert_eq!(response.available_slots, SLOTS - 1);
         assert_eq!(response.subscription_expiry, START_HEIGHT as u32 + DURATION);
-        assert_eq!(response.appointments, Vec::from([uuid.serialize()]));
+        assert_eq!(response.appointments, Vec::from([uuid.to_vec()]));
     }
 
     #[tokio::test]
@@ -702,7 +711,7 @@ mod tests_private_api {
 
         match internal_api
             .get_user(Request::new(msgs::GetUserRequest {
-                user_id: UserId(user_pk).serialize(),
+                user_id: UserId(user_pk).to_vec(),
             }))
             .await
         {
@@ -743,14 +752,14 @@ mod tests_public_api {
         // Registering (even multiple times) should work
         for _ in 0..2 {
             let response = internal_api
-                .register(Request::new(msgs::RegisterRequest {
-                    user_id: UserId(user_pk).serialize(),
+                .register(Request::new(common_msgs::RegisterRequest {
+                    user_id: UserId(user_pk).to_vec(),
                 }))
                 .await
                 .unwrap()
                 .into_inner();
 
-            assert!(matches!(response, msgs::RegisterResponse { .. }))
+            assert!(matches!(response, common_msgs::RegisterResponse { .. }))
         }
     }
 
@@ -762,18 +771,18 @@ mod tests_public_api {
 
         // Wrong user id size
         let (_, user_pk) = get_random_keypair();
-        let mut user_id_vec = UserId(user_pk).serialize();
+        let mut user_id_vec = UserId(user_pk).to_vec();
         user_id_vec.pop();
         user_ids.push(user_id_vec);
 
         // Wrong format (does not start with 2 nor 3)
-        user_id_vec = UserId(user_pk).serialize();
+        user_id_vec = UserId(user_pk).to_vec();
         user_id_vec[0] = 1;
         user_ids.push(user_id_vec);
 
         for user_id in user_ids {
             match internal_api
-                .register(Request::new(msgs::RegisterRequest { user_id }))
+                .register(Request::new(common_msgs::RegisterRequest { user_id }))
                 .await
             {
                 Err(status) => {
@@ -790,11 +799,11 @@ mod tests_public_api {
         let internal_api = create_api_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
 
         let (_, user_pk) = get_random_keypair();
-        let user_id = UserId(user_pk).serialize();
+        let user_id = UserId(user_pk).to_vec();
 
         // First registration should go trough
         internal_api
-            .register(Request::new(msgs::RegisterRequest {
+            .register(Request::new(common_msgs::RegisterRequest {
                 user_id: user_id.clone(),
             }))
             .await
@@ -802,7 +811,7 @@ mod tests_public_api {
 
         // Trying to add more slots (re-register) must fail
         match internal_api
-            .register(Request::new(msgs::RegisterRequest { user_id }))
+            .register(Request::new(common_msgs::RegisterRequest { user_id }))
             .await
         {
             Err(status) => {
@@ -819,10 +828,10 @@ mod tests_public_api {
             create_api_with_config(ApiConfig::new(u32::MAX, DURATION).bitcoind_unreachable()).await;
 
         let (_, user_pk) = get_random_keypair();
-        let user_id = UserId(user_pk).serialize();
+        let user_id = UserId(user_pk).to_vec();
 
         match internal_api
-            .register(Request::new(msgs::RegisterRequest { user_id }))
+            .register(Request::new(common_msgs::RegisterRequest { user_id }))
             .await
         {
             Err(status) => {
@@ -842,10 +851,10 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         let response = internal_api
-            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+            .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
                 signature: user_signature.clone(),
             }))
@@ -853,7 +862,10 @@ mod tests_public_api {
             .unwrap()
             .into_inner();
 
-        assert!(matches!(response, msgs::AddAppointmentResponse { .. }));
+        assert!(matches!(
+            response,
+            common_msgs::AddAppointmentResponse { .. }
+        ));
     }
 
     #[tokio::test]
@@ -864,10 +876,10 @@ mod tests_public_api {
         let (user_sk, _) = get_random_keypair();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         match internal_api
-            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+            .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
                 signature: user_signature.clone(),
             }))
@@ -893,10 +905,10 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         match internal_api
-            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+            .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
                 signature: user_signature.clone(),
             }))
@@ -922,10 +934,10 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         match internal_api
-            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+            .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
                 signature: user_signature.clone(),
             }))
@@ -948,13 +960,13 @@ mod tests_public_api {
         internal_api.watcher.register(user_id).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         internal_api
             .watcher
             .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
 
         match internal_api
-            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+            .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
                 signature: user_signature.clone(),
             }))
@@ -977,10 +989,10 @@ mod tests_public_api {
 
         let (user_sk, _) = get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         match internal_api
-            .add_appointment(Request::new(msgs::AddAppointmentRequest {
+            .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
                 signature: user_signature.clone(),
             }))
@@ -1004,7 +1016,7 @@ mod tests_public_api {
 
         // Add the appointment
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.serialize(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
@@ -1013,15 +1025,18 @@ mod tests_public_api {
         // Get the appointment through the API
         let message = format!("get appointment {}", appointment.locator);
         let response = internal_api
-            .get_appointment(Request::new(msgs::GetAppointmentRequest {
-                locator: appointment.locator.serialize(),
+            .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
+                locator: appointment.locator.to_vec(),
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
             }))
             .await
             .unwrap()
             .into_inner();
 
-        assert!(matches!(response, msgs::GetAppointmentResponse { .. }))
+        assert!(matches!(
+            response,
+            common_msgs::GetAppointmentResponse { .. }
+        ))
     }
 
     #[tokio::test]
@@ -1038,8 +1053,8 @@ mod tests_public_api {
         // Try to get the appointment through the API
         let message = format!("get appointment {}", appointment.locator);
         match internal_api
-            .get_appointment(Request::new(msgs::GetAppointmentRequest {
-                locator: appointment.locator.serialize(),
+            .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
+                locator: appointment.locator.to_vec(),
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
             }))
             .await
@@ -1065,8 +1080,8 @@ mod tests_public_api {
         let message = format!("get appointment {}", appointment.locator);
 
         match internal_api
-            .get_appointment(Request::new(msgs::GetAppointmentRequest {
-                locator: appointment.locator.serialize(),
+            .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
+                locator: appointment.locator.to_vec(),
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
             }))
             .await
@@ -1093,8 +1108,8 @@ mod tests_public_api {
         // Try to get the appointment through the API
         let message = format!("get appointment {}", appointment.locator);
         match internal_api
-            .get_appointment(Request::new(msgs::GetAppointmentRequest {
-                locator: appointment.locator.serialize(),
+            .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
+                locator: appointment.locator.to_vec(),
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
             }))
             .await
@@ -1116,8 +1131,8 @@ mod tests_public_api {
         let appointment = generate_dummy_appointment(None).inner;
         let message = format!("get appointment {}", appointment.locator);
         match internal_api
-            .get_appointment(Request::new(msgs::GetAppointmentRequest {
-                locator: appointment.locator.serialize(),
+            .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
+                locator: appointment.locator.to_vec(),
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
             }))
             .await
@@ -1141,14 +1156,17 @@ mod tests_public_api {
         // Get the subscription info though the API
         let message = "get subscription info".to_string();
         let response = internal_api
-            .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
+            .get_subscription_info(Request::new(common_msgs::GetSubscriptionInfoRequest {
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
             }))
             .await
             .unwrap()
             .into_inner();
 
-        assert!(matches!(response, msgs::GetSubscriptionInfoResponse { .. }))
+        assert!(matches!(
+            response,
+            common_msgs::GetSubscriptionInfoResponse { .. }
+        ))
     }
 
     #[tokio::test]
@@ -1161,7 +1179,7 @@ mod tests_public_api {
         // Try to get the subscription info though the API
         let message = "get subscription info".to_string();
         match internal_api
-            .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
+            .get_subscription_info(Request::new(common_msgs::GetSubscriptionInfoRequest {
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
             }))
             .await
@@ -1185,7 +1203,7 @@ mod tests_public_api {
         // Try to get the subscription info though the API
         let message = "get subscription info".to_string();
         match internal_api
-            .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
+            .get_subscription_info(Request::new(common_msgs::GetSubscriptionInfoRequest {
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
             }))
             .await
@@ -1206,7 +1224,7 @@ mod tests_public_api {
         let (user_sk, _) = get_random_keypair();
         let message = "get subscription info".to_string();
         match internal_api
-            .get_subscription_info(Request::new(msgs::GetSubscriptionInfoRequest {
+            .get_subscription_info(Request::new(common_msgs::GetSubscriptionInfoRequest {
                 signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
             }))
             .await

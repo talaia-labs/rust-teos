@@ -1,0 +1,36 @@
+[package]
+name = "watchtower-plugin"
+version = "0.1.0"
+authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
+license = "MIT"
+edition = "2018"
+
+[[bin]]
+name = "watchtower-client"
+path = "src/main.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# General
+backoff = { version = "0.4.0", features = ["tokio"] }
+hex = { version = "0.4.3", features = [ "serde" ] }
+home = "0.5.3"
+reqwest = { version = "0.11", features = [ "blocking", "json" ] }
+log = "0.4.16"
+rusqlite = { version = "0.26.0", features = [ "bundled", "limits" ] }
+serde = "1.0.130"
+serde_json = { version = "1.0", features = [ "preserve_order" ] }
+tonic = { version = "^0.5", features = [ "tls", "transport" ] }
+tokio = { version = "1.5", features = [ "rt-multi-thread", "fs" ] }
+
+# Bitcoin and Lightning
+bitcoin = "0.27"
+cln-plugin = "0.1.0"
+
+# Local
+teos-common = { path = "../teos-common" }
+
+[dev-dependencies]
+httpmock = "0.6"
+tempdir = "0.3.7"
