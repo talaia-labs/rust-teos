@@ -16,6 +16,61 @@ The plugin has the following methods:
 
 The plugin also has an implicit method to send appointments to the registered towers for every new commitment transaction.
 
+# Installing the plugin and linking it to CLN
+
+The first step to add the plugin to CLN is installing it. To do so you need to run (from the `rust-teos` folder):
+
+```
+cargo install --path watchtower-plugin
+```
+
+That will generate a binary called `watchtower-client`. That's the binary we need to link to CLN.
+
+You can link the plugin either via cmd or by placing it in the plugins folder.
+
+### Linking the plugin via cmd
+
+To link the plugin via cmd simply run `lightningd` specifying the plugin to link, that is:
+
+```
+lightningd --plugin=watchtower-client
+```
+
+Notice that you'll need to do this every time you restart your node.
+
+### Linking the plugin via the plugins folder
+
+You can also add a plugin by adding it to the plugins folder so you don't have to link it every single time. In order to do so you need to go to the CLN user directory in your machine (that's usually `~/.lightning`). Once there, you need to create a folder called `plugins` if it does not exist:
+
+```
+cd ~/.lightning
+mkdir plugins && cd plugins
+```
+
+Now you need to place the watchtower-client to this folder. To do so we will create a symbolic link to it. First, check where the binary is placed (this is usually placed in your user's home).
+
+```
+whereis watchtower-client
+> watchtower-client: <your_user_home>/.cargo/bin/watchtower-client
+```
+
+Notice that here, `<your_user_home>` will be the path to your users home directory, for instance `/home/sergi/`. 
+
+Now create a symbolic link to it (make sure to replace the path for your's!):
+
+```
+ln -s <your_user_home>/.cargo/bin/watchtower-client .
+```
+
+If you check the folder you'll see that now there's a link called `watchtower-client`:
+
+```
+ls
+> watchtower-client
+```
+
+You can now turn on your lightning node and the plugin will be automatically linked.
+
 # Config file, data folder and first bootstrap
 
 The plugin, by default, creates a data folder under the user's home folder (`~/.watchtower`), where all the plugin's data is stored. The data folder can be modified by setting the ENV variable `TOWERS_DATA_DIR`.
