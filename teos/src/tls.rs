@@ -76,7 +76,6 @@ fn generate_or_load_identity(
             &key_path
         );
         let keypair = KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
-        //
         std::fs::write(&key_path, keypair.serialize_pem())?;
         log::debug!(
             "Generating a new certificate for key {:?} at {:?}",
@@ -106,7 +105,6 @@ fn generate_or_load_identity(
                 Some(ca) => cert.serialize_pem_with_signer(&Certificate::try_from(ca)?)?,
             },
         )?;
-        log::info!("writing certificate to file");
     }
 
     let key = std::fs::read(&key_path)?;

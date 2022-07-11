@@ -104,9 +104,11 @@ def test_unreachable_watchtower(node_factory, bitcoind, teosd):
     assert l2.rpc.gettowerinfo(tower_id)["status"] == "temporary_unreachable"
     assert l2.rpc.gettowerinfo(tower_id)["pending_appointments"]
 
-    # Start the tower and check the automatic backoff works
+    # Start the tower and check the automatic backoff works (wait while are pending appointments)
     teosd.start()
-    time.sleep(max_interval_time * 2)
+    while l2.rpc.gettowerinfo(tower_id)["pending_appointments"]:
+        time.sleep(1)
+
     assert l2.rpc.gettowerinfo(tower_id)["status"] == "reachable"
     assert not l2.rpc.gettowerinfo(tower_id)["pending_appointments"]
 

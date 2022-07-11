@@ -80,7 +80,7 @@ class TeosD(TailableProc):
         if overwrite_key:
             self.cmd_line.append("--overwritekey")
         TailableProc.start(self)
-        self.wait_for_log("Bootstrap completed. Turning on interfaces", timeout=TIMEOUT)
+        self.wait_for_log("Tower ready", timeout=TIMEOUT)
         logging.info("TeosD started")
 
     def stop(self):
