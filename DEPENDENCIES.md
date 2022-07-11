@@ -1,6 +1,6 @@
 # Dependencies
 
-`rusty-teos` has the following system-wide dependencies:
+`rust-teos` has the following system-wide dependencies:
 
 - `rust`
 - `bitcoind`
@@ -13,7 +13,7 @@ Refer to [rust-lang.org](https://www.rust-lang.org/tools/install).
 
 ### Installing bitcoind
 
-`rusty-teos` runs on top of a Bitcoin Core node. Other underlying Bitcoin nodes are not supported at the moment. 
+`rust-teos` runs on top of a Bitcoin Core node. Other underlying Bitcoin nodes are not supported at the moment. 
 
 You can get Bitcoin Core from [bitcoincore.org](https://bitcoincore.org/en/download/).
 

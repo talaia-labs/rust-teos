@@ -47,14 +47,14 @@ cd ~/.lightning
 mkdir plugins && cd plugins
 ```
 
-Now you need to place the watchtower-client to this folder. To do so we will create a symbolic link to it. First, check where the binary is placed (this is usually placed in your user's home).
+Now you need to place the watchtower-client into this folder. To do so we will create a symbolic link to it. First, check where the binary is placed (this is usually placed in your user's home).
 
 ```
 whereis watchtower-client
 > watchtower-client: <your_user_home>/.cargo/bin/watchtower-client
 ```
 
-Notice that here, `<your_user_home>` will be the path to your users home directory, for instance `/home/sergi/`. 
+Notice that here `<your_user_home>` will be the path to your user's home directory, for instance `/home/sergi/`. 
 
 Now create a symbolic link to it (make sure to replace the path for your's!):
 
@@ -70,6 +70,26 @@ ls
 ```
 
 You can now turn on your lightning node and the plugin will be automatically linked.
+
+### Check that the client is properly linked
+
+We can check the plugin was properly linked by running:
+
+```
+lightning-cli plugin list
+```
+
+That will return a list of all linked plugins, which should include the `watchtower-client`:
+
+```
+[
+ ...
+  {
+     "name": "~/.lightning/plugins/watchtower-client",
+     "active": true
+  }
+]
+```
 
 # Config file, data folder and first bootstrap
 
