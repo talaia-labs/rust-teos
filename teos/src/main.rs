@@ -304,6 +304,7 @@ async fn main() {
         }));
     }
 
+    log::info!("Tower ready");
     chain_monitor.monitor_chain().await;
 
     // Wait until shutdown
