@@ -77,6 +77,7 @@ def test_watchtower(node_factory, bitcoind, teosd):
     assert penalty_txid in fund_txids
 
 
+@pytest.mark.timeout(60)
 def test_unreachable_watchtower(node_factory, bitcoind, teosd):
     # Set the max retry interval to 1 sec so we know how much to wait for the next retry attempt
     max_interval_time = 1
