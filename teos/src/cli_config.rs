@@ -21,7 +21,7 @@ pub enum Command {
 }
 
 #[derive(Debug, StructOpt, Clone)]
-#[structopt(rename_all = "lowercase")]
+#[structopt(rename_all = "snake_case")]
 pub struct GetUserData {
     /// The user identifier (33-byte compressed public key).
     pub user_id: String,
