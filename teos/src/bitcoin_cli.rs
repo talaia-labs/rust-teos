@@ -38,31 +38,28 @@ pub struct BitcoindClient<'a> {
 impl BlockSource for &BitcoindClient<'_> {
     /// Gets a block header given its hash.
     fn get_header<'a>(
-        &'a mut self,
+        &'a self,
         header_hash: &'a BlockHash,
         height_hint: Option<u32>,
     ) -> AsyncBlockSourceResult<'a, BlockHeaderData> {
         Box::pin(async move {
-            let mut rpc = self.bitcoind_rpc_client.lock().await;
+            let rpc = self.bitcoind_rpc_client.lock().await;
             rpc.get_header(header_hash, height_hint).await
         })
     }
 
     /// Gets a block given its hash.
-    fn get_block<'a>(
-        &'a mut self,
-        header_hash: &'a BlockHash,
-    ) -> AsyncBlockSourceResult<'a, Block> {
+    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<'a, Block> {
         Box::pin(async move {
-            let mut rpc = self.bitcoind_rpc_client.lock().await;
+            let rpc = self.bitcoind_rpc_client.lock().await;
             rpc.get_block(header_hash).await
         })
     }
 
     /// Get the best block known by our node.
-    fn get_best_block(&mut self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
+    fn get_best_block(&self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
         Box::pin(async move {
-            let mut rpc = self.bitcoind_rpc_client.lock().await;
+            let rpc = self.bitcoind_rpc_client.lock().await;
             rpc.get_best_block().await
         })
     }
@@ -108,14 +105,14 @@ impl<'a> BitcoindClient<'a> {
     pub async fn get_best_block_hash_and_height(
         &self,
     ) -> Result<(BlockHash, Option<u32>), std::io::Error> {
-        let mut rpc = self.bitcoind_rpc_client.lock().await;
+        let rpc = self.bitcoind_rpc_client.lock().await;
         rpc.call_method::<(BlockHash, Option<u32>)>("getblockchaininfo", &[])
             .await
     }
 
     /// Sends a transaction to the network.
     pub async fn send_raw_transaction(&self, raw_tx: &Transaction) -> Result<Txid, std::io::Error> {
-        let mut rpc = self.bitcoind_rpc_client.lock().await;
+        let rpc = self.bitcoind_rpc_client.lock().await;
 
         let raw_tx_json = serde_json::json!(raw_tx.encode().to_hex());
         rpc.call_method::<Txid>("sendrawtransaction", &[raw_tx_json])
@@ -124,7 +121,7 @@ impl<'a> BitcoindClient<'a> {
 
     /// Gets a transaction given its id.
     pub async fn get_raw_transaction(&self, txid: &Txid) -> Result<Transaction, std::io::Error> {
-        let mut rpc = self.bitcoind_rpc_client.lock().await;
+        let rpc = self.bitcoind_rpc_client.lock().await;
 
         let txid_hex = serde_json::json!(txid.encode().to_hex());
         rpc.call_method::<Transaction>("getrawtransaction", &[txid_hex])

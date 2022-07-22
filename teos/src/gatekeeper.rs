@@ -335,6 +335,20 @@ impl chain::Listen for Gatekeeper {
         self.last_known_block_height
             .store(height - 1, Ordering::Release);
     }
+
+    fn filtered_block_connected(
+        &self,
+        header: &bitcoin::BlockHeader,
+        _txdata: &chain::transaction::TransactionData,
+        height: u32,
+    ) {
+        let block = bitcoin::Block {
+            header: *header,
+            // We don't care about the TXs inside.
+            txdata: vec![],
+        };
+        self.block_connected(&block, height);
+    }
 }
 
 #[cfg(test)]
