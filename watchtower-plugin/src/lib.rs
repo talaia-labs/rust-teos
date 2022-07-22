@@ -35,6 +35,20 @@ pub enum AppointmentStatus {
     Invalid,
 }
 
+/// Errors related to updating a subscription
+#[derive(Debug, PartialEq, Eq)]
+pub enum SubscriptionError {
+    Expiry,
+    Slots,
+}
+
+impl SubscriptionError {
+    /// Whether the error is related to the expiry time or not.
+    pub fn is_expiry(&self) -> bool {
+        *self == SubscriptionError::Expiry
+    }
+}
+
 impl fmt::Display for TowerStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -78,6 +92,7 @@ impl TowerStatus {
 pub struct TowerSummary {
     pub net_addr: String,
     pub available_slots: u32,
+    subscription_start: u32,
     pub subscription_expiry: u32,
     pub status: TowerStatus,
     #[serde(serialize_with = "teos_common::ser::serialize_locators")]
@@ -88,10 +103,16 @@ pub struct TowerSummary {
 
 impl TowerSummary {
     /// Creates a new [TowerSummary] instance.
-    pub fn new(net_addr: String, available_slots: u32, subscription_expiry: u32) -> Self {
+    pub fn new(
+        net_addr: String,
+        available_slots: u32,
+        subscription_start: u32,
+        subscription_expiry: u32,
+    ) -> Self {
         Self {
             net_addr,
             available_slots,
+            subscription_start,
             subscription_expiry,
             status: TowerStatus::Reachable,
             pending_appointments: HashSet::new(),
@@ -103,6 +124,7 @@ impl TowerSummary {
     pub fn with_appointments(
         net_addr: String,
         available_slots: u32,
+        subscription_start: u32,
         subscription_expiry: u32,
         pending_appointments: HashSet<Locator>,
         invalid_appointments: HashSet<Locator>,
@@ -110,6 +132,7 @@ impl TowerSummary {
         Self {
             net_addr,
             available_slots,
+            subscription_start,
             subscription_expiry,
             status: TowerStatus::Reachable,
             pending_appointments,
@@ -129,6 +152,7 @@ impl From<TowerInfo> for TowerSummary {
         TowerSummary::with_appointments(
             info.net_addr,
             info.available_slots,
+            info.subscription_start,
             info.subscription_expiry,
             info.pending_appointments
                 .iter()
@@ -148,6 +172,7 @@ impl From<TowerInfo> for TowerSummary {
 pub struct TowerInfo {
     pub net_addr: String,
     pub available_slots: u32,
+    pub subscription_start: u32,
     pub subscription_expiry: u32,
     pub status: TowerStatus,
     #[serde(serialize_with = "crate::ser::serialize_receipts")]
@@ -165,6 +190,7 @@ impl TowerInfo {
     pub fn new(
         net_addr: String,
         available_slots: u32,
+        subscription_start: u32,
         subscription_expiry: u32,
         appointments: HashMap<Locator, String>,
         pending_appointments: Vec<Appointment>,
@@ -173,6 +199,7 @@ impl TowerInfo {
         Self {
             net_addr,
             available_slots,
+            subscription_start,
             subscription_expiry,
             status: TowerStatus::Reachable,
             appointments,
@@ -230,6 +257,10 @@ mod tests {
         TowerStatus::Misbehaving,
     ];
 
+    const AVAILABLE_SLOTS: u32 = 21;
+    const SUBSCRIPTION_START: u32 = 100;
+    const SUBSCRIPTION_EXPIRY: u32 = SUBSCRIPTION_START + 42;
+
     mod tower_status {
         use super::*;
 
@@ -277,17 +308,20 @@ mod tests {
         #[test]
         fn test_new() {
             let net_addr: String = "addr".into();
-            let available_slots = 21;
-            let subscription_expiry = 42;
 
-            let tower_summary =
-                TowerSummary::new(net_addr.clone(), available_slots, subscription_expiry);
+            let tower_summary = TowerSummary::new(
+                net_addr.clone(),
+                AVAILABLE_SLOTS,
+                SUBSCRIPTION_START,
+                SUBSCRIPTION_EXPIRY,
+            );
             assert_eq!(
                 tower_summary,
                 TowerSummary {
                     net_addr,
-                    available_slots,
-                    subscription_expiry,
+                    available_slots: AVAILABLE_SLOTS,
+                    subscription_start: SUBSCRIPTION_START,
+                    subscription_expiry: SUBSCRIPTION_EXPIRY,
                     status: TowerStatus::Reachable,
                     pending_appointments: HashSet::new(),
                     invalid_appointments: HashSet::new(),
@@ -298,8 +332,7 @@ mod tests {
         #[test]
         fn test_with_appointments() {
             let net_addr: String = "addr".into();
-            let available_slots = 21;
-            let subscription_expiry = 42;
+
             let pending_appointments =
                 HashSet::from_iter([generate_random_appointment(None).locator]);
             let invalid_appointments =
@@ -307,8 +340,9 @@ mod tests {
 
             let tower_summary = TowerSummary::with_appointments(
                 net_addr.clone(),
-                available_slots,
-                subscription_expiry,
+                AVAILABLE_SLOTS,
+                SUBSCRIPTION_START,
+                SUBSCRIPTION_EXPIRY,
                 pending_appointments.clone(),
                 invalid_appointments.clone(),
             );
@@ -316,8 +350,9 @@ mod tests {
                 tower_summary,
                 TowerSummary {
                     net_addr,
-                    available_slots,
-                    subscription_expiry,
+                    available_slots: AVAILABLE_SLOTS,
+                    subscription_start: SUBSCRIPTION_START,
+                    subscription_expiry: SUBSCRIPTION_EXPIRY,
                     status: TowerStatus::Reachable,
                     pending_appointments,
                     invalid_appointments,
@@ -327,7 +362,12 @@ mod tests {
 
         #[test]
         fn test_with_status() {
-            let mut tower_summary = TowerSummary::new("addr".into(), 21, 42);
+            let mut tower_summary = TowerSummary::new(
+                "addr".into(),
+                AVAILABLE_SLOTS,
+                SUBSCRIPTION_START,
+                SUBSCRIPTION_EXPIRY,
+            );
 
             let unreachable_tower = tower_summary.clone().with_status(TowerStatus::Unreachable);
             tower_summary.status = TowerStatus::Unreachable;
@@ -341,10 +381,16 @@ mod tests {
         use teos_common::test_utils::{generate_random_appointment, get_random_user_id};
 
         impl TowerInfo {
-            pub fn empty(net_addr: String, available_slots: u32, subscription_expiry: u32) -> Self {
+            pub fn empty(
+                net_addr: String,
+                available_slots: u32,
+                subscription_start: u32,
+                subscription_expiry: u32,
+            ) -> Self {
                 TowerInfo::new(
                     net_addr,
                     available_slots,
+                    subscription_start,
                     subscription_expiry,
                     HashMap::new(),
                     Vec::new(),
@@ -357,8 +403,9 @@ mod tests {
         fn test_new() {
             let tower_info = TowerInfo::new(
                 "addr".into(),
-                21,
-                42,
+                AVAILABLE_SLOTS,
+                SUBSCRIPTION_START,
+                SUBSCRIPTION_EXPIRY,
                 HashMap::new(),
                 Vec::new(),
                 Vec::new(),
@@ -370,7 +417,12 @@ mod tests {
 
         #[test]
         fn test_with_status() {
-            let mut tower_info = TowerInfo::empty("addr".into(), 21, 42);
+            let mut tower_info = TowerInfo::empty(
+                "addr".into(),
+                AVAILABLE_SLOTS,
+                SUBSCRIPTION_START,
+                SUBSCRIPTION_EXPIRY,
+            );
 
             let unreachable_tower = tower_info.clone().with_status(TowerStatus::Unreachable);
             tower_info.status = TowerStatus::Unreachable;
@@ -379,12 +431,17 @@ mod tests {
 
         #[test]
         fn test_set_misbehaving_proof() {
-            let mut tower_info = TowerInfo::empty("addr".into(), 21, 42);
+            let mut tower_info = TowerInfo::empty(
+                "addr".into(),
+                AVAILABLE_SLOTS,
+                SUBSCRIPTION_START,
+                SUBSCRIPTION_EXPIRY,
+            );
             assert_eq!(tower_info.misbehaving_proof, None);
 
             let appointment_receipt = AppointmentReceipt::with_signature(
                 "user_signature".into(),
-                21,
+                SUBSCRIPTION_START + 1,
                 "tower_signature".into(),
             );
             let proof = MisbehaviorProof::new(

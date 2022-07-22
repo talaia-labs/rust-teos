@@ -12,8 +12,9 @@ message RegisterRequest {
   
     bytes user_id = 1;
     uint32 available_slots = 2;
-    uint32 subscription_expiry = 3;
-    string subscription_signature = 4;
+    uint32 subscription_start = 3;
+    uint32 subscription_expiry = 4;
+    string subscription_signature = 5;
   }
 
   message GetSubscriptionInfoRequest {

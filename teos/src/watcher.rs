@@ -892,7 +892,8 @@ mod tests {
         create_carrier, create_responder, create_watcher, generate_dummy_appointment,
         generate_dummy_appointment_with_user, generate_uuid, get_last_n_blocks, get_random_breach,
         get_random_tx, store_appointment_and_fks_to_db, BitcoindMock, Blockchain, MockOptions,
-        MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
     };
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
     use teos_common::dbm::Error as DBError;
@@ -1798,7 +1799,14 @@ mod tests {
                 // Users will also be updated once the data is deleted.
                 // We can made up the numbers here just to check they are updated.
                 target_appointments.insert(uuid);
-                updated_users.insert(appointment.user_id, UserInfo::new(i, 42));
+                updated_users.insert(
+                    appointment.user_id,
+                    UserInfo::new(
+                        AVAILABLE_SLOTS + i,
+                        SUBSCRIPTION_START + i,
+                        SUBSCRIPTION_EXPIRY + i,
+                    ),
+                );
             }
         }
 

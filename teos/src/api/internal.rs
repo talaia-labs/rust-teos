@@ -77,6 +77,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
             Ok(receipt) => Ok(Response::new(common_msgs::RegisterResponse {
                 user_id: req_data.user_id,
                 available_slots: receipt.available_slots(),
+                subscription_start: receipt.subscription_start(),
                 subscription_expiry: receipt.subscription_expiry(),
                 subscription_signature: receipt.signature().unwrap(),
             })),

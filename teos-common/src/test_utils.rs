@@ -53,7 +53,26 @@ pub fn generate_random_appointment(dispute_txid: Option<&Txid>) -> Appointment {
 }
 
 pub fn get_random_registration_receipt() -> RegistrationReceipt {
-    RegistrationReceipt::new(get_random_user_id(), get_random_int(), get_random_int())
+    let (sk, _) = cryptography::get_random_keypair();
+    let start = get_random_int();
+    let mut receipt =
+        RegistrationReceipt::new(get_random_user_id(), get_random_int(), start, start + 420);
+    receipt.sign(&sk);
+
+    receipt
+}
+
+pub fn get_registration_receipt_from_previous(r: &RegistrationReceipt) -> RegistrationReceipt {
+    let (sk, _) = cryptography::get_random_keypair();
+    let mut receipt = RegistrationReceipt::new(
+        r.user_id(),
+        r.available_slots() + 1 + get_random_int::<u8>() as u32,
+        r.subscription_start(),
+        r.subscription_expiry() + 1 + get_random_int::<u8>() as u32,
+    );
+    receipt.sign(&sk);
+
+    receipt
 }
 
 pub fn get_random_appointment_receipt(tower_sk: SecretKey) -> AppointmentReceipt {

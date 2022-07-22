@@ -50,6 +50,10 @@ async fn register(
     let tower_id = params.tower_id;
     let user_id = plugin.state().lock().unwrap().user_id;
 
+    // TODO: The user should pick the start_time or, at least, check the returned start time against it's known block height.
+    // Otherwise the tower could just generate a subscription starting far in the future. For this we need to access lightning RPC
+    // which is not available in the current version of `cln-plugin` (but already on master). Add it for the next release.
+
     // FIXME: This is a workaround. Ideally, `cln_plugin::options::Value` will implement `as_u64` so we can simply call and unwrap
     // given that we are certain the option exists.
     let port = params.port.unwrap_or(
@@ -83,6 +87,7 @@ async fn register(
         RegistrationReceipt::with_signature(
             user_id,
             r.available_slots,
+            r.subscription_start,
             r.subscription_expiry,
             r.subscription_signature,
         )
@@ -104,16 +109,24 @@ async fn register(
         ));
     }
 
-    log::info!(
-        "Registration succeeded. Available slots: {}",
-        receipt.available_slots()
-    );
-
     plugin
         .state()
         .lock()
         .unwrap()
-        .add_update_tower(tower_id, tower_net_addr, &receipt);
+        .add_update_tower(tower_id, tower_net_addr, &receipt).map_err(|e| {
+            if e.is_expiry() {
+                anyhow!("Registration receipt contains a subscription expiry that is not higher than the one we are currently registered for")
+            } else {
+                anyhow!("Registration receipt does not contain more slots than the ones we are currently registered for")
+            }
+        })?;
+
+    log::info!(
+        "Registration succeeded. Available slots: {}. Subscription period (block height range): ({}-{})",
+        receipt.available_slots(),
+        receipt.subscription_start(),
+        receipt.subscription_expiry()
+    );
 
     Ok(json!(receipt))
 }
