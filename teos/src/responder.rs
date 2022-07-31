@@ -492,18 +492,19 @@ impl chain::Listen for Responder {
     /// Every time a block is received the tracking conditions are checked against the monitored [TransactionTracker]s and
     /// data deletion is performed accordingly. Moreover, lack of confirmations is check for the tracked transactions and
     /// rebroadcasting is performed for those that have missed too many.
-    fn block_connected(&self, block: &bitcoin::Block, height: u32) {
-        log::info!("New block received: {}", block.header.block_hash());
+    fn filtered_block_connected(
+        &self,
+        header: &BlockHeader,
+        txdata: &chain::transaction::TransactionData,
+        height: u32,
+    ) {
+        log::info!("New block received: {}", header.block_hash());
         self.carrier.lock().unwrap().update_height(height);
 
         if self.trackers.lock().unwrap().len() > 0 {
             // Complete those appointments that are due at this height
             let completed_trackers = self.check_confirmations(
-                &block
-                    .txdata
-                    .iter()
-                    .map(|tx| tx.txid())
-                    .collect::<Vec<Txid>>(),
+                &txdata.iter().map(|(_, tx)| tx.txid()).collect::<Vec<_>>(),
                 height,
             );
             let trackers_to_delete_gk = completed_trackers
@@ -1477,7 +1478,7 @@ mod tests {
             .unwrap();
 
         // Delete trackers removes data from the trackers, tx_tracker_map maps, the database. The deletion of the later is
-        // better check in test_block_connected. Add data to the map first.
+        // better check in test_filtered_block_connected. Add data to the map first.
         let mut all_trackers = HashSet::new();
         let mut target_trackers = HashSet::new();
         let mut uuid_txid_map = HashMap::new();
@@ -1597,7 +1598,7 @@ mod tests {
     }
 
     #[test]
-    fn test_block_connected() {
+    fn test_filtered_block_connected() {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let start_height = START_HEIGHT * 2;
         let mut chain = Blockchain::default().with_height(start_height);

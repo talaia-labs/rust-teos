@@ -28,6 +28,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::util::hash::bitcoin_merkle_root;
 use bitcoin::util::uint::Uint256;
+use bitcoin::Witness;
 use lightning_block_sync::poll::{
     ChainPoller, Poll, Validate, ValidatedBlock, ValidatedBlockHeader,
 };
@@ -86,16 +87,18 @@ impl Blockchain {
             let prev_block = &self.blocks[i - 1];
             let prev_blockhash = prev_block.block_hash();
             let time = prev_block.header.time + height as u32;
+            let txdata = vec![get_random_tx()];
+            let hashes = txdata.iter().map(|obj| obj.txid().as_hash());
             self.blocks.push(Block {
                 header: BlockHeader {
                     version: 0,
                     prev_blockhash,
-                    merkle_root: Default::default(),
+                    merkle_root: bitcoin_merkle_root(hashes).unwrap().into(),
                     time,
                     bits,
                     nonce: 0,
                 },
-                txdata: vec![],
+                txdata,
             });
         }
         self
@@ -200,14 +203,20 @@ impl Blockchain {
         let prev_blockhash = prev_block.block_hash();
         let time = prev_block.header.time + (self.blocks.len() + 1) as u32;
         let txdata = match txs {
-            Some(t) => t,
-            None => vec![],
+            Some(v) => {
+                if v.is_empty() {
+                    vec![get_random_tx()]
+                } else {
+                    v
+                }
+            }
+            None => vec![get_random_tx()],
         };
         let hashes = txdata.iter().map(|obj| obj.txid().as_hash());
         let mut header = BlockHeader {
             version: 0,
             prev_blockhash,
-            merkle_root: bitcoin_merkle_root(hashes).into(),
+            merkle_root: bitcoin_merkle_root(hashes).unwrap().into(),
             time,
             bits,
             nonce: 0,
@@ -226,7 +235,7 @@ impl Blockchain {
 
 impl BlockSource for Blockchain {
     fn get_header<'a>(
-        &'a mut self,
+        &'a self,
         header_hash: &'a BlockHash,
         _height_hint: Option<u32>,
     ) -> AsyncBlockSourceResult<'a, BlockHeaderData> {
@@ -249,10 +258,7 @@ impl BlockSource for Blockchain {
         })
     }
 
-    fn get_block<'a>(
-        &'a mut self,
-        header_hash: &'a BlockHash,
-    ) -> AsyncBlockSourceResult<'a, Block> {
+    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<'a, Block> {
         Box::pin(async move {
             for (height, block) in self.blocks.iter().enumerate() {
                 if block.header.block_hash() == *header_hash {
@@ -269,7 +275,7 @@ impl BlockSource for Blockchain {
         })
     }
 
-    fn get_best_block(&mut self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
+    fn get_best_block(&self) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
         Box::pin(async move {
             if *self.unreachable.lock().unwrap() {
                 return Err(BlockSourceError::transient("Connection refused"));
@@ -304,7 +310,7 @@ pub(crate) fn get_random_tx() -> Transaction {
                 rng.gen_range(0..200),
             ),
             script_sig: Script::new(),
-            witness: Vec::new(),
+            witness: Witness::new(),
             sequence: 0,
         }],
         output: vec![TxOut {
@@ -363,7 +369,7 @@ pub(crate) fn store_appointment_and_fks_to_db(
 
 pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<ValidatedBlock> {
     let tip = chain.tip();
-    let mut poller = ChainPoller::new(chain, Network::Bitcoin);
+    let poller = ChainPoller::new(chain, Network::Bitcoin);
 
     let mut last_n_blocks = Vec::new();
     let mut last_known_block = tip;

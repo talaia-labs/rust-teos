@@ -542,7 +542,7 @@ impl DBM {
     /// When a new key is generated, old keys are not overwritten but are not retrievable from the API either.
     pub fn store_tower_key(&self, sk: &SecretKey) -> Result<(), Error> {
         let query = "INSERT INTO keys (key) VALUES (?)";
-        self.store_data(query, params![sk.to_string()])
+        self.store_data(query, params![sk.display_secret().to_string()])
     }
 
     /// Loads the last known tower secret key from the database.
@@ -570,7 +570,7 @@ mod tests {
     use super::*;
     use std::iter::FromIterator;
 
-    use teos_common::cryptography::get_random_bytes;
+    use teos_common::cryptography::{get_random_bytes, get_random_keypair};
     use teos_common::test_utils::get_random_user_id;
 
     use crate::test_utils::{
@@ -1236,5 +1236,17 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         assert!(matches!(dbm.load_last_known_block(), Err(Error::NotFound)));
+    }
+
+    #[test]
+    fn test_store_load_tower_key() {
+        let dbm = DBM::in_memory().unwrap();
+
+        assert!(matches!(dbm.load_tower_key(), Err(Error::NotFound)));
+        for _ in 0..7 {
+            let sk = get_random_keypair().0;
+            dbm.store_tower_key(&sk).unwrap();
+            assert_eq!(dbm.load_tower_key().unwrap(), sk);
+        }
     }
 }
