@@ -170,3 +170,31 @@ impl<R: Read> Read for ReadTrackingReader<R> {
         }
     }
 }
+
+#[cfg(test)]
+mod test_utils {
+    use crate::appointment::{Locator, LOCATOR_LEN};
+    use crate::cryptography::get_random_bytes;
+    use bitcoin::hashes::Hash;
+    use bitcoin::Txid;
+    pub use lightning::util::test_utils::TestVecWriter;
+
+    pub fn get_random_locator() -> Locator {
+        let bytes = get_random_bytes(LOCATOR_LEN);
+        Locator::from_slice(&bytes).unwrap()
+    }
+
+    pub fn get_random_txid() -> Txid {
+        let bytes = get_random_bytes(32);
+        Txid::from_slice(&bytes).unwrap()
+    }
+
+    #[allow(dead_code)]
+    pub fn get_random_string(size: usize) -> String {
+        let bytes = get_random_bytes(size);
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+#[cfg(test)]
+pub(super) use test_utils::*;

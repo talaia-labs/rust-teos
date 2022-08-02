@@ -25,3 +25,6 @@ lightning = "0.0.108"
 
 [build-dependencies]
 tonic-build = "0.6"
+
+[dev-dependencies]
+lightning = { version = "0.0.108", features = ["_test_utils"] }

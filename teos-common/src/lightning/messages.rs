@@ -241,3 +241,111 @@ impl Writeable for TowerMessage {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cryptography::{get_random_bytes, get_random_keypair};
+    use crate::lightning::ser_utils::{get_random_locator, get_random_txid, TestVecWriter};
+    use lightning::io::Cursor;
+    use lightning::util::ser::{Readable, Writeable};
+    use std::cmp::PartialEq;
+    use std::fmt::Debug;
+    use std::iter::FromIterator;
+
+    fn test_msg<T: Debug + Readable + Writeable + PartialEq>(msg: T) {
+        // Get a writer and write the message to it.
+        let mut stream = TestVecWriter(Vec::new());
+        msg.write(&mut stream).ok().unwrap();
+        // Create a reader out of the written buffer.
+        let mut stream = Cursor::new(stream.0);
+        let read_msg: T = Readable::read(&mut stream).ok().unwrap();
+        // Assert the serialized then deserialized message is the same as the original one.
+        assert_eq!(msg, read_msg);
+    }
+
+    #[test]
+    fn test_tower_messages_empty_tlvs() {
+        test_msg(Register {
+            pubkey: get_random_keypair().1,
+            appointment_slots: 4300,
+            subscription_period: 4032,
+        });
+        test_msg(SubscriptionDetails {
+            appointment_max_size: 3032,
+            amount_msat: 41893,
+            invoice: None,
+            signature: None,
+        });
+        test_msg(AddUpdateAppointment {
+            locator: get_random_locator(),
+            encrypted_blob: get_random_bytes(542),
+            signature: String::from("sign: locator || encrypted_blob || to_self_delay?"),
+            to_self_delay: None,
+        });
+        test_msg(AppointmentAccepted {
+            locator: get_random_locator(),
+            start_block: 500310,
+            receipt_signature: None,
+        });
+        test_msg(AppointmentRejected {
+            locator: get_random_locator(),
+            rcode: 539,
+            reason: String::from("You have no more slots. 😢🥺💔"),
+        });
+        test_msg(GetAppointment {
+            locator: get_random_locator(),
+            signature: String::from("this is my signature. and is real."),
+        });
+        test_msg(AppointmentData {
+            locator: get_random_locator(),
+            encrypted_blob: get_random_bytes(678),
+        });
+        test_msg(TrackerData {
+            dispute_txid: get_random_txid(),
+            penalty_txid: get_random_txid(),
+            penalty_rawtx: get_random_bytes(432),
+        });
+        test_msg(AppointmentNotFound {
+            locator: get_random_locator(),
+        });
+        test_msg(GetSubscriptionInfo {
+            signature: String::from("sign: get subscription info"),
+        });
+        test_msg(SubscriptionInfo {
+            available_slots: 429,
+            subscription_expiry: 1093,
+            locators: Vec::new(),
+        });
+    }
+
+    #[test]
+    fn test_tower_message_with_tlvs() {
+        test_msg(SubscriptionDetails {
+            appointment_max_size: 4498,
+            amount_msat: 891431,
+            invoice: Some(String::from(
+                "lnbc100p1psj9jhxdqud3jxktt5w46x7unfv9kz6mn0v3jsnp4q0d3p2sfluzdx45...",
+            )),
+            signature: Some(String::from(
+                "sign: user_pubkey || appointment_max_size || amount_msat || invoice_id?",
+            )),
+        });
+        test_msg(AddUpdateAppointment {
+            locator: get_random_locator(),
+            encrypted_blob: get_random_bytes(542),
+            signature: String::from("sign: locator || encrypted_blob || to_self_delay?"),
+            to_self_delay: Some(56),
+        });
+        test_msg(AppointmentAccepted {
+            locator: get_random_locator(),
+            start_block: 500310,
+            receipt_signature: Some(String::from("sign: user_signature || start_block")),
+        });
+        test_msg(SubscriptionInfo {
+            available_slots: 429,
+            subscription_expiry: 1093,
+            locators: Vec::from_iter((0..10).map(|_| get_random_locator())),
+        });
+    }
+}
