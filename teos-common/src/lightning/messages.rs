@@ -15,7 +15,7 @@ use lightning::util::ser::{Writeable, Writer};
 pub use crate::lightning::ser_utils::Type;
 
 /// The register message sent by the user to subscribe for the watching service.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Register {
     pub pubkey: UserId,
     pub appointment_slots: u32,
@@ -24,7 +24,7 @@ pub struct Register {
 
 /// The subscription details message that is sent to the user after registering or toping up.
 /// This message is the response to the register message.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SubscriptionDetails {
     pub appointment_max_size: u16,
     pub start_block: u32,
@@ -35,17 +35,18 @@ pub struct SubscriptionDetails {
 }
 
 /// The add/update appointment message sent by the user.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AddUpdateAppointment {
     pub locator: Locator,
     pub encrypted_blob: Vec<u8>,
     pub signature: String,
     // Optional TLV.
-    pub to_self_delay: Option<u64>,
+    // FIXME: BOLT13 uses u64.
+    pub to_self_delay: Option<u32>,
 }
 
 /// The appointment accepted message that is sent after an accepted add/update appointment message.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AppointmentAccepted {
     pub locator: Locator,
     pub start_block: u32,
@@ -54,7 +55,7 @@ pub struct AppointmentAccepted {
 }
 
 /// The appointment rejected message that is sent if an add/update appointment message was rejected.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AppointmentRejected {
     pub locator: Locator,
     pub rcode: u16,
@@ -62,21 +63,21 @@ pub struct AppointmentRejected {
 }
 
 /// The get appointment message sent by the user to retrieve a previously sent appointment from the tower.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GetAppointment {
     pub locator: Locator,
     pub signature: String,
 }
 
 /// The appointment data message sent by the tower after a get appointment message.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AppointmentData {
     pub locator: Locator,
     pub encrypted_blob: Vec<u8>,
 }
 
 /// The tracker data message sent by the tower when the requested appointment has been acted upon.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TrackerData {
     pub dispute_txid: Txid,
     pub penalty_txid: Txid,
@@ -85,19 +86,19 @@ pub struct TrackerData {
 
 /// The appointment not found message sent by the tower in response to a get appointment message
 /// whose locator didn't match any known appointment.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AppointmentNotFound {
     pub locator: Locator,
 }
 
 /// The get subscription info message (a TEOS custom message, not a bolt13 one).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GetSubscriptionInfo {
     pub signature: String,
 }
 
 /// The subscription info message sent by the tower in response to get subscription info message.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SubscriptionInfo {
     pub available_slots: u32,
     pub subscription_expiry: u32,
@@ -189,7 +190,7 @@ set_msg_type!(AppointmentNotFound, 48864);
 set_msg_type!(GetSubscriptionInfo, 48865);
 set_msg_type!(SubscriptionInfo, 48867);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TowerMessage {
     // Register messages
     Register(Register),
