@@ -26,6 +26,7 @@ pub struct Register {
 #[derive(Debug)]
 pub struct SubscriptionDetails {
     pub appointment_max_size: u16,
+    pub start_block: u32,
     pub amount_msat: u32,
     // Optional TLV.
     pub invoice: Option<String>,
@@ -112,6 +113,7 @@ impl_writeable_msg!(Register, {
 
 impl_writeable_msg!(SubscriptionDetails, {
     appointment_max_size,
+    start_block,
     amount_msat,
 }, {
     // Use `opt_str` and not `opt` to avoid writing a length prefix for strings
@@ -273,6 +275,7 @@ mod tests {
         });
         test_msg(SubscriptionDetails {
             appointment_max_size: 3032,
+            start_block: 358943,
             amount_msat: 41893,
             invoice: None,
             signature: None,
@@ -323,12 +326,13 @@ mod tests {
     fn test_tower_message_with_tlvs() {
         test_msg(SubscriptionDetails {
             appointment_max_size: 4498,
+            start_block: 4934503,
             amount_msat: 891431,
             invoice: Some(String::from(
                 "lnbc100p1psj9jhxdqud3jxktt5w46x7unfv9kz6mn0v3jsnp4q0d3p2sfluzdx45...",
             )),
             signature: Some(String::from(
-                "sign: user_pubkey || appointment_max_size || amount_msat || invoice_id?",
+                "sign: user_pubkey || appointment_max_size || start_block || amount_msat || invoice_id?",
             )),
         });
         test_msg(AddUpdateAppointment {
