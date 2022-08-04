@@ -46,13 +46,17 @@ impl std::error::Error for ConfigError {}
 #[structopt(rename_all = "lowercase")]
 #[structopt(version = env!("CARGO_PKG_VERSION"), about = "The Eye of Satoshi - Lightning watchtower")]
 pub struct Opt {
-    /// Address teos HTTP(s) API will bind to [default: localhost]
+    /// Address teos API will bind to [default: localhost]
     #[structopt(long)]
     pub api_bind: Option<String>,
 
+    /// Port teos Lightning API will bind to [default: 9815]
+    #[structopt(long)]
+    pub lightning_port: Option<u16>,
+
     /// Port teos HTTP(s) API will bind to [default: 9814]
     #[structopt(long)]
-    pub api_port: Option<u16>,
+    pub http_port: Option<u16>,
 
     /// Address teos RPC server will bind to [default: localhost]
     #[structopt(long)]
@@ -122,7 +126,8 @@ pub struct Opt {
 pub struct Config {
     // API
     pub api_bind: String,
-    pub api_port: u16,
+    pub lightning_port: u16,
+    pub http_port: u16,
 
     // RPC
     pub rpc_bind: String,
@@ -163,8 +168,11 @@ impl Config {
         if options.api_bind.is_some() {
             self.api_bind = options.api_bind.unwrap();
         }
-        if options.api_port.is_some() {
-            self.api_port = options.api_port.unwrap();
+        if options.lightning_port.is_some() {
+            self.lightning_port = options.lightning_port.unwrap();
+        }
+        if options.http_port.is_some() {
+            self.http_port = options.http_port.unwrap();
         }
         if options.rpc_bind.is_some() {
             self.rpc_bind = options.rpc_bind.unwrap();
@@ -254,7 +262,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             api_bind: "127.0.0.1".into(),
-            api_port: 9814,
+            http_port: 9814,
+            lightning_port: 9815,
             tor_support: false,
             tor_control_port: 9051,
             onion_hidden_service_port: 9814,
@@ -288,7 +297,8 @@ mod tests {
         fn default() -> Self {
             Self {
                 api_bind: None,
-                api_port: None,
+                http_port: None,
+                lightning_port: None,
                 tor_support: false,
                 tor_control_port: None,
                 onion_hidden_service_port: None,

@@ -18,8 +18,9 @@ use lightning_block_sync::poll::{
 };
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
+use teos::api;
 use teos::api::internal::InternalAPI;
-use teos::api::{http, tor::TorAPI};
+use teos::api::tor::TorAPI;
 use teos::bitcoin_cli::BitcoindClient;
 use teos::carrier::Carrier;
 use teos::chain_monitor::ChainMonitor;
@@ -250,6 +251,7 @@ async fn main() {
 
     let (shutdown_trigger, shutdown_signal_rpc_api) = triggered::trigger();
     let shutdown_signal_internal_rpc_api = shutdown_signal_rpc_api.clone();
+    let shutdown_signal_lightning = shutdown_signal_rpc_api.clone();
     let shutdown_signal_http = shutdown_signal_rpc_api.clone();
     let shutdown_signal_cm = shutdown_signal_rpc_api.clone();
     let shutdown_signal_tor = shutdown_signal_rpc_api.clone();
@@ -274,12 +276,15 @@ async fn main() {
     log::info!("Bootstrap completed. Turning on interfaces");
 
     // Build interfaces
-    let http_api_addr = format!("{}:{}", conf.api_bind, conf.api_port)
+    let lightning_api_addr = format!("{}:{}", conf.api_bind, conf.lightning_port)
+        .parse()
+        .unwrap();
+    let http_api_addr = format!("{}:{}", conf.api_bind, conf.http_port)
         .parse()
         .unwrap();
     let mut addresses = vec![msgs::NetworkAddress::from_ipv4(
         conf.api_bind.clone(),
-        conf.api_port,
+        conf.http_port,
     )];
 
     // Create Tor endpoint if required
@@ -293,7 +298,7 @@ async fn main() {
         .await;
         addresses.push(msgs::NetworkAddress::from_torv3(
             tor_api.get_onion_address(),
-            conf.api_port,
+            conf.onion_hidden_service_port,
         ));
 
         Some(tor_api)
@@ -351,7 +356,14 @@ async fn main() {
     });
 
     let (http_service_ready, ready_signal_http) = triggered::trigger();
-    let http_api_task = task::spawn(http::serve(
+    let lightning_api_task = task::spawn(api::lightning::serve(
+        lightning_api_addr,
+        internal_rpc_api_uri.clone(),
+        shutdown_signal_lightning,
+        tower_sk,
+    ));
+
+    let http_api_task = task::spawn(api::http::serve(
         http_api_addr,
         internal_rpc_api_uri,
         http_service_ready,
@@ -382,6 +394,7 @@ async fn main() {
     chain_monitor.monitor_chain().await;
 
     // Wait until shutdown
+    lightning_api_task.await.unwrap();
     http_api_task.await.unwrap();
     private_api_task.await.unwrap();
     public_api_task.await.unwrap();
