@@ -316,13 +316,8 @@ mod test_helpers {
 
     use serde::de::DeserializeOwned;
     use serde_json::Value;
-    use std::sync::Arc;
-    use tokio::net::TcpListener;
-    use tonic::transport::Server;
 
-    use crate::api::internal::InternalAPI;
-    use crate::protos::public_tower_services_server::PublicTowerServicesServer;
-    use crate::test_utils::{create_api_with_config, ApiConfig, BitcoindStopper};
+    use crate::test_utils::get_public_grpc_conn;
 
     pub(crate) enum RequestBody<'a> {
         Jsonify(&'a str),
@@ -331,45 +326,12 @@ mod test_helpers {
         Body(&'a str),
     }
 
-    pub(crate) async fn run_tower_in_background_with_config(
-        api_config: ApiConfig,
-    ) -> (SocketAddr, Arc<InternalAPI>, BitcoindStopper) {
-        let (internal_rpc_api, bitcoind_stopper) = create_api_with_config(api_config).await;
-        let cloned = internal_rpc_api.clone();
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            Server::builder()
-                .add_service(PublicTowerServicesServer::new(internal_rpc_api))
-                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-                .await
-                .unwrap();
-        });
-
-        (addr, cloned, bitcoind_stopper)
-    }
-
-    pub(crate) async fn run_tower_in_background() -> (SocketAddr, BitcoindStopper) {
-        let (sock_addr, _, bitcoind_stopper) =
-            run_tower_in_background_with_config(ApiConfig::default()).await;
-
-        (sock_addr, bitcoind_stopper)
-    }
-
     pub(crate) async fn check_api_error(
         endpoint: Endpoint,
         body: RequestBody<'_>,
         server_addr: SocketAddr,
     ) -> (ApiError, StatusCode) {
-        let grpc_conn = PublicTowerServicesClient::connect(format!(
-            "http://{}:{}",
-            server_addr.ip(),
-            server_addr.port()
-        ))
-        .await
-        .unwrap();
+        let grpc_conn = get_public_grpc_conn(server_addr).await;
 
         let req = match body {
             RequestBody::Json(j) => warp::test::request()
@@ -406,13 +368,7 @@ mod test_helpers {
         B: Serialize,
         T: DeserializeOwned,
     {
-        let grpc_conn = PublicTowerServicesClient::connect(format!(
-            "http://{}:{}",
-            server_addr.ip(),
-            server_addr.port()
-        ))
-        .await
-        .unwrap();
+        let grpc_conn = get_public_grpc_conn(server_addr).await;
 
         let res = warp::test::request()
             .method("POST")
@@ -427,8 +383,10 @@ mod test_helpers {
 
 #[cfg(test)]
 mod tests_failures {
-    use super::test_helpers::{check_api_error, run_tower_in_background, RequestBody};
+    use super::test_helpers::{check_api_error, RequestBody};
     use super::*;
+
+    use crate::test_utils::{get_public_grpc_conn, run_tower_in_background};
 
     use teos_common::test_utils::get_random_user_id;
 
@@ -561,13 +519,7 @@ mod tests_failures {
     #[tokio::test]
     async fn test_empty_request_body() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let grpc_conn = PublicTowerServicesClient::connect(format!(
-            "http://{}:{}",
-            server_addr.ip(),
-            server_addr.port()
-        ))
-        .await
-        .unwrap();
+        let grpc_conn = get_public_grpc_conn(server_addr).await;
 
         let res = warp::test::request()
             .method("POST")
@@ -581,13 +533,7 @@ mod tests_failures {
     #[tokio::test]
     async fn test_payload_too_large() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let grpc_conn = PublicTowerServicesClient::connect(format!(
-            "http://{}:{}",
-            server_addr.ip(),
-            server_addr.port()
-        ))
-        .await
-        .unwrap();
+        let grpc_conn = get_public_grpc_conn(server_addr).await;
 
         let res = warp::test::request()
             .method("POST")
@@ -602,13 +548,7 @@ mod tests_failures {
     #[tokio::test]
     async fn test_wrong_endpoint() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let grpc_conn = PublicTowerServicesClient::connect(format!(
-            "http://{}:{}",
-            server_addr.ip(),
-            server_addr.port()
-        ))
-        .await
-        .unwrap();
+        let grpc_conn = get_public_grpc_conn(server_addr).await;
 
         let res = warp::test::request()
             .method("POST")
@@ -622,13 +562,7 @@ mod tests_failures {
     #[tokio::test]
     async fn test_wrong_method() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let grpc_conn = PublicTowerServicesClient::connect(format!(
-            "http://{}:{}",
-            server_addr.ip(),
-            server_addr.port()
-        ))
-        .await
-        .unwrap();
+        let grpc_conn = get_public_grpc_conn(server_addr).await;
 
         let res = warp::test::request()
             .json(&"")
@@ -641,14 +575,14 @@ mod tests_failures {
 
 #[cfg(test)]
 mod tests_methods {
-    use super::test_helpers::{
-        check_api_error, request_to_api, run_tower_in_background,
-        run_tower_in_background_with_config, RequestBody,
-    };
+    use super::test_helpers::{check_api_error, request_to_api, RequestBody};
     use super::*;
 
     use crate::extended_appointment::UUID;
-    use crate::test_utils::{generate_dummy_appointment, ApiConfig, DURATION, SLOTS};
+    use crate::test_utils::{
+        generate_dummy_appointment, run_tower_in_background, run_tower_in_background_with_config,
+        ApiConfig, DURATION, SLOTS,
+    };
 
     use teos_common::test_utils::get_random_user_id;
     use teos_common::{cryptography, UserId};
