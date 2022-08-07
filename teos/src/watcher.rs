@@ -809,6 +809,10 @@ mod tests {
             self.responder
                 .add_random_tracker(uuid, ConfirmationStatus::ConfirmedIn(100))
         }
+
+        pub(crate) fn get_signing_key(&self) -> SecretKey {
+            self.signing_key
+        }
     }
 
     async fn init_watcher(chain: &mut Blockchain) -> (Watcher, BitcoindStopper) {
