@@ -278,3 +278,436 @@ pub async fn serve(
         });
     }
 }
+
+#[cfg(test)]
+mod test_helpers {
+    use super::*;
+
+    use crate::api::internal::InternalAPI;
+    use crate::test_utils::{
+        get_public_grpc_conn, run_tower_in_background_with_config, ApiConfig, BitcoindStopper,
+    };
+
+    pub(crate) async fn get_tower_message_handler_with_config(
+        conf: ApiConfig,
+    ) -> (Arc<TowerMessageHandler>, Arc<InternalAPI>, BitcoindStopper) {
+        let (server_addr, internal_api, bitcoind_stopper) =
+            run_tower_in_background_with_config(conf).await;
+        let grpc_conn = get_public_grpc_conn(server_addr).await;
+        let handle = tokio::runtime::Handle::current();
+        (
+            Arc::new(TowerMessageHandler::new(grpc_conn, handle)),
+            internal_api,
+            bitcoind_stopper,
+        )
+    }
+
+    pub(crate) async fn get_tower_message_handler(
+    ) -> (Arc<TowerMessageHandler>, Arc<InternalAPI>, BitcoindStopper) {
+        get_tower_message_handler_with_config(ApiConfig::default()).await
+    }
+
+    pub(crate) async fn request_to_tower_message_handler(
+        tower: &Arc<TowerMessageHandler>,
+        msg: TowerMessage,
+        peer: PublicKey,
+    ) -> Result<TowerMessage, LightningError> {
+        let tower = tower.clone();
+        // Must use `spawn_blocking` because `handle_tower_message` uses `block_on`.
+        tokio::task::spawn_blocking(move || tower.handle_tower_message(msg, &peer))
+            .await
+            .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod message_handler_tests {
+    use super::test_helpers::*;
+    use super::*;
+
+    use teos_common::cryptography::{get_random_keypair, sign};
+    use teos_common::test_utils::{generate_random_appointment, get_random_user_id};
+    use teos_common::UserId;
+
+    use crate::extended_appointment::UUID;
+    use crate::test_utils::{ApiConfig, DURATION};
+
+    #[tokio::test]
+    async fn test_register() {
+        let (tower, _, _s) = get_tower_message_handler().await;
+        let user_id = get_random_user_id();
+        let msg = Register {
+            pubkey: user_id,
+            // The tower doesn't use this info ATM.
+            appointment_slots: 4024,
+            subscription_period: 4002,
+        }
+        .into();
+
+        assert!(matches! {
+            request_to_tower_message_handler(&tower, msg, user_id.0).await,
+            Ok(TowerMessage::SubscriptionDetails(SubscriptionDetails {
+                ..
+            }))
+        })
+    }
+
+    #[tokio::test]
+    async fn test_register_max_slots() {
+        let (tower, _, _s) =
+            get_tower_message_handler_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
+        let user_id = get_random_user_id();
+        let msg: TowerMessage = Register {
+            pubkey: user_id,
+            // The tower doesn't use this info ATM.
+            appointment_slots: 4024,
+            subscription_period: 4002,
+        }
+        .into();
+
+        // First registration should go through.
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg.clone(), user_id.0).await,
+            Ok(TowerMessage::SubscriptionDetails(
+                SubscriptionDetails { .. }
+            ))
+        ));
+
+        // Second one should fail (maximum slots count reached).
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_id.0).await,
+            Err(LightningError { err, .. }) if err.contains("maximum slots")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_register_service_unavailable() {
+        let (tower, _, _s) =
+            get_tower_message_handler_with_config(ApiConfig::default().bitcoind_unreachable())
+                .await;
+        let user_id = get_random_user_id();
+        let msg = Register {
+            pubkey: user_id,
+            // The tower doesn't use this info ATM.
+            appointment_slots: 4024,
+            subscription_period: 4002,
+        }
+        .into();
+
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_id.0).await,
+            Err(LightningError { err, .. }) if err.contains("currently unavailable")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment() {
+        let (tower, _, _s) = get_tower_message_handler().await;
+        let (user_sk, user_pk) = get_random_keypair();
+        let msg = Register {
+            pubkey: UserId(user_pk),
+            // The tower doesn't use this info ATM.
+            appointment_slots: 4024,
+            subscription_period: 4002,
+        }
+        .into();
+
+        // Register with the tower.
+        request_to_tower_message_handler(&tower, msg, user_pk)
+            .await
+            .unwrap();
+
+        let appointment = generate_random_appointment(None);
+        let signature = sign(&appointment.to_vec(), &user_sk).unwrap();
+        let msg = AddUpdateAppointment {
+            locator: appointment.locator,
+            encrypted_blob: appointment.encrypted_blob,
+            signature,
+            to_self_delay: Some(appointment.to_self_delay),
+        }
+        .into();
+
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Ok(TowerMessage::AppointmentAccepted(
+                AppointmentAccepted { locator, .. }
+            )) if locator == appointment.locator
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_non_registered() {
+        let (tower, _, _s) = get_tower_message_handler().await;
+        let (user_sk, user_pk) = get_random_keypair();
+
+        let appointment = generate_random_appointment(None);
+        let signature = sign(&appointment.to_vec(), &user_sk).unwrap();
+        let msg = AddUpdateAppointment {
+            locator: appointment.locator,
+            encrypted_blob: appointment.encrypted_blob,
+            signature,
+            to_self_delay: Some(appointment.to_self_delay),
+        }
+        .into();
+
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Ok(TowerMessage::AppointmentRejected(
+                AppointmentRejected { locator, rcode, .. }
+            )) if locator == appointment.locator && rcode == Code::Unauthenticated as u16
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_already_triggered() {
+        let (tower, internal_api, _s) = get_tower_message_handler().await;
+        let (user_sk, user_pk) = get_random_keypair();
+        let msg = Register {
+            pubkey: UserId(user_pk),
+            // The tower doesn't use this info ATM.
+            appointment_slots: 4024,
+            subscription_period: 4002,
+        }
+        .into();
+
+        // Register with the tower.
+        request_to_tower_message_handler(&tower, msg, user_pk)
+            .await
+            .unwrap();
+
+        let appointment = generate_random_appointment(None);
+        let signature = sign(&appointment.to_vec(), &user_sk).unwrap();
+        let msg = AddUpdateAppointment {
+            locator: appointment.locator,
+            encrypted_blob: appointment.encrypted_blob,
+            signature,
+            to_self_delay: Some(appointment.to_self_delay),
+        }
+        .into();
+
+        // Add the appointment to the responder so it counts as triggered.
+        internal_api
+            .get_watcher()
+            .add_random_tracker_to_responder(UUID::new(appointment.locator, UserId(user_pk)));
+
+        // Send the appointment to the tower and assert it rejects because of being already triggered.
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Ok(TowerMessage::AppointmentRejected(
+                AppointmentRejected { locator, rcode, .. }
+            )) if locator == appointment.locator && rcode == Code::AlreadyExists as u16
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_service_unavailable() {
+        let (tower, _, _s) =
+            get_tower_message_handler_with_config(ApiConfig::default().bitcoind_unreachable())
+                .await;
+        let (user_sk, user_pk) = get_random_keypair();
+
+        let appointment = generate_random_appointment(None);
+        let signature = sign(&appointment.to_vec(), &user_sk).unwrap();
+        let msg = AddUpdateAppointment {
+            locator: appointment.locator,
+            encrypted_blob: appointment.encrypted_blob,
+            signature,
+            to_self_delay: Some(appointment.to_self_delay),
+        }
+        .into();
+
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Err(LightningError { err, .. }) if err.contains("currently unavailable")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment() {
+        let (tower, _, _s) = get_tower_message_handler().await;
+        let (user_sk, user_pk) = get_random_keypair();
+        let msg = Register {
+            pubkey: UserId(user_pk),
+            // The tower doesn't use this info ATM.
+            appointment_slots: 4024,
+            subscription_period: 4002,
+        }
+        .into();
+
+        // Register with the tower.
+        request_to_tower_message_handler(&tower, msg, user_pk)
+            .await
+            .unwrap();
+
+        let appointment = generate_random_appointment(None);
+        let signature = sign(&appointment.to_vec(), &user_sk).unwrap();
+        let msg = AddUpdateAppointment {
+            locator: appointment.locator,
+            encrypted_blob: appointment.encrypted_blob.clone(),
+            signature,
+            to_self_delay: Some(appointment.to_self_delay),
+        }
+        .into();
+
+        // Send the appointment to the tower.
+        request_to_tower_message_handler(&tower, msg, user_pk)
+            .await
+            .unwrap();
+
+        let signature = sign(
+            format!("get appointment {}", appointment.locator).as_bytes(),
+            &user_sk,
+        )
+        .unwrap();
+        let msg = GetAppointment {
+            locator: appointment.locator,
+            signature,
+        }
+        .into();
+
+        // Assert the tower has the appointment we just sent.
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Ok(TowerMessage::AppointmentData(AppointmentData {
+                locator, encrypted_blob
+            })) if locator == appointment.locator && encrypted_blob == appointment.encrypted_blob
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_non_registered() {
+        let (tower, _, _s) = get_tower_message_handler().await;
+        let (user_sk, user_pk) = get_random_keypair();
+        let appointment = generate_random_appointment(None);
+        let signature = sign(
+            format!("get appointment {}", appointment.locator).as_bytes(),
+            &user_sk,
+        )
+        .unwrap();
+        let msg = GetAppointment {
+            locator: appointment.locator,
+            signature,
+        }
+        .into();
+
+        // Assert the tower cannot authenticate us.
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Err(LightningError { err, .. }) if err.contains("cannot be authenticated")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_not_found() {
+        let (tower, _, _s) = get_tower_message_handler().await;
+        let (user_sk, user_pk) = get_random_keypair();
+        let msg = Register {
+            pubkey: UserId(user_pk),
+            // The tower doesn't use this info ATM.
+            appointment_slots: 4024,
+            subscription_period: 4002,
+        }
+        .into();
+
+        // Register with the tower.
+        request_to_tower_message_handler(&tower, msg, user_pk)
+            .await
+            .unwrap();
+
+        let appointment = generate_random_appointment(None);
+        let signature = sign(
+            format!("get appointment {}", appointment.locator).as_bytes(),
+            &user_sk,
+        )
+        .unwrap();
+        let msg = GetAppointment {
+            locator: appointment.locator,
+            signature,
+        }
+        .into();
+
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Ok(TowerMessage::AppointmentNotFound(AppointmentNotFound {
+                locator
+            })) if locator == appointment.locator
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_appointment_service_unavailable() {
+        let (tower, _, _s) =
+            get_tower_message_handler_with_config(ApiConfig::default().bitcoind_unreachable())
+                .await;
+        let (user_sk, user_pk) = get_random_keypair();
+        let appointment = generate_random_appointment(None);
+        let signature = sign(
+            format!("get appointment {}", appointment.locator).as_bytes(),
+            &user_sk,
+        )
+        .unwrap();
+        let msg = GetAppointment {
+            locator: appointment.locator,
+            signature,
+        }
+        .into();
+
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Err(LightningError { err, .. }) if err.contains("currently unavailable")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info() {
+        let (tower, _, _s) = get_tower_message_handler().await;
+        let (user_sk, user_pk) = get_random_keypair();
+        let msg = Register {
+            pubkey: UserId(user_pk),
+            // The tower doesn't use this info ATM.
+            appointment_slots: 4024,
+            subscription_period: 4002,
+        }
+        .into();
+
+        request_to_tower_message_handler(&tower, msg, user_pk)
+            .await
+            .unwrap();
+
+        let signature = sign(format!("get subscription info").as_bytes(), &user_sk).unwrap();
+        let msg = GetSubscriptionInfo { signature }.into();
+
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Ok(TowerMessage::SubscriptionInfo(SubscriptionInfo { .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info_non_registered() {
+        let (tower, _, _s) = get_tower_message_handler().await;
+        let (user_sk, user_pk) = get_random_keypair();
+        let signature = sign(format!("get subscription info").as_bytes(), &user_sk).unwrap();
+        let msg = GetSubscriptionInfo { signature }.into();
+
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Err(LightningError { err, .. }) if err.contains("User not found")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_info_service_unavailable() {
+        let (tower, _, _s) =
+            get_tower_message_handler_with_config(ApiConfig::default().bitcoind_unreachable())
+                .await;
+        let (user_sk, user_pk) = get_random_keypair();
+        let signature = sign(format!("get subscription info").as_bytes(), &user_sk).unwrap();
+        let msg = GetSubscriptionInfo { signature }.into();
+
+        assert!(matches!(
+            request_to_tower_message_handler(&tower, msg, user_pk).await,
+            Err(LightningError { err, .. }) if err.contains("currently unavailable")
+        ));
+    }
+}
