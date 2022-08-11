@@ -514,8 +514,6 @@ mod tests {
             .lock()
             .unwrap()
             .appointment_exists(appointment.locator));
-
-        fs::remove_dir_all(tmp_path).await.unwrap();
     }
 
     #[tokio::test]
@@ -608,8 +606,6 @@ mod tests {
             .lock()
             .unwrap()
             .appointment_exists(appointment.locator));
-
-        fs::remove_dir_all(tmp_path).await.unwrap();
     }
 
     #[tokio::test]
@@ -701,8 +697,6 @@ mod tests {
             .lock()
             .unwrap()
             .appointment_exists(appointment.locator));
-
-        fs::remove_dir_all(tmp_path).await.unwrap();
     }
 
     #[tokio::test]
@@ -743,8 +737,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_tower() {
-        let tmp_path = &format!(".watchtower_{}/", get_random_user_id());
-        let mut wt_client = WTClient::new(tmp_path.into(), unbounded_channel().0).await;
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let receipt = get_random_registration_receipt();
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
@@ -808,8 +803,6 @@ mod tests {
             .lock()
             .unwrap()
             .appointment_receipt_exists(locator, tower_id));
-
-        fs::remove_dir_all(tmp_path).await.unwrap();
     }
 
     #[tokio::test]
@@ -817,8 +810,9 @@ mod tests {
         // Lets test removing a tower that has associated data shared with another tower.
         // For instance, having an appointment that was sent to two towers, and then deleting one of them
         // should only remove the link between the tower and the appointment, but not delete the data.
-        let tmp_path = &format!(".watchtower_{}/", get_random_user_id());
-        let mut wt_client = WTClient::new(tmp_path.into(), unbounded_channel().0).await;
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let receipt = get_random_registration_receipt();
         let (tower1_sk, tower1_pk) = cryptography::get_random_keypair();
@@ -886,20 +880,17 @@ mod tests {
             .lock()
             .unwrap()
             .appointment_receipt_exists(locator, tower2_id));
-
-        fs::remove_dir_all(tmp_path).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_remove_inexistent_tower() {
-        let tmp_path = &format!(".watchtower_{}/", get_random_user_id());
-        let mut wt_client = WTClient::new(tmp_path.into(), unbounded_channel().0).await;
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         assert!(matches!(
             wt_client.remove_tower(get_random_user_id()),
             Err(DBError::NotFound)
         ));
-
-        fs::remove_dir_all(tmp_path).await.unwrap();
     }
 }
