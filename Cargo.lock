@@ -2996,6 +2996,7 @@ version = "0.2.0"
 dependencies = [
  "bitcoin",
  "bitcoincore-rpc",
+ "futures",
  "hex",
  "home",
  "jsonrpc-http-server",
