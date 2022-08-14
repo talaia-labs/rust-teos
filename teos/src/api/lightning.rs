@@ -275,13 +275,19 @@ pub async fn serve(
             "Couldn't bind the lightning server to {}",
             lightning_bind
         ));
+    // A tokio runtime handle to run lightning net tokio on. This is to fix a deadlock issue similar
+    // to https://github.com/lightningdevkit/rust-lightning/issues/1367 which appears with too many
+    // concurrent requests to the server.
+    let ldk_handle = Box::leak(Box::new(tokio::runtime::Runtime::new().unwrap()))
+        .handle()
+        .clone();
     loop {
         let tcp_stream = listener.accept().await.unwrap().0;
         if shutdown_signal.is_triggered() {
             return;
         }
         let peer_manager = peer_manager.clone();
-        tokio::spawn(async move {
+        ldk_handle.spawn(async move {
             lightning_net_tokio::setup_inbound(peer_manager, tcp_stream.into_std().unwrap()).await;
         });
     }
@@ -930,8 +936,7 @@ mod peer_manager_tests {
 
     use teos_common::UserId;
 
-    // Needs to be "multi_thread" because we "block_in_place" without using "spawn_blocking".
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn simple_test() {
         let (tower_addr, tower_pk, _s) = run_lightning_tower().await;
         let (client_peer_manager, client_messenger, client_pk) = get_test_client_peer_manager();
