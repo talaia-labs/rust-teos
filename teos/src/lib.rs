@@ -2,6 +2,8 @@
 //!
 //! A watchtower implementation written in Rust.
 
+// FIXME: This is a temporary fix. See https://github.com/tokio-rs/prost/issues/661
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub mod protos {
     tonic::include_proto!("teos.v2");
 }
