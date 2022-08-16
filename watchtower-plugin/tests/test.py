@@ -156,3 +156,36 @@ def test_misbehaving_watchtower(node_factory, bitcoind, teosd, directory):
     l1.rpc.pay(l2.rpc.invoice(25000000, "lbl1", "desc1")["bolt11"])
     assert l2.rpc.gettowerinfo(tower_id)["status"] == "misbehaving"
     assert l2.rpc.gettowerinfo(tower_id)["misbehaving_proof"]
+
+
+def test_get_appointment(node_factory, bitcoind, teosd, directory):
+    l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": "watchtower-client"}])
+
+    # We need to register l2 with the tower
+    tower_id = teosd.cli.get_tower_info()["tower_id"]
+    l2.rpc.registertower(tower_id)
+
+    # Force a new commitment
+    l1.rpc.pay(l2.rpc.invoice(25000000, "lbl1", "desc1")["bolt11"])
+    tx = l1.rpc.dev_sign_last_tx(l2.info["id"])["tx"]
+
+    # Now make sure it is out of date
+    l1.rpc.pay(l2.rpc.invoice(25000000, "lbl2", "desc2")["bolt11"])
+
+    # Now l1 cheats
+    dispute_txid = bitcoind.rpc.sendrawtransaction(tx)
+    locator = change_endianness(dispute_txid[32:])
+
+    # Check the appointment before mining a block
+    appointment = l2.rpc.getappointment(tower_id, locator)["appointment"]
+    assert "locator" in appointment and "encrypted_blob" in appointment and "to_self_delay" in appointment
+
+    bitcoind.generate_block(1)
+    time.sleep(1)
+
+    # And after. Now this should be a tracker   
+    tracker = l2.rpc.getappointment(tower_id, locator)["appointment"]
+    assert "dispute_txid" in tracker and "penalty_txid" in tracker and "penalty_rawtx" in tracker
+
+    # Manually stop l2, otherwise the tower may be stopped before the tower client and we may get some BROKEN logs.
+    l2.stop()
