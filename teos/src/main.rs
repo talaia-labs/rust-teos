@@ -298,9 +298,15 @@ async fn main() {
         let onion_port = conf.onion_hidden_service_port;
 
         tor_task = Some(task::spawn(async move {
-            tor::expose_onion_service(tor_control_port, api_port, onion_port, shutdown_signal_tor)
-                .await
-                .unwrap();
+            tor::expose_onion_service(
+                tor_control_port,
+                api_port,
+                onion_port,
+                path_network,
+                shutdown_signal_tor,
+            )
+            .await
+            .unwrap();
         }));
     }
 

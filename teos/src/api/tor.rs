@@ -1,16 +1,42 @@
+use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use tokio::fs;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
 use torut::control::UnauthenticatedConn;
 use torut::onion::TorSecretKeyV3;
 use triggered::Listener;
 
+/// Loads a Tor key from disk (if found).
+async fn load_tor_key(path: &PathBuf) -> Option<TorSecretKeyV3> {
+    log::info!("Loading Tor secret key from disk");
+    let key = fs::read(path.join("onion_v3_sk"))
+        .await
+        .map_err(|e| log::error!("Cannot load Tor secret key. {}", e))
+        .ok()?;
+    let key: [u8; 64] = key
+        .try_into()
+        .map_err(|_| log::error!("Cannot convert loaded data into Tor secret key"))
+        .ok()?;
+
+    Some(TorSecretKeyV3::from(key))
+}
+
+/// Stores a Tor key to disk.
+async fn store_tor_key(key: &TorSecretKeyV3, path: &PathBuf) {
+    if let Err(e) = fs::write(path.join("onion_v3_sk"), key.as_bytes()).await {
+        log::error!("Cannot store Tor secret key. {}", e);
+    }
+}
+
 /// Expose an onion service that re-directs to the public api.
 pub async fn expose_onion_service(
     tor_control_port: u16,
     api_port: u16,
     onion_port: u16,
+    path: PathBuf,
     shutdown_signal_tor: Listener,
 ) -> Result<(), Error> {
     let stream = connect_tor_cp(format!("127.0.0.1:{}", tor_control_port).parse().unwrap())
@@ -39,7 +65,14 @@ pub async fn expose_onion_service(
 
     auth_conn.set_async_event_handler(Some(|_| async move { Ok(()) }));
 
-    let key = TorSecretKeyV3::generate();
+    let key = if let Some(key) = load_tor_key(&path).await {
+        key
+    } else {
+        log::info!("Generating fresh Tor secret key");
+        let key = TorSecretKeyV3::generate();
+        store_tor_key(&key, &path).await;
+        key
+    };
 
     auth_conn
         .add_onion_v3(
