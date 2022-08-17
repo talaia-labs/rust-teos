@@ -9,8 +9,9 @@ commitment transaction is generated. It also keeps a summary of the messages sen
 The plugin has the following methods:
 
 - `registertower tower_id` : registers the user id (compressed public key) with a given tower.
-- `list_towers`: lists all registered towers.
+- `listtowers`: lists all registered towers.
 - `gettowerinfo tower_id`: gets all the locally stored data about a given tower.
+- `getsubscriptioninfo tower_id`: gets the subscription information by querying the tower.
 - `retrytower tower_id`: tries to send pending appointment to a (previously) unreachable tower.
 - `getappointment tower_id locator`: queries a given tower about an appointment.
 

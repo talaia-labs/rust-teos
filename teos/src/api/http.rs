@@ -1,4 +1,4 @@
-use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::error::Error;
 use std::net::SocketAddr;
@@ -56,17 +56,6 @@ impl ApiError {
             errors::WRONG_FIELD_SIZE,
         ))
     }
-}
-
-pub fn serialize_vec_bytes<S>(v: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let mut seq = s.serialize_seq(Some(v.len()))?;
-    for element in v.iter() {
-        seq.serialize_element(&hex::encode(element))?;
-    }
-    seq.end()
 }
 
 fn with_grpc(

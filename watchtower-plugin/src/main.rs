@@ -180,6 +180,48 @@ async fn get_appointment(
     Ok(json!(response))
 }
 
+/// Gets the subscription information directly form the tower.
+async fn get_subscription_info(
+    plugin: Plugin<Arc<Mutex<WTClient>>>,
+    v: serde_json::Value,
+) -> Result<serde_json::Value, Error> {
+    let tower_id = TowerId::try_from(v).map_err(|x| anyhow!(x))?;
+
+    let user_sk = plugin.state().lock().unwrap().user_sk;
+    let tower_net_addr = {
+        let state = plugin.state().lock().unwrap();
+        if let Some(info) = state.towers.get(&tower_id) {
+            Ok(info.net_addr.clone())
+        } else {
+            Err(anyhow!("Unknown tower id: {}", tower_id))
+        }
+    }?;
+
+    let get_subscription_info = format!("{}/get_subscription_info", tower_net_addr);
+    let signature = cryptography::sign("get subscription info".as_bytes(), &user_sk).unwrap();
+
+    let response: common_msgs::GetSubscriptionInfoResponse = process_post_response(
+        post_request(
+            &get_subscription_info,
+            &common_msgs::GetSubscriptionInfoRequest { signature },
+        )
+        .await,
+    )
+    .await
+    .map_err(|e| {
+        if e.is_connection() {
+            plugin
+                .state()
+                .lock()
+                .unwrap()
+                .set_tower_status(tower_id, TowerStatus::TemporaryUnreachable);
+        }
+        to_cln_error(e)
+    })?;
+
+    Ok(json!(response))
+}
+
 /// Lists all the registered towers.
 ///
 /// The given information comes from memory, so it is summarized.
@@ -407,6 +449,11 @@ async fn main() -> Result<(), Error> {
             "getappointment",
             "Gets appointment data from the tower given the tower id and the locator.",
             get_appointment,
+        )
+        .rpcmethod(
+            "getsubscriptioninfo",
+            "Gets the subscription information directly from the tower.",
+            get_subscription_info,
         )
         .rpcmethod("listtowers", "Lists all registered towers.", list_towers)
         .rpcmethod(

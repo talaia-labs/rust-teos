@@ -6,6 +6,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .field_attribute("appointment_data", "#[serde(rename = \"appointment\")]")
         .field_attribute("user_id", "#[serde(with = \"hex::serde\")]")
         .field_attribute("locator", "#[serde(with = \"hex::serde\")]")
+        .field_attribute(
+            "locators",
+            "#[serde(with = \"crate::ser::serde_vec_bytes\")]",
+        )
         .field_attribute("encrypted_blob", "#[serde(with = \"hex::serde\")]")
         .field_attribute("dispute_txid", "#[serde(with = \"crate::ser::serde_be\")]")
         .field_attribute("penalty_txid", "#[serde(with = \"crate::ser::serde_be\")]")
