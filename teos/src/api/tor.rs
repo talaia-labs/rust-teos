@@ -2,19 +2,20 @@ use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+
 use tokio::fs;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
 use torut::control::UnauthenticatedConn;
 use torut::onion::TorSecretKeyV3;
-use triggered::Listener;
+use triggered::{Listener, Trigger};
 
 /// Loads a Tor key from disk (if found).
-async fn load_tor_key(path: &PathBuf) -> Option<TorSecretKeyV3> {
+async fn load_tor_key(path: PathBuf) -> Option<TorSecretKeyV3> {
     log::info!("Loading Tor secret key from disk");
     let key = fs::read(path.join("onion_v3_sk"))
         .await
-        .map_err(|e| log::error!("Cannot load Tor secret key. {}", e))
+        .map_err(|e| log::warn!("Tor secret key cannot be loaded. {}", e))
         .ok()?;
     let key: [u8; 64] = key
         .try_into()
@@ -25,7 +26,7 @@ async fn load_tor_key(path: &PathBuf) -> Option<TorSecretKeyV3> {
 }
 
 /// Stores a Tor key to disk.
-async fn store_tor_key(key: &TorSecretKeyV3, path: &PathBuf) {
+async fn store_tor_key(key: &TorSecretKeyV3, path: PathBuf) {
     if let Err(e) = fs::write(path.join("onion_v3_sk"), key.as_bytes()).await {
         log::error!("Cannot store Tor secret key. {}", e);
     }
@@ -37,6 +38,7 @@ pub async fn expose_onion_service(
     api_port: u16,
     onion_port: u16,
     path: PathBuf,
+    service_ready: Trigger,
     shutdown_signal_tor: Listener,
 ) -> Result<(), Error> {
     let stream = connect_tor_cp(format!("127.0.0.1:{}", tor_control_port).parse().unwrap())
@@ -65,12 +67,12 @@ pub async fn expose_onion_service(
 
     auth_conn.set_async_event_handler(Some(|_| async move { Ok(()) }));
 
-    let key = if let Some(key) = load_tor_key(&path).await {
+    let key = if let Some(key) = load_tor_key(path.clone()).await {
         key
     } else {
         log::info!("Generating fresh Tor secret key");
         let key = TorSecretKeyV3::generate();
-        store_tor_key(&key, &path).await;
+        store_tor_key(&key, path).await;
         key
     };
 
@@ -96,6 +98,7 @@ pub async fn expose_onion_service(
         })?;
 
     print_onion_service(key.clone(), onion_port);
+    service_ready.trigger();
 
     // NOTE: Needed to keep connection with control port & hidden service running, as soon as we leave
     // this function the control port stream is dropped and the hidden service is killed
@@ -121,7 +124,7 @@ async fn connect_tor_cp(addr: SocketAddr) -> Result<TcpStream, Error> {
     let sock = TcpStream::connect(addr).await.map_err(|_| {
         Error::new(
             ErrorKind::ConnectionRefused,
-            "failed to connect to tor control port",
+            "failed to connect to Tor control port",
         )
     })?;
     Ok(sock)
@@ -130,12 +133,45 @@ async fn connect_tor_cp(addr: SocketAddr) -> Result<TcpStream, Error> {
 fn print_onion_service(key: TorSecretKeyV3, onion_port: u16) {
     let onion_addr = key.public().get_onion_address();
     let onion = format!("{}:{}", onion_addr, onion_port);
-    log::info!("onion service: {}", onion);
+    log::info!("Onion service: {}", onion);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempdir::TempDir;
+
+    use teos_common::test_utils::get_random_user_id;
+
+    #[tokio::test]
+    async fn test_store_load_key() {
+        let key = TorSecretKeyV3::generate();
+        let tmp_path = TempDir::new(&format!("data_dir_{}", get_random_user_id())).unwrap();
+
+        store_tor_key(&key, tmp_path.path().into()).await;
+        let loaded_key = load_tor_key(tmp_path.path().into()).await;
+
+        assert_eq!(key, loaded_key.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_load_key_inexistent() {
+        let tmp_path = TempDir::new(&format!("data_dir_{}", get_random_user_id())).unwrap();
+        let loaded_key = load_tor_key(tmp_path.path().into()).await;
+
+        assert_eq!(loaded_key, None);
+    }
+
+    #[tokio::test]
+    async fn test_load_key_wrong_format() {
+        let tmp_path = TempDir::new(&format!("data_dir_{}", get_random_user_id())).unwrap();
+        fs::write(tmp_path.path().join("onion_v3_sk"), "random stuff")
+            .await
+            .unwrap();
+        let loaded_key = load_tor_key(tmp_path.path().into()).await;
+
+        assert_eq!(loaded_key, None);
+    }
 
     #[tokio::test]
     async fn test_connect_tor_cp_fail() {
@@ -144,7 +180,7 @@ mod tests {
         match connect_tor_cp(addr).await {
             Ok(_) => {}
             Err(e) => {
-                assert_eq!("failed to connect to tor control port", e.to_string())
+                assert_eq!("failed to connect to Tor control port", e.to_string())
             }
         }
     }

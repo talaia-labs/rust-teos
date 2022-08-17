@@ -97,11 +97,11 @@ pub struct Opt {
     #[structopt(long)]
     pub overwrite_key: bool,
 
-    /// If set, creates a tor endpoint to serve API data. This endpoint is additional to the clearnet HTTP API
+    /// If set, creates a Tor endpoint to serve API data. This endpoint is additional to the clearnet HTTP API
     #[structopt(long)]
     pub tor_support: bool,
 
-    /// tor control port [default: 9051]
+    /// Tor control port [default: 9051]
     #[structopt(long)]
     pub tor_control_port: Option<u16>,
 
