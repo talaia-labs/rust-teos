@@ -119,21 +119,25 @@ pub async fn send_appointment(
 
 /// Generic function to post different types of requests to the tower.
 pub async fn post_request<S: Serialize>(endpoint: &str, data: S) -> Result<Response, RequestError> {
-    reqwest::Client::new()
-        .post(endpoint)
-        .json(&data)
-        .send()
-        .await
-        .map_err(|e| {
-            log::error!("{}", e);
-            if e.is_connect() | e.is_timeout() {
-                RequestError::ConnectionError(
-                    "Cannot connect to the tower. Connection refused".into(),
-                )
-            } else {
-                RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".into())
-            }
-        })
+    let client = if endpoint.contains(".onion:") {
+        let proxy = reqwest::Proxy::http("socks5h://127.0.0.1:9050")
+            .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?;
+        reqwest::Client::builder()
+            .proxy(proxy)
+            .build()
+            .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?
+    } else {
+        reqwest::Client::new()
+    };
+
+    client.post(endpoint).json(&data).send().await.map_err(|e| {
+        log::error!("{:?}", e);
+        if e.is_connect() | e.is_timeout() {
+            RequestError::ConnectionError("Cannot connect to the tower. Connection refused".into())
+        } else {
+            RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".into())
+        }
+    })
 }
 
 /// Generic function to process the response of a given post request.
