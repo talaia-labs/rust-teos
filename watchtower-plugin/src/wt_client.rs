@@ -116,6 +116,17 @@ impl WTClient {
         Ok(())
     }
 
+    /// Gets the latest registration receipt of a given tower.
+    pub fn get_registration_receipt(
+        &self,
+        tower_id: TowerId,
+    ) -> Result<RegistrationReceipt, DBError> {
+        self.dbm
+            .lock()
+            .unwrap()
+            .load_registration_receipt(tower_id, self.user_id)
+    }
+
     /// Loads a tower record from the database.
     pub fn load_tower_info(&self, tower_id: TowerId) -> Result<TowerInfo, DBError> {
         self.dbm.lock().unwrap().load_tower_record(tower_id)
@@ -157,6 +168,18 @@ impl WTClient {
                 tower_id
             );
         }
+    }
+
+    /// Gets an appointment receipt from the database (if found).
+    pub fn get_appointment_receipt(
+        &self,
+        tower_id: TowerId,
+        locator: Locator,
+    ) -> Result<AppointmentReceipt, DBError> {
+        self.dbm
+            .lock()
+            .unwrap()
+            .load_appointment_receipt(tower_id, locator)
     }
 
     /// Adds a pending appointment to the tower record.
@@ -224,6 +247,18 @@ impl WTClient {
             tower.status = TowerStatus::Misbehaving;
         } else {
             log::error!("Cannot flag tower. Unknown tower_id: {}", tower_id);
+        }
+    }
+
+    /// Removes a tower from the client (both memory and database).
+    ///
+    /// Any data associated to the tower will be deleted (i.e. links to appointments)
+    pub fn remove_tower(&mut self, tower_id: TowerId) -> Result<(), DBError> {
+        if self.towers.contains_key(&tower_id) {
+            self.towers.remove(&tower_id);
+            self.dbm.lock().unwrap().remove_tower_record(tower_id)
+        } else {
+            Err(DBError::NotFound)
         }
     }
 }
@@ -479,8 +514,6 @@ mod tests {
             .lock()
             .unwrap()
             .appointment_exists(appointment.locator));
-
-        fs::remove_dir_all(tmp_path).await.unwrap();
     }
 
     #[tokio::test]
@@ -573,8 +606,6 @@ mod tests {
             .lock()
             .unwrap()
             .appointment_exists(appointment.locator));
-
-        fs::remove_dir_all(tmp_path).await.unwrap();
     }
 
     #[tokio::test]
@@ -666,8 +697,6 @@ mod tests {
             .lock()
             .unwrap()
             .appointment_exists(appointment.locator));
-
-        fs::remove_dir_all(tmp_path).await.unwrap();
     }
 
     #[tokio::test]
@@ -704,5 +733,164 @@ mod tests {
         assert_eq!(loaded_info.status, TowerStatus::Misbehaving);
         assert_eq!(loaded_info.misbehaving_proof, Some(proof));
         assert!(loaded_info.appointments.contains_key(&appointment.locator));
+    }
+
+    #[tokio::test]
+    async fn test_remove_tower() {
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+
+        let receipt = get_random_registration_receipt();
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
+        let tower_info = TowerInfo::empty(
+            "talaia.watch".into(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+
+        // Add the tower and check it is there
+        wt_client
+            .add_update_tower(tower_id, tower_info.net_addr.clone(), &receipt)
+            .unwrap();
+        assert_eq!(
+            wt_client.towers.get(&tower_id),
+            Some(&TowerSummary::from(tower_info.clone()))
+        );
+        assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
+
+        // Remove the tower and check it is not there anymore
+        wt_client.remove_tower(tower_id).unwrap();
+        assert!(matches!(
+            wt_client.load_tower_info(tower_id),
+            Err(DBError::NotFound)
+        ));
+        assert!(!wt_client.towers.contains_key(&tower_id));
+
+        // Try again but this time with an associated appointment to check that it also gets removed
+        wt_client
+            .add_update_tower(tower_id, tower_info.net_addr, &receipt)
+            .unwrap();
+
+        let locator = generate_random_appointment(None).locator;
+        let registration_receipt = get_random_registration_receipt();
+        let appointment_receipt = get_random_appointment_receipt(tower_sk);
+
+        // If we call this on an unknown tower it will simply do nothing
+        wt_client.add_appointment_receipt(
+            tower_id,
+            locator,
+            registration_receipt.available_slots(),
+            &appointment_receipt,
+        );
+        assert!(wt_client
+            .dbm
+            .lock()
+            .unwrap()
+            .appointment_receipt_exists(locator, tower_id));
+
+        // Remove and check both the tower and the appointment
+        wt_client.remove_tower(tower_id).unwrap();
+        assert!(matches!(
+            wt_client.load_tower_info(tower_id),
+            Err(DBError::NotFound)
+        ));
+        assert!(!wt_client.towers.contains_key(&tower_id));
+        assert!(!wt_client
+            .dbm
+            .lock()
+            .unwrap()
+            .appointment_receipt_exists(locator, tower_id));
+    }
+
+    #[tokio::test]
+    async fn test_remove_tower_shared_appointment() {
+        // Lets test removing a tower that has associated data shared with another tower.
+        // For instance, having an appointment that was sent to two towers, and then deleting one of them
+        // should only remove the link between the tower and the appointment, but not delete the data.
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+
+        let receipt = get_random_registration_receipt();
+        let (tower1_sk, tower1_pk) = cryptography::get_random_keypair();
+        let tower1_id = TowerId(tower1_pk);
+        let (tower2_sk, tower2_pk) = cryptography::get_random_keypair();
+        let tower2_id = TowerId(tower2_pk);
+
+        let tower_info = TowerInfo::empty(
+            "talaia.watch".into(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        wt_client
+            .add_update_tower(tower1_id, tower_info.net_addr.clone(), &receipt)
+            .unwrap();
+        wt_client
+            .add_update_tower(tower2_id, tower_info.net_addr, &receipt)
+            .unwrap();
+
+        let locator = generate_random_appointment(None).locator;
+        let registration_receipt = get_random_registration_receipt();
+        let appointment_receipt_1 = get_random_appointment_receipt(tower1_sk);
+        let appointment_receipt_2 = get_random_appointment_receipt(tower2_sk);
+
+        wt_client.add_appointment_receipt(
+            tower1_id,
+            locator,
+            registration_receipt.available_slots(),
+            &appointment_receipt_1,
+        );
+        wt_client.add_appointment_receipt(
+            tower2_id,
+            locator,
+            registration_receipt.available_slots(),
+            &appointment_receipt_2,
+        );
+
+        // Check that the data exists in both towers
+        assert!(wt_client
+            .dbm
+            .lock()
+            .unwrap()
+            .appointment_receipt_exists(locator, tower1_id));
+        assert!(wt_client
+            .dbm
+            .lock()
+            .unwrap()
+            .appointment_receipt_exists(locator, tower2_id));
+
+        // Remove tower1 and check that the appointment receipt can still be found for tower2
+        wt_client.remove_tower(tower1_id).unwrap();
+        assert!(matches!(
+            wt_client.load_tower_info(tower1_id),
+            Err(DBError::NotFound)
+        ));
+
+        assert!(!wt_client
+            .dbm
+            .lock()
+            .unwrap()
+            .appointment_receipt_exists(locator, tower1_id));
+        assert!(wt_client
+            .dbm
+            .lock()
+            .unwrap()
+            .appointment_receipt_exists(locator, tower2_id));
+    }
+
+    #[tokio::test]
+    async fn test_remove_inexistent_tower() {
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+
+        assert!(matches!(
+            wt_client.remove_tower(get_random_user_id()),
+            Err(DBError::NotFound)
+        ));
     }
 }
