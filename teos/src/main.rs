@@ -291,17 +291,27 @@ async fn main() {
 
     // Add Tor Onion Service for public API
     let mut tor_task = Option::None;
+    let (tor_service_ready, ready_signal_tor) = triggered::trigger();
     if conf.tor_support {
-        log::info!("Starting up hidden tor service");
+        log::info!("Starting up Tor hidden service");
         let tor_control_port = conf.tor_control_port;
         let api_port = conf.api_port;
         let onion_port = conf.onion_hidden_service_port;
 
         tor_task = Some(task::spawn(async move {
-            tor::expose_onion_service(tor_control_port, api_port, onion_port, shutdown_signal_tor)
-                .await
-                .unwrap();
+            tor::expose_onion_service(
+                tor_control_port,
+                api_port,
+                onion_port,
+                path_network,
+                tor_service_ready,
+                shutdown_signal_tor,
+            )
+            .await
+            .unwrap();
         }));
+
+        ready_signal_tor.await
     }
 
     log::info!("Tower ready");

@@ -68,11 +68,11 @@ btc_network = regtest
 
 ### Running `teosd` with tor
 
-This requires a tor daemon running on the same machine as `teosd` and a control port open on that daemon.
+This requires a Tor daemon running on the same machine as `teosd` and a control port open on that daemon.
 
-Download tor from the [torproject site](https://www.torproject.org/download/).
+Download Tor from the [torproject site](https://www.torproject.org/download/).
 
-To open tor's control port, you add the following to the tor config file ([source](https://2019.www.torproject.org/docs/faq.html.en#torrc)):
+To open tor's control port, you add the following to the Tor config file ([source](https://2019.www.torproject.org/docs/faq.html.en#torrc)):
 
 ```
 ## The port on which Tor will listen for local connections from Tor
@@ -85,7 +85,7 @@ CookieAuthentication 1
 CookieAuthFileGroupReadable 1
 ```
 
-Once the tor daemon is running, and the control port is open, make sure to enable the `tor_support` flag `teosd`.
+Once the Tor daemon is running, and the control port is open, make sure to enable the `tor_support` flag `teosd`.
 
 ### Tower id and signing key
 
