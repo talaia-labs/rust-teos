@@ -28,6 +28,8 @@ pub struct WTClient {
     pub user_sk: SecretKey,
     /// The user identifier.
     pub user_id: UserId,
+    /// Optional proxy
+    pub proxy: Option<String>,
 }
 
 impl WTClient {
@@ -70,6 +72,7 @@ impl WTClient {
             dbm: Arc::new(Mutex::new(dbm)),
             user_sk,
             user_id,
+            proxy: None,
         }
     }
 
