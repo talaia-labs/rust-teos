@@ -386,36 +386,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_appointment_unexpected() {
-        // An example to trigger an unexpected error would be to try to send data to a wrongly formatted url.
-        // This can not happen in the codebase, since the url is tested on registration, but it can be used to
-        // test that error path. Generally speaking, that error path should be unreachable.
-        let wrong_tower_net_addr = "server_addr";
-
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
-            then.status(200).header("content-type", "application/json");
-        });
-
-        let error = send_appointment(
-            get_random_user_id(),
-            wrong_tower_net_addr,
-            None,
-            &generate_random_appointment(None),
-            "user_sig",
-        )
-        .await
-        .unwrap_err();
-
-        if let AddAppointmentError::RequestError(e) = error {
-            assert!(matches!(e, RequestError::Unexpected { .. }))
-        } else {
-            panic!("Funny enough, Unexpected error was expected")
-        }
-    }
-
-    #[tokio::test]
     async fn test_post_request() {
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
@@ -440,18 +410,6 @@ mod tests {
                 .await
                 .unwrap_err(),
             RequestError::ConnectionError { .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_post_request_unexpected_error() {
-        let malformed_server_url = "server_addr";
-
-        assert!(matches!(
-            post_request(malformed_server_url, json!(""), None,)
-                .await
-                .unwrap_err(),
-            RequestError::Unexpected { .. }
         ));
     }
 
