@@ -299,7 +299,7 @@ async fn main() {
         let onion_port = conf.onion_hidden_service_port;
 
         tor_task = Some(task::spawn(async move {
-            tor::expose_onion_service(
+            if let Err(e) = tor::expose_onion_service(
                 tor_control_port,
                 api_port,
                 onion_port,
@@ -308,7 +308,10 @@ async fn main() {
                 shutdown_signal_tor,
             )
             .await
-            .unwrap();
+            {
+                eprintln!("Cannot connect to the Tor backend: {}", e);
+                std::process::exit(1);
+            }
         }));
 
         ready_signal_tor.await
