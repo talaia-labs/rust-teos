@@ -175,7 +175,10 @@ impl Gatekeeper {
                     .available_slots
                     .checked_add(self.subscription_slots)
                     .ok_or(MaxSlotsReached)?;
-                user_info.subscription_expiry = block_count + self.subscription_duration;
+                user_info.subscription_expiry = user_info
+                    .subscription_expiry
+                    .checked_add(self.subscription_duration)
+                    .unwrap_or(u32::MAX);
                 self.dbm.lock().unwrap().update_user(user_id, user_info);
 
                 user_info
@@ -499,13 +502,10 @@ mod tests {
             .store(chain.get_block_count(), Ordering::Relaxed);
         let updated_receipt = gatekeeper.add_update_user(user_id).unwrap();
 
-        assert_eq!(
-            updated_receipt.available_slots(),
-            receipt.available_slots() * 2
-        );
+        assert_eq!(updated_receipt.available_slots(), SLOTS * 2);
         assert_eq!(
             updated_receipt.subscription_expiry(),
-            receipt.subscription_expiry() + 1
+            START_HEIGHT as u32 + DURATION * 2
         );
 
         // Data in the database should have been updated too
