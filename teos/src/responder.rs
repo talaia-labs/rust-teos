@@ -472,11 +472,13 @@ impl Responder {
         updated_users: &HashMap<UserId, UserInfo>,
         reason: DeletionReason,
     ) {
-        self.delete_trackers_from_memory(uuids, reason);
-        self.dbm
-            .lock()
-            .unwrap()
-            .batch_remove_appointments(uuids, updated_users);
+        if !uuids.is_empty() {
+            self.delete_trackers_from_memory(uuids, reason);
+            self.dbm
+                .lock()
+                .unwrap()
+                .batch_remove_appointments(uuids, updated_users);
+        }
     }
 }
 

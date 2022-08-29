@@ -678,11 +678,13 @@ impl Watcher {
         updated_users: &HashMap<UserId, UserInfo>,
         reason: DeletionReason,
     ) {
-        self.delete_appointments_from_memory(uuids, reason);
-        self.dbm
-            .lock()
-            .unwrap()
-            .batch_remove_appointments(uuids, updated_users);
+        if !uuids.is_empty() {
+            self.delete_appointments_from_memory(uuids, reason);
+            self.dbm
+                .lock()
+                .unwrap()
+                .batch_remove_appointments(uuids, updated_users);
+        }
     }
 
     /// Ges the number of users currently registered with the tower.
