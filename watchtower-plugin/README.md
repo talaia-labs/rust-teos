@@ -109,6 +109,9 @@ Config options can be setup directly in the [CLN config file](https://github.com
 
 - `watchtower-port`: default tower API port.
 - `watchtower-max-retry-time`: the maximum time a retry strategy will try to reach a temporary unreachable tower before giving up.
+- `watchtower-proxy`: informs the plugin that you have a SOCKS5 proxy at the given `ip:port`. Notice this is necessary if you want to connect to a tower through Tor!
+
+**DISCLAIMER**: This option will be eventually replaced by the CoreLN `proxy` / `always-use-proxy` options. In the current state of the `cln-plugin` crate there is no option to access the CoreLN main configuration, therefore the need for a temporary, plugin-specific, option.
 
 # Getting started
 
