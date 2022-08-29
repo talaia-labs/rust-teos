@@ -405,6 +405,22 @@ impl DBM {
         appointments
     }
 
+    /// Loads an appointment from the database.
+    pub fn load_appointment(&self, locator: Locator) -> Result<Appointment, Error> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT encrypted_blob, to_self_delay FROM appointments WHERE locator = ?")
+            .unwrap();
+
+        stmt.query_row(params![locator.to_vec()], |row| {
+            let encrypted_blob = row.get::<_, Vec<u8>>(0).unwrap();
+            let to_self_delay = row.get::<_, u32>(1).unwrap();
+
+            Ok(Appointment::new(locator, encrypted_blob, to_self_delay))
+        })
+        .map_err(|_| Error::NotFound)
+    }
+
     /// Stores an appointment into the database.
     ///
     /// Appointments are only stored as a whole when they are pending or invalid.
@@ -1010,7 +1026,27 @@ mod tests {
         );
     }
 
-    // `store_appointments` is implicitly tested by `store_pending_appointment` and `store_invalid_appointment`
+    #[test]
+    fn test_store_load_appointment() {
+        let mut dbm = DBM::in_memory().unwrap();
+
+        let appointment = generate_random_appointment(None);
+        let tx = dbm.get_mut_connection().transaction().unwrap();
+        DBM::store_appointment(&tx, &appointment).unwrap();
+        tx.commit().unwrap();
+
+        let loaded_appointment = dbm.load_appointment(appointment.locator);
+        assert_eq!(appointment, loaded_appointment.unwrap());
+    }
+
+    #[test]
+    fn test_store_load_appointment_inexistent() {
+        let dbm = DBM::in_memory().unwrap();
+
+        let locator = generate_random_appointment(None).locator;
+        let loaded_appointment = dbm.load_appointment(locator);
+        assert!(matches!(loaded_appointment, Err(Error::NotFound)));
+    }
 
     #[test]
     fn test_store_pending_appointment() {

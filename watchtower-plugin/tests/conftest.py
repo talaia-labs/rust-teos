@@ -28,8 +28,9 @@ class TeosCLI:
 
     def _call(self, method_name, *args):
         try:
-            r = subprocess.run(["teos-cli", f"--datadir={self.datadir}/teos", method_name, *args], capture_output=True,
-                               text=True)
+            r = subprocess.run(
+                ["teos-cli", f"--datadir={self.datadir}/teos", method_name, *args], capture_output=True, text=True
+            )
             if r.returncode != 0:
                 result = ValueError(f"Unknown method {method_name}")
             else:
@@ -123,3 +124,9 @@ def pytest_runtest_setup(item):
                 pytest.skip("!DEVELOPER: {}".format(mark.args[0]))
             else:
                 pytest.skip("!DEVELOPER: Requires DEVELOPER=1")
+
+
+@pytest.fixture(scope="function", autouse=True)
+def log_name(request):
+    # Here logging is used, you can use whatever you want to use for logs
+    logging.info("Starting '{}'".format(request.node.name))

@@ -22,7 +22,7 @@ use watchtower_plugin::net::http::{
     add_appointment, post_request, process_post_response, AddAppointmentError, ApiResponse,
     RequestError,
 };
-use watchtower_plugin::retrier::Retrier;
+use watchtower_plugin::retrier::RetryManager;
 use watchtower_plugin::wt_client::WTClient;
 use watchtower_plugin::TowerStatus;
 
@@ -318,18 +318,26 @@ async fn retry_tower(
     let tower_id = TowerId::try_from(v).map_err(|e| anyhow!(e))?;
     let state = plugin.state().lock().unwrap();
     if let Some(tower) = state.towers.get(&tower_id) {
-        if tower.status == TowerStatus::TemporaryUnreachable {
+        if tower.status.is_temporary_unreachable() {
             return Err(anyhow!("{} is already being retried", tower_id));
-        } else if tower.status != TowerStatus::Unreachable {
+        } else if !tower.status.is_unreachable() {
             return Err(anyhow!(
                 "Tower status must be unreachable to manually retry",
             ));
         }
 
-        state
-            .unreachable_towers
-            .send(tower_id)
-            .map_err(|e| anyhow!(e))?;
+        for locator in state
+            .towers
+            .get(&tower_id)
+            .unwrap()
+            .pending_appointments
+            .iter()
+        {
+            state
+                .unreachable_towers
+                .send((tower_id, *locator))
+                .map_err(|e| anyhow!(e))?;
+        }
         Ok(json!(format!("Retrying {}", tower_id)))
     } else {
         Err(anyhow!("Unknown tower {}", tower_id))
@@ -421,17 +429,27 @@ async fn on_commitment_revocation(
                             state.set_tower_status(tower_id, TowerStatus::TemporaryUnreachable);
                             state.add_pending_appointment(tower_id, &appointment);
 
-                            state.unreachable_towers.send(tower_id).unwrap();
+                            state
+                                .unreachable_towers
+                                .send((tower_id, appointment.locator))
+                                .unwrap();
                         }
                     }
                     AddAppointmentError::ApiError(e) => match e.error_code {
                         errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR => {
-                            log::warn!("There is a subscription issue with {}", tower_id);
+                            log::warn!(
+                                "There is a subscription issue with {}. Adding {} to pending",
+                                tower_id,
+                                appointment.locator
+                            );
                             let mut state = plugin.state().lock().unwrap();
                             state.set_tower_status(tower_id, TowerStatus::SubscriptionError);
                             state.add_pending_appointment(tower_id, &appointment);
 
-                            state.unreachable_towers.send(tower_id).unwrap();
+                            state
+                                .unreachable_towers
+                                .send((tower_id, appointment.locator))
+                                .unwrap();
                         }
 
                         _ => {
@@ -466,18 +484,28 @@ async fn on_commitment_revocation(
         } else {
             if status.is_subscription_error() {
                 log::warn!(
-                    "There is a subscription issue with {}. Adding appointment to pending",
+                    "There is a subscription issue with {}. Adding {} to pending",
                     tower_id,
+                    appointment.locator
                 );
             } else {
-                log::warn!("{} is {}. Adding appointment to pending", tower_id, status);
+                log::warn!(
+                    "{} is {}. Adding {} to pending",
+                    tower_id,
+                    status,
+                    appointment.locator,
+                );
             }
 
-            plugin
-                .state()
-                .lock()
-                .unwrap()
-                .add_pending_appointment(tower_id, &appointment);
+            let mut state = plugin.state().lock().unwrap();
+            state.add_pending_appointment(tower_id, &appointment);
+
+            if status.is_temporary_unreachable() {
+                state
+                    .unreachable_towers
+                    .send((tower_id, appointment.locator))
+                    .unwrap();
+            }
         }
     }
 
@@ -587,8 +615,8 @@ async fn main() -> Result<(), Error> {
             60
         };
         tokio::spawn(async move {
-            Retrier::new(state_clone, max_elapsed_time, max_interval_time)
-                .manage_retry(rx)
+            RetryManager::new(state_clone)
+                .manage_retry(max_elapsed_time, max_interval_time, rx)
                 .await
         });
         plugin.join().await

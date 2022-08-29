@@ -72,8 +72,13 @@ impl TowerStatus {
     }
 
     /// Whether the tower is unreachable or not.
+    pub fn is_temporary_unreachable(&self) -> bool {
+        *self == TowerStatus::TemporaryUnreachable
+    }
+
+    /// Whether the tower is unreachable or not.
     pub fn is_unreachable(&self) -> bool {
-        *self == TowerStatus::TemporaryUnreachable || *self == TowerStatus::Unreachable
+        *self == TowerStatus::Unreachable
     }
 
     /// Whether the tower is misbehaving or not.
@@ -411,7 +416,7 @@ mod tests {
                 Vec::new(),
             );
 
-            assert_eq!(tower_info.status, TowerStatus::Reachable);
+            assert!(tower_info.status.is_reachable());
             assert!(tower_info.misbehaving_proof.is_none());
         }
 
