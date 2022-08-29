@@ -87,7 +87,7 @@ impl Retrier {
 
     async fn add_appointment(&self, tower_id: TowerId) -> Result<(), Error<&'static str>> {
         // Create a new scope so we can get all the data only locking the WTClient once.
-        let (appointments, net_addr, user_sk) = {
+        let (appointments, net_addr, user_sk, proxy) = {
             let wt_client = self.wt_client.lock().unwrap();
             if wt_client.towers.get(&tower_id).is_none() {
                 return Err(Error::permanent("Tower was abandoned. Skipping retry"));
@@ -100,13 +100,14 @@ impl Retrier {
                 .load_appointments(tower_id, AppointmentStatus::Pending);
             let net_addr = wt_client.towers.get(&tower_id).unwrap().net_addr.clone();
             let user_sk = wt_client.user_sk;
-            (appointments, net_addr, user_sk)
+            (appointments, net_addr, user_sk, wt_client.proxy.clone())
         };
 
         for appointment in appointments {
             match add_appointment(
                 tower_id,
                 &net_addr,
+                proxy.clone(),
                 &appointment,
                 &cryptography::sign(&appointment.to_vec(), &user_sk).unwrap(),
             )

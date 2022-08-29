@@ -56,6 +56,7 @@ impl From<RequestError> for AddAppointmentError {
 pub async fn add_appointment(
     tower_id: TowerId,
     tower_net_addr: &str,
+    proxy: Option<String>,
     appointment: &Appointment,
     signature: &str,
 ) -> Result<(u32, AppointmentReceipt), AddAppointmentError> {
@@ -65,7 +66,7 @@ pub async fn add_appointment(
         tower_id
     );
     let (response, receipt) =
-        send_appointment(tower_id, tower_net_addr, appointment, signature).await?;
+        send_appointment(tower_id, tower_net_addr, proxy, appointment, signature).await?;
     log::debug!("Appointment accepted and signed by {}", tower_id);
     log::debug!("Remaining slots: {}", response.available_slots);
     log::debug!("Start block: {}", response.start_block);
@@ -77,6 +78,7 @@ pub async fn add_appointment(
 pub async fn send_appointment(
     tower_id: TowerId,
     tower_net_addr: &str,
+    proxy: Option<String>,
     appointment: &Appointment,
     signature: &str,
 ) -> Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointmentError> {
@@ -89,6 +91,7 @@ pub async fn send_appointment(
         post_request(
             &format!("{}/add_appointment", tower_net_addr),
             &request_data,
+            proxy,
         )
         .await,
     )
@@ -118,22 +121,39 @@ pub async fn send_appointment(
 }
 
 /// Generic function to post different types of requests to the tower.
-pub async fn post_request<S: Serialize>(endpoint: &str, data: S) -> Result<Response, RequestError> {
-    reqwest::Client::new()
-        .post(endpoint)
-        .json(&data)
-        .send()
-        .await
-        .map_err(|e| {
-            log::error!("{}", e);
-            if e.is_connect() | e.is_timeout() {
-                RequestError::ConnectionError(
-                    "Cannot connect to the tower. Connection refused".into(),
-                )
-            } else {
-                RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".into())
-            }
-        })
+pub async fn post_request<S: Serialize>(
+    endpoint: &str,
+    data: S,
+    proxy: Option<String>,
+) -> Result<Response, RequestError> {
+    let url = reqwest::Url::parse(endpoint).map_err(|e| {
+        RequestError::ConnectionError(format!("Cannot connect to the given URL. {}", e))
+    })?;
+    let client = if url.host_str().unwrap().ends_with(".onion") {
+        if let Some(proxy) = proxy {
+            let proxy = reqwest::Proxy::http(format!("socks5h://{}", proxy))
+                .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?;
+            reqwest::Client::builder()
+                .proxy(proxy)
+                .build()
+                .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?
+        } else {
+            return Err(RequestError::ConnectionError(
+                "Cannot connect to an onion address without a proxy".into(),
+            ));
+        }
+    } else {
+        reqwest::Client::new()
+    };
+
+    client.post(endpoint).json(&data).send().await.map_err(|e| {
+        log::error!("{:?}", e);
+        if e.is_connect() | e.is_timeout() {
+            RequestError::ConnectionError("Cannot connect to the tower. Connection refused".into())
+        } else {
+            RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".into())
+        }
+    })
 }
 
 /// Generic function to process the response of a given post request.
@@ -202,6 +222,7 @@ mod tests {
         let (response, receipt) = add_appointment(
             TowerId(tower_pk),
             &format!("http://{}", server.address()),
+            None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -233,6 +254,7 @@ mod tests {
         let (response, receipt) = send_appointment(
             TowerId(tower_pk),
             &format!("http://{}", server.address()),
+            None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -265,6 +287,7 @@ mod tests {
         let error = send_appointment(
             tower_id,
             &format!("http://{}", server.address()),
+            None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -291,6 +314,7 @@ mod tests {
         let error = send_appointment(
             get_random_user_id(),
             "http://server_addr",
+            None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -317,6 +341,7 @@ mod tests {
         let error = send_appointment(
             get_random_user_id(),
             &format!("http://{}", server.address()),
+            None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -349,6 +374,7 @@ mod tests {
         let error = send_appointment(
             get_random_user_id(),
             &format!("http://{}", server.address()),
+            None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -360,35 +386,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_appointment_unexpected() {
-        // An example to trigger an unexpected error would be to try to send data to a wrongly formatted url.
-        // This can not happen in the codebase, since the url is tested on registration, but it can be used to
-        // test that error path. Generally speaking, that error path should be unreachable.
-        let wrong_tower_net_addr = "server_addr";
-
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
-            then.status(200).header("content-type", "application/json");
-        });
-
-        let error = send_appointment(
-            get_random_user_id(),
-            wrong_tower_net_addr,
-            &generate_random_appointment(None),
-            "user_sig",
-        )
-        .await
-        .unwrap_err();
-
-        if let AddAppointmentError::RequestError(e) = error {
-            assert!(matches!(e, RequestError::Unexpected { .. }))
-        } else {
-            panic!("Funny enough, Unexpected error was expected")
-        }
-    }
-
-    #[tokio::test]
     async fn test_post_request() {
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
@@ -396,7 +393,7 @@ mod tests {
             then.status(200).header("content-type", "application/json");
         });
 
-        let response = post_request(&format!("http://{}", server.address()), json!(""))
+        let response = post_request(&format!("http://{}", server.address()), json!(""), None)
             .await
             .unwrap();
 
@@ -409,22 +406,10 @@ mod tests {
         let unreachable_server_url = "http://server_addr";
 
         assert!(matches!(
-            post_request(unreachable_server_url, json!(""))
+            post_request(unreachable_server_url, json!(""), None,)
                 .await
                 .unwrap_err(),
             RequestError::ConnectionError { .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_post_request_unexpected_error() {
-        let malformed_server_url = "server_addr";
-
-        assert!(matches!(
-            post_request(malformed_server_url, json!(""))
-                .await
-                .unwrap_err(),
-            RequestError::Unexpected { .. }
         ));
     }
 
@@ -440,7 +425,7 @@ mod tests {
 
         // Any expected response work here as long as it cannot be properly deserialized
         let error = process_post_response::<ApiResponse<common_msgs::GetAppointmentResponse>>(
-            post_request(&format!("http://{}", server.address()), json!("")).await,
+            post_request(&format!("http://{}", server.address()), json!(""), None).await,
         )
         .await
         .unwrap_err();

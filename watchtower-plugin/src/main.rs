@@ -70,6 +70,8 @@ async fn register(
         tower_net_addr = format!("http://{}", tower_net_addr)
     }
 
+    let proxy = plugin.state().lock().unwrap().proxy.clone();
+
     let register_endpoint = format!("{}/register", tower_net_addr);
     log::info!("Registering in the Eye of Satoshi (tower_id={})", tower_id);
 
@@ -79,6 +81,7 @@ async fn register(
             &common_msgs::RegisterRequest {
                 user_id: user_id.to_vec(),
             },
+            proxy,
         )
         .await,
     )
@@ -158,11 +161,10 @@ async fn get_subscription_info(
 ) -> Result<serde_json::Value, Error> {
     let tower_id = TowerId::try_from(v).map_err(|x| anyhow!(x))?;
 
-    let user_sk = plugin.state().lock().unwrap().user_sk;
-    let tower_net_addr = {
+    let (user_sk, tower_net_addr, proxy) = {
         let state = plugin.state().lock().unwrap();
         if let Some(info) = state.towers.get(&tower_id) {
-            Ok(info.net_addr.clone())
+            Ok((state.user_sk, info.net_addr.clone(), state.proxy.clone()))
         } else {
             Err(anyhow!("Unknown tower id: {}", tower_id))
         }
@@ -175,6 +177,7 @@ async fn get_subscription_info(
         post_request(
             &get_subscription_info,
             &common_msgs::GetSubscriptionInfoRequest { signature },
+            proxy,
         )
         .await,
     )
@@ -200,11 +203,10 @@ async fn get_appointment(
 ) -> Result<serde_json::Value, Error> {
     let params = GetAppointmentParams::try_from(v).map_err(|x| anyhow!(x))?;
 
-    let user_sk = plugin.state().lock().unwrap().user_sk;
-    let tower_net_addr = {
+    let (user_sk, tower_net_addr, proxy) = {
         let state = plugin.state().lock().unwrap();
         if let Some(info) = state.towers.get(&params.tower_id) {
-            Ok(info.net_addr.clone())
+            Ok((state.user_sk, info.net_addr.clone(), state.proxy.clone()))
         } else {
             Err(anyhow!("Unknown tower id: {}", params.tower_id))
         }
@@ -224,6 +226,7 @@ async fn get_appointment(
                 locator: params.locator.to_vec(),
                 signature,
             },
+            proxy,
         )
         .await,
     )
@@ -391,9 +394,13 @@ async fn on_commitment_revocation(
         .map(|(id, info)| (*id, info.net_addr.clone(), info.status))
         .collect::<Vec<_>>();
 
+    let proxy = plugin.state().lock().unwrap().proxy.clone();
+
     for (tower_id, net_addr, status) in towers {
         if status.is_reachable() {
-            match add_appointment(tower_id, &net_addr, &appointment, &signature).await {
+            match add_appointment(tower_id, &net_addr, proxy.clone(), &appointment, &signature)
+                .await
+            {
                 Ok((slots, receipt)) => {
                     plugin
                         .state()
@@ -501,6 +508,11 @@ async fn main() -> Result<(), Error> {
             "the time (in seconds) after where the retrier will give up trying to send data to a temporary unreachable tower",
         ))
         .option(ConfigOption::new(
+            "watchtower-proxy",
+            Value::String(String::new()),
+            "Socks v5 proxy IP address and port for the watchtower client",
+        ))
+        .option(ConfigOption::new(
             "dev-watchtower-max-retry-interval",
             Value::Integer(60),
             "the maximum time (in seconds) for a retrier wait interval",
@@ -549,6 +561,16 @@ async fn main() -> Result<(), Error> {
     if let Some(plugin) = builder.start().await? {
         // FIXME: This is a workaround. Ideally, `cln_plugin::options::Value` will implement `as_u64` so we can simply call and unwrap
         // given that we are certain the option exists.
+        state_clone.lock().unwrap().proxy =
+            if let Value::String(x) = plugin.option("watchtower-proxy").unwrap() {
+                if !x.is_empty() {
+                    Some(x)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
         let max_elapsed_time =
             if let Value::Integer(x) = plugin.option("watchtower-max-retry-time").unwrap() {
                 x as u16
