@@ -283,11 +283,14 @@ async fn main() {
             .unwrap();
     });
 
+    let (http_service_ready, ready_signal_http) = triggered::trigger();
     let http_api_task = task::spawn(http::serve(
         http_api_addr,
         internal_rpc_api_uri,
+        http_service_ready,
         shutdown_signal_http,
     ));
+    ready_signal_http.await;
 
     // Add Tor Onion Service for public API
     let mut tor_task = Option::None;
