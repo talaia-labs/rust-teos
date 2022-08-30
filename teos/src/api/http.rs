@@ -4,7 +4,7 @@ use std::error::Error;
 use std::net::SocketAddr;
 use tokio::time::Duration;
 use tonic::transport::Channel;
-use triggered::Listener;
+use triggered::{Listener, Trigger};
 use warp::{http::StatusCode, reject, reply, Filter, Rejection, Reply};
 
 use teos_common::appointment::LOCATOR_LEN;
@@ -288,7 +288,12 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
     }
 }
 
-pub async fn serve(http_bind: SocketAddr, grpc_bind: String, shutdown_signal: Listener) {
+pub async fn serve(
+    http_bind: SocketAddr,
+    grpc_bind: String,
+    service_ready: Trigger,
+    shutdown_signal: Listener,
+) {
     let grpc_conn = loop {
         match PublicTowerServicesClient::connect(grpc_bind.clone()).await {
             Ok(conn) => break conn,
@@ -298,8 +303,9 @@ pub async fn serve(http_bind: SocketAddr, grpc_bind: String, shutdown_signal: Li
             }
         }
     };
-    let (_, server) = warp::serve(router(grpc_conn))
-        .bind_with_graceful_shutdown(http_bind, async { shutdown_signal.await });
+    let (_, server) =
+        warp::serve(router(grpc_conn)).bind_with_graceful_shutdown(http_bind, shutdown_signal);
+    service_ready.trigger();
     server.await
 }
 
