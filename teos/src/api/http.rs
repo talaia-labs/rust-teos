@@ -303,8 +303,8 @@ pub async fn serve(
             }
         }
     };
-    let (_, server) = warp::serve(router(grpc_conn))
-        .bind_with_graceful_shutdown(http_bind, async { shutdown_signal.await });
+    let (_, server) =
+        warp::serve(router(grpc_conn)).bind_with_graceful_shutdown(http_bind, shutdown_signal);
     service_ready.trigger();
     server.await
 }
