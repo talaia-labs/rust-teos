@@ -325,11 +325,13 @@ impl chain::Listen for Gatekeeper {
 
         // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
         let outdated_users = self.get_outdated_user_ids(height);
-        self.registered_users
-            .lock()
-            .unwrap()
-            .retain(|id, _| !outdated_users.contains(id));
-        self.dbm.lock().unwrap().batch_remove_users(&outdated_users);
+        if !outdated_users.is_empty() {
+            self.registered_users
+                .lock()
+                .unwrap()
+                .retain(|id, _| !outdated_users.contains(id));
+            self.dbm.lock().unwrap().batch_remove_users(&outdated_users);
+        }
 
         // Update last known block height
         self.last_known_block_height
