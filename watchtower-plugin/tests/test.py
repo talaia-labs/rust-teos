@@ -63,14 +63,14 @@ def test_watchtower(node_factory, bitcoind, teosd):
     assert l2.rpc.getappointment(tower_id, locator)["status"] == "dispute_responded"
 
     # Generate blocks until the penalty gets irrevocably resolved
-    for i in range(100):
+    for i in range(101):
         bitcoind.generate_block(1)
         time.sleep(0.1)
         if i < 100:
             assert l2.rpc.getappointment(tower_id, locator)["status"] == "dispute_responded"
         else:
             # Once the channel gets irrevocably resolved the tower will forget about it
-            assert l2.rpc.getappointment(tower_id, locator)["status"] == "not_found"
+            assert l2.rpc.getappointment(tower_id, locator) == {"error": "Appointment not found", "error_code": 36}
 
     # Make sure the penalty outputs are in l2's wallet
     fund_txids = [o["txid"] for o in l2.rpc.listfunds()["outputs"]]
@@ -183,7 +183,7 @@ def test_get_appointment(node_factory, bitcoind, teosd, directory):
     bitcoind.generate_block(1)
     time.sleep(1)
 
-    # And after. Now this should be a tracker   
+    # And after. Now this should be a tracker
     tracker = l2.rpc.getappointment(tower_id, locator)["appointment"]
     assert "dispute_txid" in tracker and "penalty_txid" in tracker and "penalty_rawtx" in tracker
 
