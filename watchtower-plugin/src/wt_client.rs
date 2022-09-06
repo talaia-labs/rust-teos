@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use tokio::fs;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -16,10 +15,9 @@ use crate::dbm::DBM;
 use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
 
 /// Represents the watchtower client that is being used as the CoreLN plugin state.
-#[derive(Clone)]
 pub struct WTClient {
     /// A [DBM] instance.
-    pub dbm: Arc<Mutex<DBM>>,
+    pub dbm: DBM,
     /// A collection of towers the client is registered to.
     pub towers: HashMap<TowerId, TowerSummary>,
     /// Queue of unreachable towers
@@ -74,7 +72,7 @@ impl WTClient {
         WTClient {
             towers,
             unreachable_towers,
-            dbm: Arc::new(Mutex::new(dbm)),
+            dbm,
             user_sk,
             user_id,
             proxy: None,
@@ -96,8 +94,6 @@ impl WTClient {
             } else {
                 let previous_receipt = self
                     .dbm
-                    .lock()
-                    .unwrap()
                     .load_registration_receipt(tower_id, self.user_id)
                     .unwrap();
                 if receipt.available_slots() <= previous_receipt.available_slots() {
@@ -107,8 +103,6 @@ impl WTClient {
         }
 
         self.dbm
-            .lock()
-            .unwrap()
             .store_tower_record(tower_id, &tower_net_addr, receipt)
             .unwrap();
         self.towers.insert(
@@ -129,15 +123,12 @@ impl WTClient {
         &self,
         tower_id: TowerId,
     ) -> Result<RegistrationReceipt, DBError> {
-        self.dbm
-            .lock()
-            .unwrap()
-            .load_registration_receipt(tower_id, self.user_id)
+        self.dbm.load_registration_receipt(tower_id, self.user_id)
     }
 
     /// Loads a tower record from the database.
     pub fn load_tower_info(&self, tower_id: TowerId) -> Result<TowerInfo, DBError> {
-        self.dbm.lock().unwrap().load_tower_record(tower_id)
+        self.dbm.load_tower_record(tower_id)
     }
 
     /// Sets the tower status to any of the `TowerStatus` variants.
@@ -166,8 +157,6 @@ impl WTClient {
             tower.available_slots = available_slots;
 
             self.dbm
-                .lock()
-                .unwrap()
                 .store_appointment_receipt(tower_id, locator, available_slots, receipt)
                 .unwrap();
         } else {
@@ -184,10 +173,7 @@ impl WTClient {
         tower_id: TowerId,
         locator: Locator,
     ) -> Result<AppointmentReceipt, DBError> {
-        self.dbm
-            .lock()
-            .unwrap()
-            .load_appointment_receipt(tower_id, locator)
+        self.dbm.load_appointment_receipt(tower_id, locator)
     }
 
     /// Adds a pending appointment to the tower record.
@@ -196,8 +182,6 @@ impl WTClient {
             tower.pending_appointments.insert(appointment.locator);
 
             self.dbm
-                .lock()
-                .unwrap()
                 .store_pending_appointment(tower_id, appointment)
                 .unwrap();
         } else {
@@ -214,8 +198,6 @@ impl WTClient {
             tower.pending_appointments.remove(&locator);
 
             self.dbm
-                .lock()
-                .unwrap()
                 .delete_pending_appointment(tower_id, locator)
                 .unwrap();
         } else {
@@ -232,8 +214,6 @@ impl WTClient {
             tower.invalid_appointments.insert(appointment.locator);
 
             self.dbm
-                .lock()
-                .unwrap()
                 .store_invalid_appointment(tower_id, appointment)
                 .unwrap();
         } else {
@@ -247,11 +227,7 @@ impl WTClient {
     /// Flags a given tower as misbehaving, storing the misbehaving proof in the database.
     pub fn flag_misbehaving_tower(&mut self, tower_id: TowerId, proof: MisbehaviorProof) {
         if let Some(tower) = self.towers.get_mut(&tower_id) {
-            self.dbm
-                .lock()
-                .unwrap()
-                .store_misbehaving_proof(tower_id, &proof)
-                .unwrap();
+            self.dbm.store_misbehaving_proof(tower_id, &proof).unwrap();
             tower.status = TowerStatus::Misbehaving;
         } else {
             log::error!("Cannot flag tower. Unknown tower_id: {}", tower_id);
@@ -264,7 +240,7 @@ impl WTClient {
     pub fn remove_tower(&mut self, tower_id: TowerId) -> Result<(), DBError> {
         if self.towers.contains_key(&tower_id) {
             self.towers.remove(&tower_id);
-            self.dbm.lock().unwrap().remove_tower_record(tower_id)
+            self.dbm.remove_tower_record(tower_id)
         } else {
             Err(DBError::NotFound)
         }
@@ -517,11 +493,7 @@ mod tests {
             .pending_appointments
             .contains(&appointment.locator));
         // This bit is tested exhaustively in the DBM.
-        assert!(!wt_client
-            .dbm
-            .lock()
-            .unwrap()
-            .appointment_exists(appointment.locator));
+        assert!(!wt_client.dbm.appointment_exists(appointment.locator));
     }
 
     #[tokio::test]
@@ -599,21 +571,13 @@ mod tests {
             .contains(&appointment.locator));
         assert!(!wt_client
             .dbm
-            .lock()
-            .unwrap()
             .load_appointment_locators(tower_id, crate::AppointmentStatus::Pending)
             .contains(&appointment.locator));
         assert!(wt_client
             .dbm
-            .lock()
-            .unwrap()
             .load_appointment_locators(tower_id, crate::AppointmentStatus::Invalid)
             .contains(&appointment.locator));
-        assert!(wt_client
-            .dbm
-            .lock()
-            .unwrap()
-            .appointment_exists(appointment.locator));
+        assert!(wt_client.dbm.appointment_exists(appointment.locator));
     }
 
     #[tokio::test]
@@ -662,14 +626,10 @@ mod tests {
             .contains(&appointment.locator));
         assert!(!wt_client
             .dbm
-            .lock()
-            .unwrap()
             .load_appointment_locators(tower_id, crate::AppointmentStatus::Pending)
             .contains(&appointment.locator));
         assert!(wt_client
             .dbm
-            .lock()
-            .unwrap()
             .load_appointment_locators(tower_id, crate::AppointmentStatus::Invalid)
             .contains(&appointment.locator));
 
@@ -688,23 +648,15 @@ mod tests {
             .contains(&appointment.locator));
         assert!(wt_client
             .dbm
-            .lock()
-            .unwrap()
             .load_appointment_locators(another_tower_id, crate::AppointmentStatus::Pending)
             .contains(&appointment.locator));
         assert!(!wt_client
             .dbm
-            .lock()
-            .unwrap()
             .load_appointment_locators(another_tower_id, crate::AppointmentStatus::Invalid)
             .contains(&appointment.locator));
 
         // GENERAL
-        assert!(wt_client
-            .dbm
-            .lock()
-            .unwrap()
-            .appointment_exists(appointment.locator));
+        assert!(wt_client.dbm.appointment_exists(appointment.locator));
     }
 
     #[tokio::test]
@@ -793,11 +745,7 @@ mod tests {
             registration_receipt.available_slots(),
             &appointment_receipt,
         );
-        assert!(wt_client
-            .dbm
-            .lock()
-            .unwrap()
-            .appointment_receipt_exists(locator, tower_id));
+        assert!(wt_client.dbm.appointment_receipt_exists(locator, tower_id));
 
         // Remove and check both the tower and the appointment
         wt_client.remove_tower(tower_id).unwrap();
@@ -806,11 +754,7 @@ mod tests {
             Err(DBError::NotFound)
         ));
         assert!(!wt_client.towers.contains_key(&tower_id));
-        assert!(!wt_client
-            .dbm
-            .lock()
-            .unwrap()
-            .appointment_receipt_exists(locator, tower_id));
+        assert!(!wt_client.dbm.appointment_receipt_exists(locator, tower_id));
     }
 
     #[tokio::test]
@@ -860,16 +804,8 @@ mod tests {
         );
 
         // Check that the data exists in both towers
-        assert!(wt_client
-            .dbm
-            .lock()
-            .unwrap()
-            .appointment_receipt_exists(locator, tower1_id));
-        assert!(wt_client
-            .dbm
-            .lock()
-            .unwrap()
-            .appointment_receipt_exists(locator, tower2_id));
+        assert!(wt_client.dbm.appointment_receipt_exists(locator, tower1_id));
+        assert!(wt_client.dbm.appointment_receipt_exists(locator, tower2_id));
 
         // Remove tower1 and check that the appointment receipt can still be found for tower2
         wt_client.remove_tower(tower1_id).unwrap();
@@ -878,16 +814,8 @@ mod tests {
             Err(DBError::NotFound)
         ));
 
-        assert!(!wt_client
-            .dbm
-            .lock()
-            .unwrap()
-            .appointment_receipt_exists(locator, tower1_id));
-        assert!(wt_client
-            .dbm
-            .lock()
-            .unwrap()
-            .appointment_receipt_exists(locator, tower2_id));
+        assert!(!wt_client.dbm.appointment_receipt_exists(locator, tower1_id));
+        assert!(wt_client.dbm.appointment_receipt_exists(locator, tower2_id));
     }
 
     #[tokio::test]
