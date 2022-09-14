@@ -128,12 +128,26 @@ def test_retry_watchtower(node_factory, bitcoind, teosd):
 
     # Make a new payment with an unreachable tower
     l1.rpc.pay(l2.rpc.invoice(25000000, "lbl1", "desc1")["bolt11"])
+
+    # The retrier manager waits 1 second before spawning new retriers for unreachable towers,
+    # so we need to wait a little bit until a retrier is started for our tower.
+    while l2.rpc.gettowerinfo(tower_id)["status"] == "temporary_unreachable":
+        time.sleep(1)
     assert l2.rpc.gettowerinfo(tower_id)["status"] == "unreachable"
     assert l2.rpc.gettowerinfo(tower_id)["pending_appointments"]
 
     # Start the tower and retry it
     teosd.start()
-    l2.rpc.retrytower(tower_id)
+
+    # Even though we set the max retry time to zero seconds, the retrier manager takes some time (1s) to recognize
+    # that the tower is unreachable. So manual retries might fail as the tower is marked as temporary unreachable.
+    while True:
+        try:
+            l2.rpc.retrytower(tower_id)
+            break
+        except Exception:
+            time.sleep(1)
+
     while l2.rpc.gettowerinfo(tower_id)["pending_appointments"]:
         time.sleep(1)
 

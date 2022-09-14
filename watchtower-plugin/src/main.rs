@@ -615,8 +615,8 @@ async fn main() -> Result<(), Error> {
             60
         };
         tokio::spawn(async move {
-            RetryManager::new(state_clone)
-                .manage_retry(max_elapsed_time, max_interval_time, rx)
+            RetryManager::new(state_clone, rx, max_elapsed_time, max_interval_time)
+                .manage_retry()
                 .await
         });
         plugin.join().await
