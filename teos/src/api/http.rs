@@ -321,7 +321,7 @@ mod test_helpers {
 
     use crate::api::internal::InternalAPI;
     use crate::protos::public_tower_services_server::PublicTowerServicesServer;
-    use crate::test_utils::{create_api_with_config, ApiConfig};
+    use crate::test_utils::{create_api_with_config, ApiConfig, BitcoindStopper};
 
     pub(crate) enum RequestBody<'a> {
         Jsonify(&'a str),
@@ -332,8 +332,8 @@ mod test_helpers {
 
     pub(crate) async fn run_tower_in_background_with_config(
         api_config: ApiConfig,
-    ) -> (SocketAddr, Arc<InternalAPI>) {
-        let internal_rpc_api = create_api_with_config(api_config).await;
+    ) -> (SocketAddr, Arc<InternalAPI>, BitcoindStopper) {
+        let (internal_rpc_api, bitcoind_stopper) = create_api_with_config(api_config).await;
         let cloned = internal_rpc_api.clone();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -347,13 +347,14 @@ mod test_helpers {
                 .unwrap();
         });
 
-        (addr, cloned)
+        (addr, cloned, bitcoind_stopper)
     }
 
-    pub(crate) async fn run_tower_in_background() -> SocketAddr {
-        run_tower_in_background_with_config(ApiConfig::default())
-            .await
-            .0
+    pub(crate) async fn run_tower_in_background() -> (SocketAddr, BitcoindStopper) {
+        let (sock_addr, _, bitcoind_stopper) =
+            run_tower_in_background_with_config(ApiConfig::default()).await;
+
+        (sock_addr, bitcoind_stopper)
     }
 
     pub(crate) async fn check_api_error<'a>(
@@ -425,7 +426,7 @@ mod tests_failures {
 
     #[tokio::test]
     async fn test_no_json_request_body() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) =
             check_api_error("/register", RequestBody::Body(""), server_addr).await;
         assert!(api_error.error.contains("EOF while parsing"));
@@ -435,7 +436,7 @@ mod tests_failures {
 
     #[tokio::test]
     async fn test_wrong_json_request_body() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) =
             check_api_error("/register", RequestBody::DoNotJsonify(""), server_addr).await;
         assert!(api_error.error.contains("expected struct"));
@@ -445,7 +446,7 @@ mod tests_failures {
 
     #[tokio::test]
     async fn test_empty_json_request_body() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) =
             check_api_error("/register", RequestBody::Jsonify(r#"{}"#), server_addr).await;
         assert!(api_error.error.contains("missing field"));
@@ -455,7 +456,7 @@ mod tests_failures {
 
     #[tokio::test]
     async fn test_empty_field() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/register",
             RequestBody::Jsonify(r#"{"user_id": ""}"#),
@@ -469,7 +470,7 @@ mod tests_failures {
 
     #[tokio::test]
     async fn test_wrong_field_hex_encoding_odd() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/register",
             RequestBody::Jsonify(r#"{"user_id": "a"}"#),
@@ -483,7 +484,7 @@ mod tests_failures {
 
     #[tokio::test]
     async fn test_wrong_hex_encoding_character() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) =
         check_api_error("/register",  
         RequestBody::Jsonify(r#"{"user_id": "022fa2900ed7fc07b4e8ca3ea081e846245b0497944644aa78ea0b994ac22074dZ"}"#),
@@ -497,7 +498,7 @@ mod tests_failures {
 
     #[tokio::test]
     async fn test_wrong_field_size() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/register",
             RequestBody::Jsonify(r#"{"user_id": "aa"}"#),
@@ -512,7 +513,7 @@ mod tests_failures {
 
     #[tokio::test]
     async fn test_wrong_field_type() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/register",
             RequestBody::DoNotJsonify(r#"{"user_id": 1}"#),
@@ -527,7 +528,7 @@ mod tests_failures {
     #[tokio::test]
     async fn test_request_missing_field() {
         // We'll use a different endpoint here since we need a json object with more than one field
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
             "/add_appointment",
             RequestBody::Jsonify(r#"{"signature": "aa"}"#),
@@ -543,7 +544,7 @@ mod tests_failures {
 
     #[tokio::test]
     async fn test_empty_request_body() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let grpc_conn = PublicTowerServicesClient::connect(format!(
             "http://{}:{}",
             server_addr.ip(),
@@ -558,12 +559,12 @@ mod tests_failures {
             .reply(&router(grpc_conn))
             .await;
 
-        assert_eq!(res.status(), StatusCode::LENGTH_REQUIRED)
+        assert_eq!(res.status(), StatusCode::LENGTH_REQUIRED);
     }
 
     #[tokio::test]
     async fn test_payload_too_large() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let grpc_conn = PublicTowerServicesClient::connect(format!(
             "http://{}:{}",
             server_addr.ip(),
@@ -579,12 +580,12 @@ mod tests_failures {
             .reply(&router(grpc_conn))
             .await;
 
-        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE)
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
     async fn test_wrong_endpoint() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let grpc_conn = PublicTowerServicesClient::connect(format!(
             "http://{}:{}",
             server_addr.ip(),
@@ -600,12 +601,12 @@ mod tests_failures {
             .reply(&router(grpc_conn))
             .await;
 
-        assert_eq!(res.status(), StatusCode::NOT_FOUND)
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn test_wrong_method() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let grpc_conn = PublicTowerServicesClient::connect(format!(
             "http://{}:{}",
             server_addr.ip(),
@@ -620,7 +621,7 @@ mod tests_failures {
             .reply(&router(grpc_conn))
             .await;
 
-        assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED)
+        assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }
 
@@ -640,7 +641,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_register() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
         let response =
             request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
                 "/register",
@@ -655,7 +656,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_register_max_slots() {
-        let (server_addr, _) =
+        let (server_addr, _, _s) =
             run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
         let user_id = get_random_user_id();
 
@@ -692,7 +693,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_register_service_unavailable() {
-        let (server_addr, _) = run_tower_in_background_with_config(
+        let (server_addr, _, _s) = run_tower_in_background_with_config(
             ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
         )
         .await;
@@ -720,7 +721,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_add_appointment() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
@@ -759,8 +760,8 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_add_appointment_non_registered() {
-        let server_addr = run_tower_in_background().await;
-        let (user_sk, _) = cryptography::get_random_keypair();
+        let (server_addr, _s) = run_tower_in_background().await;
+        let (user_sk, _s) = cryptography::get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
@@ -787,7 +788,7 @@ mod tests_methods {
     #[tokio::test]
     async fn test_add_appointment_already_triggered() {
         // Get the InternalAPI so we can mess with the inner state
-        let (server_addr, internal_api) =
+        let (server_addr, internal_api, _s) =
             run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
 
         // Register
@@ -832,7 +833,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_add_appointment_service_unavailable() {
-        let (server_addr, _) = run_tower_in_background_with_config(
+        let (server_addr, _, _s) = run_tower_in_background_with_config(
             ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
         )
         .await;
@@ -862,7 +863,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_get_appointment() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
@@ -917,7 +918,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_get_appointment_non_registered() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
 
         // User is not registered
         let (user_sk, _) = cryptography::get_random_keypair();
@@ -950,7 +951,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_get_appointment_not_found() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
@@ -993,7 +994,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_get_appointment_service_unavailable() {
-        let (server_addr, _) = run_tower_in_background_with_config(
+        let (server_addr, _, _s) = run_tower_in_background_with_config(
             ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
         )
         .await;
@@ -1028,7 +1029,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_get_subscription_info() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
 
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
@@ -1064,7 +1065,7 @@ mod tests_methods {
 
     #[tokio::test]
     async fn test_get_subscription_info_non_registered() {
-        let server_addr = run_tower_in_background().await;
+        let (server_addr, _s) = run_tower_in_background().await;
 
         // User is not registered
         let (user_sk, _) = cryptography::get_random_keypair();
@@ -1092,7 +1093,7 @@ mod tests_methods {
     #[tokio::test]
     async fn test_get_subscription_info_service_unavailable() {
         let (user_sk, _) = cryptography::get_random_keypair();
-        let (server_addr, _) = run_tower_in_background_with_config(
+        let (server_addr, _, _s) = run_tower_in_background_with_config(
             ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
         )
         .await;

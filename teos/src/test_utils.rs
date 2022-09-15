@@ -14,7 +14,7 @@ use std::thread;
 
 use jsonrpc_http_server::jsonrpc_core::error::ErrorCode as JsonRpcErrorCode;
 use jsonrpc_http_server::jsonrpc_core::{Error as JsonRpcError, IoHandler, Params, Value};
-use jsonrpc_http_server::{Server, ServerBuilder};
+use jsonrpc_http_server::{CloseHandle, Server, ServerBuilder};
 
 use bitcoincore_rpc::{Auth, Client as BitcoindClient};
 
@@ -375,16 +375,19 @@ pub(crate) enum MockedServerQuery {
     Error(i64),
 }
 
-pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> Carrier {
+pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> (Carrier, BitcoindStopper) {
     let bitcoind_mock = match query {
         MockedServerQuery::Regular => BitcoindMock::new(MockOptions::empty()),
         MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
     };
     let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
     let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
-    start_server(bitcoind_mock);
+    start_server(bitcoind_mock.server);
 
-    Carrier::new(bitcoin_cli, bitcoind_reachable, height)
+    (
+        Carrier::new(bitcoin_cli, bitcoind_reachable, height),
+        bitcoind_mock.stopper,
+    )
 }
 
 pub(crate) fn create_responder(
@@ -406,20 +409,23 @@ pub(crate) async fn create_watcher(
     gatekeeper: Arc<Gatekeeper>,
     bitcoind_mock: BitcoindMock,
     dbm: Arc<Mutex<DBM>>,
-) -> Watcher {
+) -> (Watcher, BitcoindStopper) {
     let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
-    start_server(bitcoind_mock);
+    start_server(bitcoind_mock.server);
     let (tower_sk, tower_pk) = get_random_keypair();
     let tower_id = UserId(tower_pk);
-    Watcher::new(
-        gatekeeper,
-        responder,
-        last_n_blocks,
-        chain.get_block_count(),
-        tower_sk,
-        tower_id,
-        dbm,
+    (
+        Watcher::new(
+            gatekeeper,
+            responder,
+            last_n_blocks,
+            chain.get_block_count(),
+            tower_sk,
+            tower_id,
+            dbm,
+        ),
+        bitcoind_mock.stopper,
     )
 }
 #[derive(Clone)]
@@ -454,7 +460,9 @@ impl Default for ApiConfig {
     }
 }
 
-pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<InternalAPI> {
+pub(crate) async fn create_api_with_config(
+    api_config: ApiConfig,
+) -> (Arc<InternalAPI>, BitcoindStopper) {
     let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
     let mut chain = Blockchain::default().with_height(START_HEIGHT);
 
@@ -467,7 +475,7 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
         dbm.clone(),
     ));
     let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-    let watcher = create_watcher(
+    let (watcher, stopper) = create_watcher(
         &mut chain,
         Arc::new(responder),
         gk.clone(),
@@ -478,19 +486,45 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
 
     let bitcoind_reachable = Arc::new((Mutex::new(api_config.bitcoind_reachable), Condvar::new()));
     let (shutdown_trigger, _) = triggered::trigger();
-    Arc::new(InternalAPI::new(
-        Arc::new(watcher),
-        bitcoind_reachable,
-        shutdown_trigger,
-    ))
+    (
+        Arc::new(InternalAPI::new(
+            Arc::new(watcher),
+            bitcoind_reachable,
+            shutdown_trigger,
+        )),
+        stopper,
+    )
 }
 
-pub(crate) async fn create_api() -> Arc<InternalAPI> {
+pub(crate) async fn create_api() -> (Arc<InternalAPI>, BitcoindStopper) {
     create_api_with_config(ApiConfig::default()).await
 }
+
+#[derive(Clone)]
+pub struct BitcoindStopper {
+    close_handle: CloseHandle,
+}
+
+impl BitcoindStopper {
+    pub fn new(close_handle: CloseHandle) -> Self {
+        Self { close_handle }
+    }
+
+    pub fn close_handle(&self) -> CloseHandle {
+        self.close_handle.clone()
+    }
+}
+
+impl Drop for BitcoindStopper {
+    fn drop(&mut self) {
+        self.close_handle().close()
+    }
+}
+
 pub(crate) struct BitcoindMock {
     pub url: String,
     pub server: Server,
+    stopper: BitcoindStopper,
 }
 
 pub(crate) struct MockOptions {
@@ -561,6 +595,7 @@ impl BitcoindMock {
 
         Self {
             url: format!("http://{}", server.address()),
+            stopper: BitcoindStopper::new(server.close_handle()),
             server,
         }
     }
@@ -615,8 +650,8 @@ impl BitcoindMock {
     }
 }
 
-pub(crate) fn start_server(bitcoind: BitcoindMock) {
+pub(crate) fn start_server(server: Server) {
     thread::spawn(move || {
-        bitcoind.server.wait();
+        server.wait();
     });
 }
