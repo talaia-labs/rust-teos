@@ -259,8 +259,6 @@ impl Retrier {
                     .lock()
                     .unwrap()
                     .dbm
-                    .lock()
-                    .unwrap()
                     .load_appointment(locator)
                     .unwrap();
 
