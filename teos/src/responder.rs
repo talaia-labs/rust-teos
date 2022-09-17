@@ -578,9 +578,9 @@ mod tests {
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, generate_dummy_appointment_with_user, generate_uuid, get_random_breach,
-        get_random_tracker, get_random_tx, store_appointment_and_fks_to_db, Blockchain,
-        MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
-        SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
+        get_random_tracker, get_random_tx, store_appointment_and_fks_to_db, BitcoindStopper,
+        Blockchain, MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA, SLOTS,
+        START_HEIGHT, SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
     };
 
     use teos_common::dbm::Error as DBError;
@@ -645,16 +645,17 @@ mod tests {
         gatekeeper: Arc<Gatekeeper>,
         dbm: Arc<Mutex<DBM>>,
         query: MockedServerQuery,
-    ) -> Responder {
+    ) -> (Responder, BitcoindStopper) {
         let tip = chain.tip();
-        Responder::new(create_carrier(query, tip.deref().height), gatekeeper, dbm)
+        let (carrier, bitcoind_stopper) = create_carrier(query, tip.deref().height);
+        (Responder::new(carrier, gatekeeper, dbm), bitcoind_stopper)
     }
 
     fn init_responder_with_chain_and_dbm(
         mocked_query: MockedServerQuery,
         chain: &Blockchain,
         dbm: Arc<Mutex<DBM>>,
-    ) -> Responder {
+    ) -> (Responder, BitcoindStopper) {
         let gk = Gatekeeper::new(
             chain.get_block_count(),
             SLOTS,
@@ -665,7 +666,7 @@ mod tests {
         create_responder(chain, Arc::new(gk), dbm, mocked_query)
     }
 
-    fn init_responder(mocked_query: MockedServerQuery) -> Responder {
+    fn init_responder(mocked_query: MockedServerQuery) -> (Responder, BitcoindStopper) {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
         init_responder_with_chain_and_dbm(mocked_query, &chain, dbm)
@@ -716,7 +717,7 @@ mod tests {
         // A fresh responder has no associated data
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let responder =
+        let (responder, _s) =
             init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm.clone());
         assert!(responder.is_fresh());
 
@@ -738,7 +739,8 @@ mod tests {
         }
 
         // Create a new Responder reusing the same DB and check that the data is loaded
-        let another_r = init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm);
+        let (another_r, _) =
+            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm);
         assert!(!responder.is_fresh());
         assert_eq!(responder, another_r);
     }
@@ -746,7 +748,7 @@ mod tests {
     #[test]
     fn test_handle_breach_delivered() {
         let start_height = START_HEIGHT as u32;
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
 
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -792,7 +794,7 @@ mod tests {
 
     #[test]
     fn test_handle_breach_rejected() {
-        let responder = init_responder(MockedServerQuery::Error(
+        let (responder, _s) = init_responder(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
         ));
 
@@ -815,7 +817,7 @@ mod tests {
 
     #[test]
     fn test_add_tracker() {
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
         let start_height = START_HEIGHT as u32;
 
         // Add the necessary FKs in the database
@@ -940,7 +942,7 @@ mod tests {
         // Has tracker should return true as long as the given tracker is held by the Responder.
         // As long as the tracker is in Responder.trackers and Responder.tx_tracker_map, the return
         // must be true.
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
 
         // Add a new tracker
         let user_id = get_random_user_id();
@@ -970,7 +972,7 @@ mod tests {
     fn test_get_tracker() {
         // Should return a tracker as long as it exists
         let start_height = START_HEIGHT as u32;
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
 
         // Store the user and the appointment in the database so we can add the tracker later on (due to FK restrictions)
         let user_id = get_random_user_id();
@@ -1008,7 +1010,7 @@ mod tests {
 
     #[test]
     fn test_check_confirmations() {
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
         let target_height = (START_HEIGHT * 2) as u32;
 
         // Unconfirmed transactions that miss a confirmation will be added to missed_confirmations (if not there) or their missed confirmation count till be increased
@@ -1114,7 +1116,7 @@ mod tests {
 
     #[test]
     fn test_get_txs_to_rebroadcast() {
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
         let current_height = 100;
 
         let user_id = get_random_user_id();
@@ -1156,13 +1158,13 @@ mod tests {
             }
         }
 
-        assert_eq!(responder.get_txs_to_rebroadcast(current_height), txs)
+        assert_eq!(responder.get_txs_to_rebroadcast(current_height), txs);
     }
 
     #[test]
     fn test_get_txs_to_rebroadcast_reorged() {
         // For reorged transactions this works a bit different, the dispute transaction will also be returned here
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
         let current_height = 100;
 
         let user_id = get_random_user_id();
@@ -1218,12 +1220,12 @@ mod tests {
         }
 
         // Since we have only added confirmed and reorged transactions, we should get back only the reorged ones.
-        assert_eq!(responder.get_txs_to_rebroadcast(current_height), txs)
+        assert_eq!(responder.get_txs_to_rebroadcast(current_height), txs);
     }
 
     #[test]
     fn test_get_outdated_trackers() {
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
 
         // Outdated trackers are those whose associated subscription is outdated and have not been confirmed yet (they don't have
         // a single confirmation).
@@ -1273,7 +1275,7 @@ mod tests {
     fn test_rebroadcast_accepted() {
         // This test positive rebroadcast cases, including reorgs. However, complex reorg logic is not tested here, it will need a
         // dedicated test (against bitcoind, not mocked).
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
         let current_height = 100;
 
         // Add user to the database
@@ -1341,7 +1343,7 @@ mod tests {
     fn test_rebroadcast_rejected() {
         // This test negative rebroadcast cases, including reorgs. However, complex reorg logic is not tested here, it will need a
         // dedicated test (against bitcoind, not mocked).
-        let responder = init_responder(MockedServerQuery::Error(
+        let (responder, _s) = init_responder(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
         ));
         let current_height = 100;
@@ -1408,7 +1410,7 @@ mod tests {
 
     #[test]
     fn test_delete_trackers_from_memory() {
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
 
         // Add user to the database
         let user_id = get_random_user_id();
@@ -1465,7 +1467,7 @@ mod tests {
 
     #[test]
     fn test_delete_trackers() {
-        let responder = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular);
 
         // Add user to the database
         let user_id = get_random_user_id();
@@ -1604,7 +1606,8 @@ mod tests {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let start_height = START_HEIGHT * 2;
         let mut chain = Blockchain::default().with_height(start_height);
-        let responder = init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm);
+        let (responder, _s) =
+            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm);
 
         // block_connected is used to keep track of the confirmation received (or missed) by the trackers the Responder
         // is keeping track of.
@@ -1847,7 +1850,8 @@ mod tests {
     fn test_block_disconnected() {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
-        let responder = init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm);
+        let (responder, _s) =
+            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm);
 
         // Add user to the database
         let user_id = get_random_user_id();

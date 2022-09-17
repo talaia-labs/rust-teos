@@ -245,7 +245,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
 
@@ -269,7 +269,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
@@ -289,7 +289,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
@@ -311,7 +311,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
@@ -336,8 +336,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
-
+        start_server(bitcoind_mock.server);
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
@@ -355,7 +354,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
@@ -407,7 +406,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         let tx = consensus::deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
@@ -425,7 +424,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         let tx = consensus::deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
@@ -440,7 +439,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         assert_eq!(
@@ -455,7 +454,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
         assert_eq!(carrier.get_block_height(&BlockHash::default()), None);
@@ -468,7 +467,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let tx = consensus::deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
@@ -481,7 +480,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        start_server(bitcoind_mock);
+        start_server(bitcoind_mock.server);
 
         let tx = consensus::deserialize::<Transaction>(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
