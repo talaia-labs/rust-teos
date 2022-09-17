@@ -82,25 +82,10 @@ impl Blockchain {
 
     pub fn with_height(mut self, height: usize) -> Self {
         self.blocks.reserve_exact(height);
-        let bits = BlockHeader::compact_target_from_u256(&Uint256::from_be_bytes([0xff; 32]));
-        for i in 1..=height {
-            let prev_block = &self.blocks[i - 1];
-            let prev_blockhash = prev_block.block_hash();
-            let time = prev_block.header.time + height as u32;
-            let txdata = vec![get_random_tx()];
-            let hashes = txdata.iter().map(|obj| obj.txid().as_hash());
-            self.blocks.push(Block {
-                header: BlockHeader {
-                    version: 0,
-                    prev_blockhash,
-                    merkle_root: bitcoin_merkle_root(hashes).unwrap().into(),
-                    time,
-                    bits,
-                    nonce: 0,
-                },
-                txdata,
-            });
+        for _ in 1..=height {
+            self.generate(None);
         }
+
         self
     }
 
