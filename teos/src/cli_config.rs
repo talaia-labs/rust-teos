@@ -37,7 +37,7 @@ pub struct GetAppointmentsData {
 #[derive(StructOpt, Debug)]
 #[structopt(rename_all = "lowercase")]
 #[structopt(
-    version = "0.0.1",
+    version = env!("CARGO_PKG_VERSION"),
     about = "The Eye of Satoshi - CLI",
     name = "teos-cli"
 )]

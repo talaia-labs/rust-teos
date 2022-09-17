@@ -1,6 +1,6 @@
 [package]
 name = "watchtower-plugin"
-version = "0.1.0"
+version = "0.1.2"
 authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
 license = "MIT"
 edition = "2018"
