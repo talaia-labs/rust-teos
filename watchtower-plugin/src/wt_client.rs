@@ -23,7 +23,7 @@ pub struct WTClient {
     /// A collection of towers the client is registered to.
     pub towers: HashMap<TowerId, TowerSummary>,
     /// Queue of unreachable towers
-    pub unreachable_towers: UnboundedSender<TowerId>,
+    pub unreachable_towers: UnboundedSender<(TowerId, Locator)>,
     /// The user secret key.
     pub user_sk: SecretKey,
     /// The user identifier.
@@ -33,7 +33,10 @@ pub struct WTClient {
 }
 
 impl WTClient {
-    pub async fn new(data_dir: PathBuf, unreachable_towers: UnboundedSender<TowerId>) -> Self {
+    pub async fn new(
+        data_dir: PathBuf,
+        unreachable_towers: UnboundedSender<(TowerId, Locator)>,
+    ) -> Self {
         // Create data dir if it does not exist
         fs::create_dir_all(&data_dir).await.unwrap_or_else(|e| {
             log::error!("Cannot create data dir: {:?}", e);
@@ -56,8 +59,10 @@ impl WTClient {
 
         let towers = dbm.load_towers();
         for (tower_id, tower) in towers.iter() {
-            if tower.status.is_unreachable() {
-                unreachable_towers.send(*tower_id).unwrap();
+            if tower.status.is_temporary_unreachable() {
+                for locator in tower.pending_appointments.iter() {
+                    unreachable_towers.send((*tower_id, *locator)).unwrap();
+                }
             }
         }
 
@@ -729,11 +734,11 @@ mod tests {
         // Check data in memory
         let tower_summary = wt_client.towers.get(&tower_id);
         assert!(tower_summary.is_some());
-        assert_eq!(tower_summary.unwrap().status, TowerStatus::Misbehaving);
+        assert!(tower_summary.unwrap().status.is_misbehaving());
 
         // Check data in DB
         let loaded_info = wt_client.load_tower_info(tower_id).unwrap();
-        assert_eq!(loaded_info.status, TowerStatus::Misbehaving);
+        assert!(loaded_info.status.is_misbehaving());
         assert_eq!(loaded_info.misbehaving_proof, Some(proof));
         assert!(loaded_info.appointments.contains_key(&appointment.locator));
     }
