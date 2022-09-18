@@ -130,6 +130,7 @@ async fn main() {
         conf.btc_rpc_port,
         &conf.btc_rpc_user,
         &conf.btc_rpc_password,
+        &conf.btc_network,
     )
     .await
     {

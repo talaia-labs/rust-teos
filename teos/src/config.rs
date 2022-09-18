@@ -2,7 +2,6 @@
 
 use bitcoin::network::constants::Network;
 use serde::Deserialize;
-use std;
 use std::path::PathBuf;
 use std::str::FromStr;
 use structopt::StructOpt;
@@ -326,7 +325,9 @@ mod tests {
         // Tests that the default configuration does not pass verification checks. This is on purpose so some fields are
         // required to be updated by the user.
         let mut config = Config::default();
-        assert!(matches!(config.verify(), Err(ConfigError { .. })));
+        assert!(
+            matches!(config.verify(), Err(ConfigError(e)) if e.contains("btc_rpc_user must be set"))
+        );
     }
 
     #[test]
@@ -349,7 +350,9 @@ mod tests {
             btc_network: "wrong_network".to_owned(),
             ..Default::default()
         };
-        assert!(matches!(config.verify(), Err(ConfigError { .. })));
+        assert!(
+            matches!(config.verify(), Err(ConfigError(e)) if e.contains("btc_network not recognized"))
+        );
     }
 
     #[test]
