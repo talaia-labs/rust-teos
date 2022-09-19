@@ -91,25 +91,20 @@ impl<'a> BitcoindClient<'a> {
         };
 
         // Test that bitcoind is reachable.
-        let mut btc_network = client.get_chain().await?;
-
-        // bitcoind reports "main" for "bitcoin" chain.
-        if &btc_network == "main" {
-            btc_network = String::from("bitcoin");
-        }
+        let btc_network = client.get_chain().await?;
 
         // Assert teos runs on the same chain/network as bitcoind.
         if btc_network != teos_network {
-            return Err(Error::new(
+            Err(Error::new(
                 ErrorKind::InvalidInput,
                 format!(
                     "bitcoind is running on {} but teosd is set to run on {}",
                     btc_network, teos_network
                 ),
-            ));
+            ))
+        } else {
+            Ok(client)
         }
-
-        Ok(client)
     }
 
     /// Gets a fresh RPC client.

@@ -1,9 +1,7 @@
 //! Logic related to the tower configuration and command line parameter parsing.
 
-use bitcoin::network::constants::Network;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::str::FromStr;
 use structopt::StructOpt;
 
 pub fn data_dir_absolute_path(data_dir: String) -> PathBuf {
@@ -212,25 +210,26 @@ impl Config {
             return Err(ConfigError("btc_rpc_password must be set".to_owned()));
         }
 
-        match Network::from_str(&self.btc_network) {
-            Ok(network) => {
-                // Set the port to it's default (depending on the network) if it has not been
-                // overwritten at this point.
-                if self.btc_rpc_port == 0 {
-                    self.btc_rpc_port = match network {
-                        Network::Testnet => 18332,
-                        Network::Signet => 38332,
-                        Network::Regtest => 18443,
-                        _ => 8332,
-                    }
-                }
-                Ok(())
-            }
-            Err(_) => {
-                Err(ConfigError(format!("btc_network not recognized. Expected {{bitcoin, testnet, signet, regtest}}, received {}",
-                self.btc_network)))
-            }
+        // Normalize the network option to the ones used by bitcoind.
+        if ["mainnet", "testnet"].contains(&self.btc_network.as_str()) {
+            self.btc_network = self.btc_network.trim_end_matches("net").into();
         }
+
+        let default_rpc_port = match self.btc_network.as_str() {
+            "main" => 8332,
+            "test" => 18332,
+            "regtest" => 18443,
+            "signet" => 38332,
+            _ => return Err(ConfigError(format!("btc_network not recognized. Expected {{mainnet, testnet, signet, regtest}}, received {}", self.btc_network)))
+        };
+
+        // Set the port to it's default (depending on the network) if it has not been
+        // overwritten at this point.
+        if self.btc_rpc_port == 0 {
+            self.btc_rpc_port = default_rpc_port;
+        }
+
+        Ok(())
     }
 
     /// Checks whether the config has been set with only with default values.
@@ -255,7 +254,7 @@ impl Default for Config {
             onion_hidden_service_port: 2121,
             rpc_bind: "127.0.0.1".into(),
             rpc_port: 8814,
-            btc_network: "bitcoin".into(),
+            btc_network: "mainnet".into(),
             btc_rpc_user: String::new(),
             btc_rpc_password: String::new(),
             btc_rpc_connect: "localhost".into(),
