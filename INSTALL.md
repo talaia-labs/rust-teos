@@ -3,7 +3,7 @@
 The tower can be installed and tested using cargo:
 
 ```
-git clone https://github.com/sr-gi/rust-teos.git
+git clone https://github.com/talaia-labs/rust-teos.git
 cd rust-teos
 cargo install --path teos
 ```

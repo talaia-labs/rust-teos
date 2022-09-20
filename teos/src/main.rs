@@ -130,6 +130,7 @@ async fn main() {
         conf.btc_rpc_port,
         &conf.btc_rpc_user,
         &conf.btc_rpc_password,
+        &conf.btc_network,
     )
     .await
     {
@@ -176,7 +177,14 @@ async fn main() {
     };
     log::info!("Last known block: {}", tip.header.block_hash());
 
-    let mut poller = ChainPoller::new(&mut derefed, Network::from_str(&conf.btc_network).unwrap());
+    // This is how chain poller names bitcoin networks.
+    let btc_network = match conf.btc_network.as_str() {
+        "main" => "bitcoin",
+        "test" => "testnet",
+        any => any,
+    };
+
+    let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
     let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
 
     // Build components

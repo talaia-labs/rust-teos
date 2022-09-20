@@ -10,7 +10,7 @@ rpc_bind = "127.0.0.1"
 rpc_port = 8814
 
 # bitcoind
-btc_network = "bitcoin"
+btc_network = "mainnet"
 btc_rpc_user = "CSW"
 btc_rpc_password = "NotSatoshi"
 btc_rpc_connect = "localhost"

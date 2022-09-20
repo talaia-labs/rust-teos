@@ -9,6 +9,8 @@
  * at your option.
 */
 
+use std::convert::TryInto;
+use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -17,7 +19,7 @@ use bitcoin::hash_types::{BlockHash, Txid};
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::{Block, Transaction};
 use lightning::util::ser::Writeable;
-use lightning_block_sync::http::HttpEndpoint;
+use lightning_block_sync::http::{HttpEndpoint, JsonResponse};
 use lightning_block_sync::rpc::RpcClient;
 use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
 
@@ -74,6 +76,7 @@ impl<'a> BitcoindClient<'a> {
         port: u16,
         rpc_user: &'a str,
         rpc_password: &'a str,
+        teos_network: &'a str,
     ) -> std::io::Result<BitcoindClient<'a>> {
         let http_endpoint = HttpEndpoint::for_host(host.to_owned()).with_port(port);
         let rpc_credentials = base64::encode(&format!("{}:{}", rpc_user, rpc_password));
@@ -87,10 +90,20 @@ impl<'a> BitcoindClient<'a> {
             rpc_password,
         };
 
-        // Test that bitcoind is reachable
-        match client.get_best_block_hash_and_height().await {
-            Ok(_) => Ok(client),
-            Err(e) => Err(e),
+        // Test that bitcoind is reachable.
+        let btc_network = client.get_chain().await?;
+
+        // Assert teos runs on the same chain/network as bitcoind.
+        if btc_network != teos_network {
+            Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "bitcoind is running on {} but teosd is set to run on {}",
+                    btc_network, teos_network
+                ),
+            ))
+        } else {
+            Ok(client)
         }
     }
 
@@ -126,5 +139,25 @@ impl<'a> BitcoindClient<'a> {
         let txid_hex = serde_json::json!(txid.encode().to_hex());
         rpc.call_method::<Transaction>("getrawtransaction", &[txid_hex])
             .await
+    }
+
+    /// Gets bitcoind's network.
+    pub async fn get_chain(&self) -> std::io::Result<String> {
+        // A wrapper type to extract "chain" key from getblockchaininfo JsonResponse.
+        struct BtcNetwork(String);
+        impl TryInto<BtcNetwork> for JsonResponse {
+            type Error = std::io::Error;
+            fn try_into(self) -> std::io::Result<BtcNetwork> {
+                Ok(BtcNetwork(self.0["chain"].as_str().unwrap().to_string()))
+            }
+        }
+
+        // Ask the RPC client for the network bitcoind is running on.
+        let rpc = self.bitcoind_rpc_client.lock().await;
+        let btc_network = rpc
+            .call_method::<BtcNetwork>("getblockchaininfo", &[])
+            .await?;
+
+        Ok(btc_network.0)
     }
 }
