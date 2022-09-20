@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tests"
-version = "0.1.0"
+version = "0.1.2"
 description = "watchtower-plugin tests"
 authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
 license = "MIT"

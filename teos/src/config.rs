@@ -44,7 +44,7 @@ impl std::error::Error for ConfigError {}
 /// Holds all the command line options.
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(rename_all = "lowercase")]
-#[structopt(version = "0.0.1", about = "The Eye of Satoshi - Lightning watchtower")]
+#[structopt(version = env!("CARGO_PKG_VERSION"), about = "The Eye of Satoshi - Lightning watchtower")]
 pub struct Opt {
     /// Address teos HTTP(s) API will bind to [default: localhost]
     #[structopt(long)]
