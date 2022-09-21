@@ -85,7 +85,7 @@ CookieAuthentication 1
 CookieAuthFileGroupReadable 1
 ```
 
-Once the Tor daemon is running, and the control port is open, make sure to enable the `tor_support` flag `teosd`.
+Once the Tor daemon is running, and the control port is open, make sure to enable `--torsupport` when running `teosd`.
 
 ### Tower id and signing key
 
