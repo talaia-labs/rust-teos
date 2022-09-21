@@ -47,7 +47,6 @@ teos-common = { path = "../teos-common" }
 tonic-build = "0.6"
 
 [dev-dependencies]
-chunked_transfer = "1.4"
 jsonrpc-http-server = "17.1.0"
 rand = "0.8.4"
 tempdir = "0.3.7"
