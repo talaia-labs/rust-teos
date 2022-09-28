@@ -419,7 +419,7 @@ pub(crate) async fn create_watcher(
         Watcher::new(
             gatekeeper,
             responder,
-            last_n_blocks,
+            &last_n_blocks,
             chain.get_block_count(),
             tower_sk,
             tower_id,

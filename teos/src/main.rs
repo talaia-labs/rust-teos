@@ -213,7 +213,7 @@ async fn main() {
     let watcher = Arc::new(Watcher::new(
         gatekeeper.clone(),
         responder.clone(),
-        last_n_blocks,
+        &last_n_blocks,
         tip.height,
         tower_sk,
         TowerId(tower_pk),
