@@ -771,10 +771,10 @@ mod tests {
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, create_responder, create_watcher, generate_dummy_appointment,
-        generate_dummy_appointment_with_user, generate_uuid, get_last_n_blocks, get_random_breach,
-        get_random_tx, store_appointment_and_fks_to_db, BitcoindMock, BitcoindStopper, Blockchain,
-        MockOptions, MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA, SLOTS,
-        START_HEIGHT, SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
+        generate_dummy_appointment_with_user, generate_uuid, get_random_breach, get_random_tx,
+        store_appointment_and_fks_to_db, BitcoindMock, BitcoindStopper, Blockchain, MockOptions,
+        MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
     };
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
     use teos_common::dbm::Error as DBError;
@@ -782,7 +782,7 @@ mod tests {
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
-    use bitcoin::Block;
+
     use lightning::chain::Listen;
 
     impl PartialEq for Watcher {
@@ -820,7 +820,7 @@ mod tests {
         chain: &mut Blockchain,
         dbm: Arc<Mutex<DBM>>,
     ) -> (Watcher, BitcoindStopper) {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let bitcoind_mock = BitcoindMock::new(MockOptions::default());
 
         let gk = Arc::new(Gatekeeper::new(
             chain.get_block_count(),
@@ -829,7 +829,7 @@ mod tests {
             EXPIRY_DELTA,
             dbm.clone(),
         ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+        let responder = create_responder(chain, gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
         create_watcher(
             chain,
             Arc::new(responder),

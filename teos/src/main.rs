@@ -32,6 +32,7 @@ use teos::responder::Responder;
 use teos::tls::tls_init;
 use teos::watcher::Watcher;
 
+use teos_common::constants::IRREVOCABLY_RESOLVED;
 use teos_common::cryptography::get_random_keypair;
 use teos_common::TowerId;
 
@@ -44,7 +45,7 @@ where
     B: DerefMut<Target = T> + Sized + Send + Sync,
     T: BlockSource,
 {
-    let mut last_n_blocks = Vec::new();
+    let mut last_n_blocks = Vec::with_capacity(n);
     for _ in 0..n {
         let block = poller.fetch_block(&last_known_block).await.unwrap();
         last_known_block = poller
@@ -187,6 +188,20 @@ async fn main() {
     } else {
         validate_best_block_header(&mut derefed).await.unwrap()
     };
+
+    // DISCUSS: This is not really required (and only triggered in regtest). This is only in place so the caches can be
+    // populated with enough blocks mainly because the size of the cache is based on the amount of blocks passed when initializing.
+    // However, we could add an additional parameter to specify the size of the cache, and initialize with however may blocks we
+    // could pull from the backend. Adding this functionality just for regtest seemed unnecessary though, hence the check.
+    if tip.height < IRREVOCABLY_RESOLVED {
+        log::error!(
+            "Not enough blocks to start teosd (required: {}). Mine at least {} more",
+            IRREVOCABLY_RESOLVED,
+            IRREVOCABLY_RESOLVED - tip.height
+        );
+        std::process::exit(1);
+    }
+
     log::info!("Last known block: {}", tip.header.block_hash());
 
     // This is how chain poller names bitcoin networks.
@@ -197,7 +212,7 @@ async fn main() {
     };
 
     let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
-    let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
+    let last_n_blocks = get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize).await;
 
     // Build components
     let gatekeeper = Arc::new(Gatekeeper::new(
@@ -208,12 +223,18 @@ async fn main() {
         dbm.clone(),
     ));
 
-    let carrier = Carrier::new(rpc, bitcoind_reachable.clone(), tip.deref().height);
-    let responder = Arc::new(Responder::new(carrier, gatekeeper.clone(), dbm.clone()));
+    let carrier = Carrier::new(rpc, bitcoind_reachable.clone(), tip.height);
+    let responder = Arc::new(Responder::new(
+        &last_n_blocks,
+        tip.height,
+        carrier,
+        gatekeeper.clone(),
+        dbm.clone(),
+    ));
     let watcher = Arc::new(Watcher::new(
         gatekeeper.clone(),
         responder.clone(),
-        &last_n_blocks,
+        &last_n_blocks[0..6],
         tip.height,
         tower_sk,
         TowerId(tower_pk),
