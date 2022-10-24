@@ -705,7 +705,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let tower_info = TowerInfo::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -821,7 +821,7 @@ mod tests {
             towers.insert(
                 tower_id,
                 TowerSummary::new(
-                    net_addr.into(),
+                    net_addr.to_owned(),
                     receipt.available_slots(),
                     receipt.subscription_start(),
                     receipt.subscription_expiry(),
@@ -872,7 +872,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let mut tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -886,9 +886,9 @@ mod tests {
             let appointment = generate_random_appointment(None);
             let user_signature = "user_signature";
             let appointment_receipt = AppointmentReceipt::with_signature(
-                user_signature.into(),
+                user_signature.to_owned(),
                 42,
-                "tower_signature".into(),
+                "tower_signature".to_owned(),
             );
 
             tower_summary.available_slots -= 1;
@@ -935,15 +935,15 @@ mod tests {
 
         // Add both
         let tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
         );
         let appointment_receipt = AppointmentReceipt::with_signature(
-            "user_signature".into(),
+            "user_signature".to_owned(),
             42,
-            "tower_signature".into(),
+            "tower_signature".to_owned(),
         );
         dbm.store_appointment_receipt(
             tower_id,
@@ -971,7 +971,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -987,9 +987,9 @@ mod tests {
         for _ in 0..5 {
             let appointment = generate_random_appointment(None);
             let appointment_receipt = AppointmentReceipt::with_signature(
-                user_signature.into(),
+                user_signature.to_owned(),
                 42,
-                "tower_signature".into(),
+                "tower_signature".to_owned(),
             );
             let pending_appointment = generate_random_appointment(None);
             let invalid_appointment = generate_random_appointment(None);
@@ -1058,7 +1058,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let mut tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -1188,7 +1188,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let mut tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -1251,7 +1251,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -1266,9 +1266,9 @@ mod tests {
         // Store a misbehaving proof and load it back
         let appointment = generate_random_appointment(None);
         let appointment_receipt = AppointmentReceipt::with_signature(
-            "user_signature".into(),
+            "user_signature".to_owned(),
             42,
-            "tower_signature".into(),
+            "tower_signature".to_owned(),
         );
 
         let proof = MisbehaviorProof::new(
@@ -1300,7 +1300,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -1315,9 +1315,9 @@ mod tests {
         // // Store a misbehaving proof check
         let appointment = generate_random_appointment(None);
         let appointment_receipt = AppointmentReceipt::with_signature(
-            "user_signature".into(),
+            "user_signature".to_owned(),
             42,
-            "tower_signature".into(),
+            "tower_signature".to_owned(),
         );
 
         let proof = MisbehaviorProof::new(

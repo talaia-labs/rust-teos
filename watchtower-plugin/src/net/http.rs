@@ -84,7 +84,7 @@ pub async fn send_appointment(
 ) -> Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointmentError> {
     let request_data = common_msgs::AddAppointmentRequest {
         appointment: Some(appointment.clone().into()),
-        signature: signature.into(),
+        signature: signature.to_owned(),
     };
 
     match process_post_response(
@@ -99,7 +99,7 @@ pub async fn send_appointment(
     {
         ApiResponse::Response::<common_msgs::AddAppointmentResponse>(r) => {
             let receipt = AppointmentReceipt::with_signature(
-                signature.into(),
+                signature.to_owned(),
                 r.start_block,
                 r.signature.clone(),
             );
@@ -139,7 +139,7 @@ pub async fn post_request<S: Serialize>(
                 .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?
         } else {
             return Err(RequestError::ConnectionError(
-                "Cannot connect to an onion address without a proxy".into(),
+                "Cannot connect to an onion address without a proxy".to_owned(),
             ));
         }
     } else {
@@ -149,9 +149,11 @@ pub async fn post_request<S: Serialize>(
     client.post(endpoint).json(&data).send().await.map_err(|e| {
         log::debug!("POST request failed: {:?}", e);
         if e.is_connect() | e.is_timeout() {
-            RequestError::ConnectionError("Cannot connect to the tower. Connection refused".into())
+            RequestError::ConnectionError(
+                "Cannot connect to the tower. Connection refused".to_owned(),
+            )
         } else {
-            RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".into())
+            RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".to_owned())
         }
     })
 }
@@ -187,11 +189,11 @@ mod tests {
         fn test_is_connection() {
             let error_message = "error_msg";
             for error in [
-                RequestError::ConnectionError(error_message.into()),
-                RequestError::DeserializeError(error_message.into()),
-                RequestError::Unexpected(error_message.into()),
+                RequestError::ConnectionError(error_message.to_owned()),
+                RequestError::DeserializeError(error_message.to_owned()),
+                RequestError::Unexpected(error_message.to_owned()),
             ] {
-                if error == RequestError::ConnectionError(error_message.into()) {
+                if error == RequestError::ConnectionError(error_message.to_owned()) {
                     assert!(error.is_connection())
                 } else {
                     assert!(!error.is_connection())
@@ -359,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_appointment_api_error() {
         let api_error = ApiError {
-            error: "error_msg".into(),
+            error: "error_msg".to_owned(),
             error_code: 1,
         };
 

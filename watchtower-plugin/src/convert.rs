@@ -55,7 +55,7 @@ impl RegisterParams {
     fn from_id(tower_id: &str) -> Result<Self, RegisterError> {
         Ok(Self {
             tower_id: TowerId::from_str(tower_id)
-                .map_err(|_| RegisterError::InvalidId("Invalid tower id".into()))?,
+                .map_err(|_| RegisterError::InvalidId("Invalid tower id".to_owned()))?,
             host: None,
             port: None,
         })
@@ -63,10 +63,10 @@ impl RegisterParams {
 
     fn with_host(self, host: &str) -> Result<Self, RegisterError> {
         if host.is_empty() {
-            Err(RegisterError::InvalidHost("hostname is empty".into()))
+            Err(RegisterError::InvalidHost("hostname is empty".to_owned()))
         } else if host.contains(' ') {
             Err(RegisterError::InvalidHost(
-                "hostname contains white spaces".into(),
+                "hostname contains white spaces".to_owned(),
             ))
         } else {
             Ok(Self {
@@ -193,21 +193,22 @@ impl TryFrom<serde_json::Value> for GetAppointmentParams {
                     )))
                 } else {
                     let tower_id = if let Some(s) = a.get(0).unwrap().as_str() {
-                        TowerId::from_str(s)
-                            .map_err(|_| GetAppointmentError::InvalidId("Invalid tower id".into()))
+                        TowerId::from_str(s).map_err(|_| {
+                            GetAppointmentError::InvalidId("Invalid tower id".to_owned())
+                        })
                     } else {
                         Err(GetAppointmentError::InvalidId(
-                            "tower_id must be a hex encoded string".into(),
+                            "tower_id must be a hex encoded string".to_owned(),
                         ))
                     }?;
 
                     let locator = if let Some(s) = a.get(1).unwrap().as_str() {
                         Locator::from_hex(s).map_err(|_| {
-                            GetAppointmentError::InvalidLocator("Invalid locator".into())
+                            GetAppointmentError::InvalidLocator("Invalid locator".to_owned())
                         })
                     } else {
                         Err(GetAppointmentError::InvalidLocator(
-                            "locator must be a hex encoded string".into(),
+                            "locator must be a hex encoded string".to_owned(),
                         ))
                     }?;
 
@@ -262,7 +263,7 @@ mod tests {
             // Any properly formatted host should work
             let params = RegisterParams::from_id(VALID_ID).unwrap();
             let host = "myhost";
-            assert_eq!(params.with_host(host).unwrap().host, Some(host.into()));
+            assert_eq!(params.with_host(host).unwrap().host, Some(host.to_owned()));
 
             // Host must not be empty not have spaces
             assert!(matches!(
