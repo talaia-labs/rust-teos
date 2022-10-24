@@ -115,7 +115,7 @@ async fn register(
         .state()
         .lock()
         .unwrap()
-        .add_update_tower(tower_id, tower_net_addr, &receipt).map_err(|e| {
+        .add_update_tower(tower_id, &tower_net_addr, &receipt).map_err(|e| {
             if e.is_expiry() {
                 anyhow!("Registration receipt contains a subscription expiry that is not higher than the one we are currently registered for")
             } else {

@@ -400,7 +400,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -537,7 +537,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -616,7 +616,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -682,7 +682,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Remove the tower (to simulate it has been abandoned)
@@ -720,7 +720,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -767,7 +767,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // If there are no pending appointments the method will simply return
@@ -790,7 +790,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -868,7 +868,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         let api_mock = server.mock(|when, then| {
@@ -911,7 +911,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         let api_mock = server.mock(|when, then| {
@@ -962,7 +962,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Remove the tower (to simulate it has been abandoned)
