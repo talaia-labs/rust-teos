@@ -1,14 +1,14 @@
-Systemd setup for backend
+# Systemd setup for backend
 
 
-Create a simple file copying the contents below to the file, and use the command:
-sudo nano /usr/lib/systemd/system/teos.service 
-#this will create a file named teos.service in the /usr/lib/systemd/system/ path
+#### Create a simple file copying the contents below to the file, and use the command:
+`sudo nano /usr/lib/systemd/system/teos.service`
+#### This will create a file named teos.service in the /usr/lib/systemd/system/ path
 
-And change it with your proper installation path, user, and comments:
+#### One you create it and copy and paste, change the information with your proper installation path, user, and comments:
 
-------------- don't copy this line, copy under it --------------------------
-
+#### ------------- don't copy this line, copy under it --------------------------
+```
 [Unit]
 Description=The Eye of Satoshi daemon
 Requires=teos.service
@@ -28,13 +28,14 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
-------------- don't copy this line, copy above it --------------------------
+```
+#### ------------- don't copy this line, copy above it --------------------------
 
-The next step is to enable the service with the following command:
-sudo systemctl enable teos.service
+#### The next step is to enable the service with the following command:
+`sudo systemctl enable teos.service`
 
-And start the service with the command:
-sudo systemctl start teos.service
+#### And start the service with the command:
+`sudo systemctl start teos.service`
 
-If you need to stop the service, use the command:
-sudo systemctl stop teos.service
+#### If you need to stop the service, use the command:
+`sudo systemctl stop teos.service`
