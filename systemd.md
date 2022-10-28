@@ -2,8 +2,8 @@
 
 
 #### Create a simple file copying the contents below to the file, and use the command:
-`sudo nano /usr/lib/systemd/system/teos.service`
-#### This will create a file named teos.service in the /usr/lib/systemd/system/ path
+`sudo nano /etc/systemd/system/teosd.service`
+#### This will create a file named teos.service in the /etc/systemd/system/ path
 
 #### One you create it and copy and paste, change the information with your proper installation path, user, and comments:
 
@@ -11,31 +11,56 @@
 ```
 [Unit]
 Description=The Eye of Satoshi daemon
-Requires=teos.service
-After=bitcond.service
+Requires=bitcoind.service
+After=bitcoind.service
+Wants=network.target
+After=network.target
 
 [Service]
-WorkingDirectory=/home/<USER>/.teos
-ExecStart=/home/<USER>/.cargo/bin/teosd --datadir=/home/<USER>/.teos/ 
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=<USER>
-User=<USER>
-Group=<USER>
+ExecStart=/home/<USER>/.cargo/bin/teosd
+
+# Process management
+####################
 Type=simple
-PIDFile=/run/teos/teos.pid
 Restart=on-failure
+TimeoutSec=300
+RestartSec=60
+
+# Directory creation and permissions
+####################################
+User=<USER>
+Group=<GROUP>
+
+# Hardening measures
+####################
+# Provide a private /tmp and /var/tmp.
+PrivateTmp=true
+
+# Mount /usr, /boot/ and /etc read-only for the process.
+ProtectSystem=full
+
+# Disallow the process and all of its children to gain
+# new privileges through execve().
+NoNewPrivileges=true
+
+# Use a new /dev namespace only populated with API pseudo devices
+# such as /dev/null, /dev/zero and /dev/random.
+PrivateDevices=true
+
+# Deny the creation of writable and executable memory mappings.
+MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=multi-user.target
+
 ```
 #### ------------- don't copy this line, copy above it --------------------------
 
 #### The next step is to enable the service with the following command:
-`sudo systemctl enable teos.service`
+`sudo systemctl enable teosd.service`
 
 #### And start the service with the command:
-`sudo systemctl start teos.service`
+`sudo systemctl start teosd.service`
 
 #### If you need to stop the service, use the command:
-`sudo systemctl stop teos.service`
+`sudo systemctl stop teosd.service`
