@@ -18,6 +18,7 @@ btc_rpc_port = 8332
 
 # Flags
 debug = false
+deps_debug = false
 overwrite_key = false
 
 # General

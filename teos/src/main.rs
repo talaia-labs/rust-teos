@@ -1,4 +1,5 @@
-use simple_logger::init_with_level;
+use log::LevelFilter;
+use simple_logger::SimpleLogger;
 use std::fs;
 use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut};
@@ -83,11 +84,22 @@ async fn main() {
     });
 
     // Set log level
-    if conf.debug {
-        init_with_level(log::Level::Debug).unwrap()
-    } else {
-        init_with_level(log::Level::Info).unwrap()
-    }
+    SimpleLogger::new()
+        .with_level(if conf.deps_debug {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Warn
+        })
+        .with_module_level(
+            "teos",
+            if conf.debug {
+                LevelFilter::Debug
+            } else {
+                LevelFilter::Info
+            },
+        )
+        .init()
+        .unwrap();
 
     if is_default {
         log::info!("Loading default configuration")
