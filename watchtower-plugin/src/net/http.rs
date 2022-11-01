@@ -147,7 +147,7 @@ pub async fn post_request<S: Serialize>(
     };
 
     client.post(endpoint).json(&data).send().await.map_err(|e| {
-        log::error!("{:?}", e);
+        log::debug!("POST request failed: {:?}", e);
         if e.is_connect() | e.is_timeout() {
             RequestError::ConnectionError("Cannot connect to the tower. Connection refused".into())
         } else {
