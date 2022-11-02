@@ -17,19 +17,23 @@ cargo test
 Please refer to the cargo documentation for more detailed instructions.
 
 
-### If you want to create a system service to run your application follow the instructions below:
-
 
 # Systemd setup for backend
 
+If you would like to create a system service to run your application follow the instructions below.
 
-#### Create a simple file copying the contents below to the file, and use the command:
+Since the teos service requires bitcoin to run, it's strongly recommended that you also create a system service for bitcoin. Follow this link for instructions to do so: [bitcoind service](https://twofaktor.github.io/minibolt/guide/bitcoin/bitcoin-client.html#autostart-on-boot).
+
+
+Once the bitcoin system services have completed, proceed using your preferred text editor, and create a file in the systemd folder. For instance:
+
 `sudo nano /etc/systemd/system/teosd.service`
-#### This will create a file named teos.service in the /etc/systemd/system/ path
 
-#### One you create it and copy and paste, change the information with your proper installation path, user, and comments:
+This will create a file named teos.service in the /etc/systemd/system/ path
 
-#### ------------- don't copy this line, copy under it --------------------------
+Copy the following information replacing the relevant information with yours (`<USER>` and `<GROUP>`):
+
+
 ```
 [Unit]
 Description=The Eye of Satoshi daemon
@@ -40,6 +44,9 @@ After=network.target
 
 [Service]
 ExecStart=/home/<USER>/.cargo/bin/teosd
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=<USER>
 
 # Process management
 ####################
@@ -76,13 +83,10 @@ MemoryDenyWriteExecute=true
 WantedBy=multi-user.target
 
 ```
-#### ------------- don't copy this line, copy above it --------------------------
 
-#### The next step is to enable the service with the following command:
+The next step  is enabling the service. You can do so by running:
 `sudo systemctl enable teosd.service`
 
-#### And start the service with the command:
+Finally, you can start the service by running:
 `sudo systemctl start teosd.service`
 
-#### If you need to stop the service, use the command:
-`sudo systemctl stop teosd.service`
