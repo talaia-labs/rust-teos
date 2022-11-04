@@ -22,7 +22,7 @@ impl UUID {
     /// Therefore, it provides a hard-to-forge id while reducing the tower lookups and the required data to be stored (no reverse maps).
     pub fn new(locator: Locator, user_id: UserId) -> Self {
         let mut uuid_data = locator.to_vec();
-        uuid_data.extend(&user_id.0.serialize());
+        uuid_data.extend(user_id.0.serialize());
         UUID(ripemd160::Hash::hash(&uuid_data).into_inner())
     }
 
