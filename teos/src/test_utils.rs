@@ -8,7 +8,6 @@
 */
 
 use rand::Rng;
-use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -36,6 +35,7 @@ use lightning_block_sync::{
     AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError, UnboundedCache,
 };
 
+use teos_common::constants::IRREVOCABLY_RESOLVED;
 use teos_common::cryptography::{get_random_bytes, get_random_keypair};
 use teos_common::test_utils::{generate_random_appointment, get_random_user_id, TXID_HEX, TX_HEX};
 use teos_common::UserId;
@@ -46,6 +46,7 @@ use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, UserInfo};
 use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
+use crate::rpc_errors;
 use crate::watcher::{Breach, Watcher};
 
 pub(crate) const SLOTS: u32 = 21;
@@ -353,18 +354,15 @@ pub(crate) fn store_appointment_and_fks_to_db(
 }
 
 pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<ValidatedBlock> {
-    let tip = chain.tip();
-    let poller = ChainPoller::new(chain, Network::Bitcoin);
+    let mut last_n_blocks = Vec::with_capacity(n);
+    let mut last_known_block = Ok(chain.tip());
+    let poller = ChainPoller::new(chain, Network::Regtest);
 
-    let mut last_n_blocks = Vec::new();
-    let mut last_known_block = tip;
     for _ in 0..n {
-        let block = poller.fetch_block(&last_known_block).await.unwrap();
-        last_known_block = poller
-            .look_up_previous_header(&last_known_block)
-            .await
-            .unwrap();
+        let header = last_known_block.unwrap();
+        let block = poller.fetch_block(&header).await.unwrap();
         last_n_blocks.push(block);
+        last_known_block = poller.look_up_previous_header(&header).await;
     }
 
     last_n_blocks
@@ -372,12 +370,14 @@ pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<V
 
 pub(crate) enum MockedServerQuery {
     Regular,
+    InMempoool,
     Error(i64),
 }
 
 pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> (Carrier, BitcoindStopper) {
     let bitcoind_mock = match query {
-        MockedServerQuery::Regular => BitcoindMock::new(MockOptions::empty()),
+        MockedServerQuery::Regular => BitcoindMock::new(MockOptions::default()),
+        MockedServerQuery::InMempoool => BitcoindMock::new(MockOptions::in_mempool()),
         MockedServerQuery::Error(x) => BitcoindMock::new(MockOptions::with_error(x)),
     };
     let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
@@ -390,17 +390,23 @@ pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> (Carrier,
     )
 }
 
-pub(crate) fn create_responder(
-    tip: ValidatedBlockHeader,
+pub(crate) async fn create_responder(
+    chain: &mut Blockchain,
     gatekeeper: Arc<Gatekeeper>,
     dbm: Arc<Mutex<DBM>>,
     server_url: &str,
 ) -> Responder {
+    let height = chain.tip().height;
+    // For the local TxIndex logic to be sound, our index needs to have, at least, IRREVOCABLY_RESOLVED blocks
+    debug_assert!(height >= IRREVOCABLY_RESOLVED);
+
+    let last_n_blocks = get_last_n_blocks(chain, IRREVOCABLY_RESOLVED as usize).await;
+
     let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
     let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
-    let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, tip.deref().height);
+    let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, height);
 
-    Responder::new(carrier, gatekeeper, dbm)
+    Responder::new(&last_n_blocks, height, carrier, gatekeeper, dbm)
 }
 
 pub(crate) async fn create_watcher(
@@ -419,7 +425,7 @@ pub(crate) async fn create_watcher(
         Watcher::new(
             gatekeeper,
             responder,
-            last_n_blocks,
+            &last_n_blocks,
             chain.get_block_count(),
             tower_sk,
             tower_id,
@@ -463,7 +469,7 @@ impl Default for ApiConfig {
 pub(crate) async fn create_api_with_config(
     api_config: ApiConfig,
 ) -> (Arc<InternalAPI>, BitcoindStopper) {
-    let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+    let bitcoind_mock = BitcoindMock::new(MockOptions::default());
     let mut chain = Blockchain::default().with_height(START_HEIGHT);
 
     let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
@@ -474,7 +480,8 @@ pub(crate) async fn create_api_with_config(
         EXPIRY_DELTA,
         dbm.clone(),
     ));
-    let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+    let responder =
+        create_responder(&mut chain, gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
     let (watcher, stopper) = create_watcher(
         &mut chain,
         Arc::new(responder),
@@ -527,43 +534,24 @@ pub(crate) struct BitcoindMock {
     stopper: BitcoindStopper,
 }
 
+#[derive(Default)]
 pub(crate) struct MockOptions {
     error_code: Option<i64>,
-    block_hash: Option<BlockHash>,
-    height: Option<usize>,
+    in_mempool: bool,
 }
 
 impl MockOptions {
-    pub fn new(error_code: i64, block_hash: BlockHash, height: usize) -> Self {
-        Self {
-            error_code: Some(error_code),
-            block_hash: Some(block_hash),
-            height: Some(height),
-        }
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            error_code: None,
-            block_hash: None,
-            height: None,
-        }
-    }
-
     pub fn with_error(error_code: i64) -> Self {
         Self {
             error_code: Some(error_code),
-            block_hash: None,
-            height: None,
+            in_mempool: false,
         }
     }
 
-    #[allow(dead_code)]
-    pub fn with_block(block_hash: BlockHash, height: usize) -> Self {
+    pub fn in_mempool() -> Self {
         Self {
             error_code: None,
-            block_hash: Some(block_hash),
-            height: Some(height),
+            in_mempool: true,
         }
     }
 }
@@ -577,15 +565,10 @@ impl BitcoindMock {
                 Err(JsonRpcError::new(JsonRpcErrorCode::ServerError(error)))
             });
             io.add_alias("sendrawtransaction", "error");
+            io.add_alias("getrawtransaction", "error");
         } else {
             BitcoindMock::add_sendrawtransaction(&mut io);
-        }
-
-        if let Some(block_hash) = options.block_hash {
-            BitcoindMock::add_getrawtransaction(&mut io, block_hash.to_string());
-            if let Some(height) = options.height {
-                BitcoindMock::add_getblockheader(&mut io, block_hash.to_string(), height);
-            }
+            BitcoindMock::add_getrawtransaction(&mut io, options.in_mempool);
         }
 
         let server = ServerBuilder::new(io)
@@ -606,41 +589,25 @@ impl BitcoindMock {
         });
     }
 
-    fn add_getrawtransaction(io: &mut IoHandler, block_hash: String) {
+    fn add_getrawtransaction(io: &mut IoHandler, in_mempool: bool) {
         io.add_sync_method("getrawtransaction", move |_params: Params|  {
-            match _params {
-                Params::Array(x) => match x[1] {
-                    Value::Bool(x) => {
-                        if x {
-                            Ok(serde_json::json!({"hex": TX_HEX, "txid": TXID_HEX, "hash": TXID_HEX, "size": 0, 
-                            "vsize": 0, "version": 1, "locktime": 0, "vin": [], "vout": [], "blockhash": block_hash }))
-                        } else {
-                            Ok(Value::String(TX_HEX.to_owned()))
+            if !in_mempool {
+                Err(JsonRpcError::new(JsonRpcErrorCode::ServerError(rpc_errors::RPC_INVALID_ADDRESS_OR_KEY as i64)))
+            } else {
+                match _params {
+                    Params::Array(x) => match x[1] {
+                        Value::Bool(x) => {
+                            if x {
+                                Ok(serde_json::json!({"hex": TX_HEX, "txid": TXID_HEX, "hash": TXID_HEX, "size": 0, 
+                                "vsize": 0, "version": 1, "locktime": 0, "vin": [], "vout": [] }))
+                            } else {
+                                Ok(Value::String(TX_HEX.to_owned()))
+                            }
                         }
-                    }
-                    _ => panic!("Boolean param not found"),
-                },
-                _ => panic!("No params found"),
-            }
-        })
-    }
-
-    fn add_getblockheader(io: &mut IoHandler, block_hash: String, height: usize) {
-        io.add_sync_method("getblockheader", move |_params: Params|  {
-            match _params {
-                Params::Array(x) => match x[1] {
-                    Value::Bool(x) => {
-                        if x {
-                            Ok(serde_json::json!({"hash": block_hash, "confirmations": 1, "height": height, "version": 1, 
-                            "merkleroot": "4eca41cf0fa551346842eb317564a403e39553444790a65f949f95bc18d24643", "time": 1645719068, "nonce": 2, "bits": "207fffff", 
-                            "difficulty": 0.0, "chainwork": "0000000000000000000000000000000000000000000000000000000000001146", "nTx": 1}))
-                        } else {
-                            Ok(Value::String(TX_HEX.to_owned()))
-                        }
-                    }
-                    _ => panic!("Boolean param not found"),
-                },
-                _ => panic!("No params found"),
+                        _ => panic!("Boolean param not found"),
+                    },
+                    _ => panic!("No params found"),
+                }
             }
         })
     }

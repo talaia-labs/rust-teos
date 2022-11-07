@@ -4,12 +4,10 @@ use log;
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::iter::FromIterator;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use bitcoin::hash_types::BlockHash;
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::{BlockHeader, Transaction};
 use lightning::chain;
@@ -24,133 +22,7 @@ use crate::dbm::DBM;
 use crate::extended_appointment::{AppointmentSummary, ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, MaxSlotsReached, UserInfo};
 use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
-
-/// Data structure used to cache locators computed from parsed blocks.
-///
-/// Holds up to `size` blocks with their corresponding computed [Locator]s.
-#[derive(Debug)]
-struct LocatorCache {
-    /// A [Locator]:[Transaction] map.
-    cache: HashMap<Locator, Transaction>,
-    /// Vector of block hashes corresponding to the cached blocks.
-    blocks: Vec<BlockHash>,
-    /// Map of [BlockHash]:[Vec<Locator>]. Used to remove data from the cache.
-    tx_in_block: HashMap<BlockHash, Vec<Locator>>,
-    /// Maximum size of the cache.
-    size: usize,
-}
-
-impl fmt::Display for LocatorCache {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "cache: {:?}\n\nblocks: {:?}\n\ntx_in_block: {:?}\n\nsize: {}",
-            self.cache, self.blocks, self.tx_in_block, self.size
-        )
-    }
-}
-
-impl LocatorCache {
-    /// Creates a new [LocatorCache] instance.
-    /// The cache is initialized using the provided vector of blocks.
-    /// The size of the cache is defined as the size of `last_n_blocks`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any of the blocks in `last_n_blocks` is unchained. That is, if the given blocks
-    /// are not linked in strict descending order.
-    fn new(last_n_blocks: Vec<ValidatedBlock>) -> LocatorCache {
-        let size = last_n_blocks.len();
-        let mut cache = LocatorCache {
-            cache: HashMap::new(),
-            blocks: Vec::with_capacity(size),
-            tx_in_block: HashMap::new(),
-            size,
-        };
-
-        for block in last_n_blocks.into_iter().rev() {
-            if let Some(prev_block_hash) = cache.blocks.last() {
-                if block.header.prev_blockhash != *prev_block_hash {
-                    panic!("last_n_blocks contains unchained blocks");
-                }
-            };
-
-            let locator_tx_map = block
-                .txdata
-                .iter()
-                .map(|tx| (Locator::new(tx.txid()), tx.clone()))
-                .collect();
-
-            cache.update(block.header, &locator_tx_map);
-        }
-
-        cache
-    }
-
-    /// Gets a transaction from the cache if present. [None] otherwise.
-    fn get_tx(&self, locator: Locator) -> Option<&Transaction> {
-        self.cache.get(&locator)
-    }
-
-    /// Checks if the cache if full.
-    fn is_full(&self) -> bool {
-        self.blocks.len() > self.size
-    }
-
-    /// Updates the cache by adding data from a new block. Removes the oldest block if the cache is full afterwards.
-    fn update(
-        &mut self,
-        block_header: BlockHeader,
-        locator_tx_map: &HashMap<Locator, Transaction>,
-    ) {
-        self.blocks.push(block_header.block_hash());
-
-        let locators = locator_tx_map
-            .iter()
-            .map(|(l, tx)| {
-                self.cache.insert(*l, tx.clone());
-                *l
-            })
-            .collect();
-
-        self.tx_in_block.insert(block_header.block_hash(), locators);
-
-        if self.is_full() {
-            // Avoid logging during bootstrap
-            log::info!("New block added to cache: {}", block_header.block_hash());
-            self.remove_oldest_block();
-        }
-    }
-
-    /// Fixes the [LocatorCache] removing disconnected data.
-    fn fix(&mut self, header: &BlockHeader) {
-        if let Some(locators) = self.tx_in_block.remove(&header.block_hash()) {
-            for locator in locators.iter() {
-                self.cache.remove(locator);
-            }
-
-            // Blocks should be disconnected from last backwards. Log if that's not the case so we can revisit this and fix it.
-            if let Some(h) = self.blocks.pop() {
-                if h != header.block_hash() {
-                    log::error!("Disconnected block does not match the oldest block stored in the LocatorCache ({} != {})", header.block_hash(), h);
-                }
-            }
-        } else {
-            log::warn!("The cache is already empty");
-        }
-    }
-
-    /// Removes the oldest block from the cache.
-    /// This removes data from `self.blocks`, `self.tx_in_block` and `self.cache`.
-    fn remove_oldest_block(&mut self) {
-        let oldest_hash = self.blocks.remove(0);
-        for locator in self.tx_in_block.remove(&oldest_hash).unwrap() {
-            self.cache.remove(&locator);
-        }
-
-        log::info!("Oldest block removed from cache: {}", oldest_hash);
-    }
-}
+use crate::tx_index::TxIndex;
 
 /// Structure holding data regarding a breach.
 ///
@@ -241,7 +113,7 @@ pub struct Watcher {
     /// A map between [Locator]s (user identifiers for [Appointment]s) and [UUID]s (tower identifiers).
     locator_uuid_map: Mutex<HashMap<Locator, HashSet<UUID>>>,
     /// A cache of the [Locator]s computed for the transactions in the last few blocks.
-    locator_cache: Mutex<LocatorCache>,
+    locator_cache: Mutex<TxIndex<Locator, Transaction>>,
     /// A [Responder] instance. Data will be passed to it once triggered (if valid).
     responder: Arc<Responder>,
     /// A [Gatekeeper] instance. Data regarding users is requested to it.
@@ -261,7 +133,7 @@ impl Watcher {
     pub fn new(
         gatekeeper: Arc<Gatekeeper>,
         responder: Arc<Responder>,
-        last_n_blocks: Vec<ValidatedBlock>,
+        last_n_blocks: &[ValidatedBlock],
         last_known_block_height: u32,
         signing_key: SecretKey,
         tower_id: TowerId,
@@ -282,7 +154,7 @@ impl Watcher {
         Watcher {
             appointments: Mutex::new(appointments),
             locator_uuid_map: Mutex::new(locator_uuid_map),
-            locator_cache: Mutex::new(LocatorCache::new(last_n_blocks)),
+            locator_cache: Mutex::new(TxIndex::new(last_n_blocks, last_known_block_height)),
             responder,
             gatekeeper,
             last_known_block_height: AtomicU32::new(last_known_block_height),
@@ -362,7 +234,7 @@ impl Watcher {
             .locator_cache
             .lock()
             .unwrap()
-            .get_tx(extended_appointment.locator())
+            .get(&extended_appointment.locator())
         {
             // Appointments that were triggered in blocks held in the cache
             Some(dispute_tx) => {
@@ -879,7 +751,10 @@ impl chain::Listen for Watcher {
     /// Fixes the [LocatorCache] by removing the disconnected data and updates the last_known_block_height.
     fn block_disconnected(&self, header: &BlockHeader, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
-        self.locator_cache.lock().unwrap().fix(header);
+        self.locator_cache
+            .lock()
+            .unwrap()
+            .remove_disconnected_block(&header.block_hash());
         self.last_known_block_height
             .store(height - 1, Ordering::Release);
     }
@@ -896,10 +771,10 @@ mod tests {
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, create_responder, create_watcher, generate_dummy_appointment,
-        generate_dummy_appointment_with_user, generate_uuid, get_last_n_blocks, get_random_breach,
-        get_random_tx, store_appointment_and_fks_to_db, BitcoindMock, BitcoindStopper, Blockchain,
-        MockOptions, MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA, SLOTS,
-        START_HEIGHT, SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
+        generate_dummy_appointment_with_user, generate_uuid, get_random_breach, get_random_tx,
+        store_appointment_and_fks_to_db, BitcoindMock, BitcoindStopper, Blockchain, MockOptions,
+        MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
     };
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
     use teos_common::dbm::Error as DBError;
@@ -907,7 +782,7 @@ mod tests {
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
-    use bitcoin::Block;
+
     use lightning::chain::Listen;
 
     impl PartialEq for Watcher {
@@ -945,7 +820,7 @@ mod tests {
         chain: &mut Blockchain,
         dbm: Arc<Mutex<DBM>>,
     ) -> (Watcher, BitcoindStopper) {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
+        let bitcoind_mock = BitcoindMock::new(MockOptions::default());
 
         let gk = Arc::new(Gatekeeper::new(
             chain.get_block_count(),
@@ -954,7 +829,7 @@ mod tests {
             EXPIRY_DELTA,
             dbm.clone(),
         ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+        let responder = create_responder(chain, gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
         create_watcher(
             chain,
             Arc::new(responder),
@@ -980,122 +855,6 @@ mod tests {
         let recovered_pk =
             cryptography::recover_pk(&receipt.to_vec(), &receipt.signature().unwrap()).unwrap();
         assert_eq!(TowerId(recovered_pk), tower_id);
-    }
-
-    #[tokio::test]
-    async fn test_cache_new() {
-        let mut chain = Blockchain::default().with_height(10);
-        let last_six_blocks = get_last_n_blocks(&mut chain, 6).await;
-        let blocks: Vec<Block> = last_six_blocks
-            .iter()
-            .map(|block| block.deref().clone())
-            .collect();
-
-        let cache = LocatorCache::new(last_six_blocks);
-        assert_eq!(blocks.len(), cache.size);
-        for block in blocks.iter() {
-            assert!(cache.blocks.contains(&block.block_hash()));
-
-            let mut locators = Vec::new();
-            for tx in block.txdata.iter() {
-                let locator = Locator::new(tx.txid());
-                assert!(cache.cache.contains_key(&locator));
-                locators.push(locator);
-            }
-
-            assert_eq!(cache.tx_in_block[&block.block_hash()], locators);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_cache_update() {
-        let mut chain = Blockchain::default().with_height(10);
-        let mut last_n_blocks = get_last_n_blocks(&mut chain, 7).await;
-
-        // Safe the last block to use it for an update and the first to check eviction
-        // Notice that the list of blocks is ordered from last to first.
-        let last_block = last_n_blocks.remove(0);
-        let first_block = last_n_blocks.last().unwrap().deref().clone();
-
-        // Init the cache with the 6 block before the last
-        let mut cache = LocatorCache::new(last_n_blocks);
-
-        // Update the cache with the last block
-        let locator_tx_map = last_block
-            .txdata
-            .iter()
-            .map(|tx| (Locator::new(tx.txid()), tx.clone()))
-            .collect();
-
-        cache.update(last_block.deref().header, &locator_tx_map);
-
-        // Check that the new data is in the cache
-        assert!(cache.blocks.contains(&last_block.block_hash()));
-        for (locator, _) in locator_tx_map.iter() {
-            assert!(cache.cache.contains_key(locator));
-        }
-        assert_eq!(
-            cache.tx_in_block[&last_block.block_hash()],
-            locator_tx_map.keys().cloned().collect::<Vec<Locator>>()
-        );
-
-        // Check that the data from the first block has been evicted
-        assert!(!cache.blocks.contains(&first_block.block_hash()));
-        for tx in first_block.txdata.iter() {
-            assert!(!cache.cache.contains_key(&Locator::new(tx.txid())));
-        }
-        assert!(!cache.tx_in_block.contains_key(&first_block.block_hash()));
-    }
-
-    #[tokio::test]
-    async fn test_cache_fix() {
-        let cache_size = 6;
-        let mut chain = Blockchain::default().with_height_and_txs(cache_size * 2, 42);
-
-        let last_n_blocks = get_last_n_blocks(&mut chain, cache_size).await;
-
-        // Init the cache with the 6 block before the last
-        let mut cache = LocatorCache::new(last_n_blocks);
-
-        // LocatorCache::fix removes the last connected block and removes all the associated data
-        for i in 0..cache_size {
-            let header = chain
-                .at_height(chain.get_block_count() as usize - i)
-                .deref()
-                .header;
-            let locators = cache.tx_in_block.get(&header.block_hash()).unwrap().clone();
-
-            // Make sure there's data regarding the target block in the cache before fixing it
-            assert_eq!(cache.blocks.len(), cache.size - i);
-            assert!(cache.blocks.contains(&header.block_hash()));
-            assert!(!locators.is_empty());
-            for locator in locators.iter() {
-                assert!(cache.cache.contains_key(locator));
-            }
-
-            cache.fix(&header);
-
-            // Check that the block data is not in the cache anymore
-            assert_eq!(cache.blocks.len(), cache.size - i - 1);
-            assert!(!cache.blocks.contains(&header.block_hash()));
-            assert!(cache.tx_in_block.get(&header.block_hash()).is_none());
-            for locator in locators.iter() {
-                assert!(!cache.cache.contains_key(locator));
-            }
-        }
-
-        // At this point the cache should be empty, fixing it further shouldn't do anything
-        for i in cache_size..cache_size * 2 {
-            assert!(cache.cache.is_empty());
-            assert!(cache.blocks.is_empty());
-            assert!(cache.tx_in_block.is_empty());
-
-            let header = chain
-                .at_height(chain.get_block_count() as usize - i)
-                .deref()
-                .header;
-            cache.fix(&header);
-        }
     }
 
     #[tokio::test]
@@ -2122,7 +1881,7 @@ mod tests {
             .locator_cache
             .lock()
             .unwrap()
-            .blocks
+            .blocks()
             .contains(&last_block_header.block_hash()));
 
         watcher.block_disconnected(&last_block_header, start_height);
@@ -2135,7 +1894,7 @@ mod tests {
             .locator_cache
             .lock()
             .unwrap()
-            .blocks
+            .blocks()
             .contains(&last_block_header.block_hash()));
     }
 }
