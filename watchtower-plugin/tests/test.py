@@ -29,7 +29,7 @@ def test_watchtower(node_factory, bitcoind, teosd):
     l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": "watchtower-client"}])
 
     # We need to register l2 with the tower
-    tower_id = teosd.cli.get_tower_info()["tower_id"]
+    tower_id = teosd.cli.gettowerinfo()["tower_id"]
     l2.rpc.registertower(tower_id)
 
     # Force a new commitment
@@ -94,7 +94,7 @@ def test_unreachable_watchtower(node_factory, bitcoind, teosd):
     )
 
     # We need to register l2 with the tower
-    tower_id = teosd.cli.get_tower_info()["tower_id"]
+    tower_id = teosd.cli.gettowerinfo()["tower_id"]
     l2.rpc.registertower(tower_id)
 
     # Stop the tower
@@ -120,7 +120,7 @@ def test_retry_watchtower(node_factory, bitcoind, teosd):
     )
 
     # We need to register l2 with the tower
-    tower_id = teosd.cli.get_tower_info()["tower_id"]
+    tower_id = teosd.cli.gettowerinfo()["tower_id"]
     l2.rpc.registertower(tower_id)
 
     # Stop the tower
@@ -158,7 +158,7 @@ def test_misbehaving_watchtower(node_factory, bitcoind, teosd, directory):
     l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": "watchtower-client", "allow_broken_log": True}])
 
     # We need to register l2 with the tower
-    tower_id = teosd.cli.get_tower_info()["tower_id"]
+    tower_id = teosd.cli.gettowerinfo()["tower_id"]
     l2.rpc.registertower(tower_id)
 
     # Restart overwriting the tower private key
@@ -175,7 +175,7 @@ def test_get_appointment(node_factory, bitcoind, teosd, directory):
     l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": "watchtower-client"}])
 
     # We need to register l2 with the tower
-    tower_id = teosd.cli.get_tower_info()["tower_id"]
+    tower_id = teosd.cli.gettowerinfo()["tower_id"]
     l2.rpc.registertower(tower_id)
 
     # Force a new commitment

@@ -4,7 +4,7 @@ use serde::Deserialize;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt, Clone)]
-#[structopt(rename_all = "snake_case")]
+#[structopt(rename_all = "lower_case")]
 pub enum Command {
     /// Gets information about all appointments stored in the tower
     GetAllAppointments,
