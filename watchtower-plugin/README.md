@@ -25,7 +25,7 @@ The plugin also has an implicit method to send appointments to the registered to
 The first step to add the plugin to CLN is installing it. To do so you need to run (from the `rust-teos` folder):
 
 ```
-cargo install --path watchtower-plugin
+cargo install --locked --path watchtower-plugin
 ```
 
 That will generate a binary called `watchtower-client`. That's the binary we need to link to CLN.
