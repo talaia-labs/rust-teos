@@ -106,7 +106,7 @@ pub struct Opt {
     #[structopt(long)]
     pub tor_control_port: Option<u16>,
 
-    /// Port for the onion hidden service to listen on [default: 2121]
+    /// Port for the onion hidden service to listen on [default: 9814]
     #[structopt(long)]
     pub onion_hidden_service_port: Option<u16>,
 }
@@ -257,7 +257,7 @@ impl Default for Config {
             api_port: 9814,
             tor_support: false,
             tor_control_port: 9051,
-            onion_hidden_service_port: 2121,
+            onion_hidden_service_port: 9814,
             rpc_bind: "127.0.0.1".into(),
             rpc_port: 8814,
             btc_network: "mainnet".into(),
