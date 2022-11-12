@@ -35,7 +35,7 @@ async fn store_tor_key(key: &TorSecretKeyV3, path: PathBuf) {
 /// Expose an onion service that re-directs to the public api.
 pub async fn expose_onion_service(
     tor_control_port: u16,
-    api_port: u16,
+    api_endpoint: SocketAddr,
     onion_port: u16,
     path: PathBuf,
     service_ready: Trigger,
@@ -83,11 +83,7 @@ pub async fn expose_onion_service(
             false,
             false,
             None,
-            &mut [(
-                onion_port,
-                format!("127.0.0.1:{}", api_port).parse().unwrap(),
-            )]
-            .iter(),
+            &mut [(onion_port, api_endpoint)].iter(),
         )
         .await
         .map_err(|e| {

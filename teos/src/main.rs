@@ -339,13 +339,12 @@ async fn main() {
     if conf.tor_support {
         log::info!("Starting up Tor hidden service");
         let tor_control_port = conf.tor_control_port;
-        let api_port = conf.api_port;
         let onion_port = conf.onion_hidden_service_port;
 
         tor_task = Some(task::spawn(async move {
             if let Err(e) = tor::expose_onion_service(
                 tor_control_port,
-                api_port,
+                http_api_addr,
                 onion_port,
                 path_network,
                 tor_service_ready,
