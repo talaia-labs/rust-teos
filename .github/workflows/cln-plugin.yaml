@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 env:
   bitcoind_version: 0.20.1
-  cln_version: 0.11.0.1
+  cln_version: 0.12.1
 
 jobs:
   cache-cln:

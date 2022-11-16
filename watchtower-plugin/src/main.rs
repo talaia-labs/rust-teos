@@ -520,11 +520,7 @@ async fn main() -> Result<(), Error> {
         Err(_) => home_dir().unwrap().join(".watchtower"),
     };
 
-    let (tx, rx) = unbounded_channel();
-    let state = Arc::new(Mutex::new(WTClient::new(data_dir, tx).await));
-    let state_clone = state.clone();
-
-    let builder = Builder::new(state, stdin(), stdout())
+    let builder = Builder::new(stdin(), stdout())
         .option(ConfigOption::new(
             "watchtower-port",
             Value::Integer(9814),
@@ -537,7 +533,7 @@ async fn main() -> Result<(), Error> {
         ))
         .option(ConfigOption::new(
             "watchtower-proxy",
-            Value::String(String::new()),
+            Value::OptString,
             "Socks v5 proxy IP address and port for the watchtower client",
         ))
         .option(ConfigOption::new(
@@ -586,41 +582,50 @@ async fn main() -> Result<(), Error> {
         )
         .hook("commitment_revocation", on_commitment_revocation);
 
-    if let Some(plugin) = builder.start().await? {
-        // FIXME: This is a workaround. Ideally, `cln_plugin::options::Value` will implement `as_u64` so we can simply call and unwrap
-        // given that we are certain the option exists.
-        state_clone.lock().unwrap().proxy =
-            if let Value::String(x) = plugin.option("watchtower-proxy").unwrap() {
-                if !x.is_empty() {
-                    Some(x)
-                } else {
-                    None
-                }
+    // We're unwrapping here given it does not seem we actually have anything to check at the moment.
+    // Change this so the plugin can be disabled soon if this happens not to be the case.
+    let midstate = if let Some(midstate) = builder.configure().await? {
+        midstate
+    } else {
+        return Ok(());
+    };
+
+    let (tx, rx) = unbounded_channel();
+    let wt_client = Arc::new(Mutex::new(WTClient::new(data_dir, tx).await));
+    // FIXME: This is a workaround. Ideally, `cln_plugin::options::Value` will implement `as_u64` so we can simply call and unwrap
+    // given that we are certain the option exists.
+    wt_client.lock().unwrap().proxy =
+        if let Value::String(x) = midstate.option("watchtower-proxy").unwrap() {
+            if !x.is_empty() {
+                Some(x)
             } else {
                 None
-            };
-        let max_elapsed_time =
-            if let Value::Integer(x) = plugin.option("watchtower-max-retry-time").unwrap() {
-                x as u16
-            } else {
-                // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
-                900
-            };
-        let max_interval_time = if let Value::Integer(x) =
-            plugin.option("dev-watchtower-max-retry-interval").unwrap()
-        {
+            }
+        } else {
+            None
+        };
+    let max_elapsed_time =
+        if let Value::Integer(x) = midstate.option("watchtower-max-retry-time").unwrap() {
             x as u16
         } else {
             // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
-            60
+            900
         };
-        tokio::spawn(async move {
-            RetryManager::new(state_clone, rx, max_elapsed_time, max_interval_time)
-                .manage_retry()
-                .await
-        });
-        plugin.join().await
+    let max_interval_time = if let Value::Integer(x) = midstate
+        .option("dev-watchtower-max-retry-interval")
+        .unwrap()
+    {
+        x as u16
     } else {
-        Ok(())
-    }
+        // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
+        60
+    };
+
+    let plugin = midstate.start(wt_client.clone()).await?;
+    tokio::spawn(async move {
+        RetryManager::new(wt_client, rx, max_elapsed_time, max_interval_time)
+            .manage_retry()
+            .await
+    });
+    plugin.join().await
 }

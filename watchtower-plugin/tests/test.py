@@ -1,5 +1,9 @@
+import os
 import time
 import pytest
+from pathlib import Path
+
+WT_PLUGIN = Path("~/.cargo/bin/watchtower-client").expanduser()
 
 
 def change_endianness(x):
@@ -26,7 +30,7 @@ def test_watchtower(node_factory, bitcoind, teosd):
     commitment transaction.
     """
 
-    l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": "watchtower-client"}])
+    l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": WT_PLUGIN}])
 
     # We need to register l2 with the tower
     tower_id = teosd.cli.gettowerinfo()["tower_id"]
@@ -86,7 +90,7 @@ def test_unreachable_watchtower(node_factory, bitcoind, teosd):
         opts=[
             {},
             {
-                "plugin": "watchtower-client",
+                "plugin": WT_PLUGIN,
                 "allow_broken_log": True,
                 "dev-watchtower-max-retry-interval": max_interval_time,
             },
@@ -116,7 +120,7 @@ def test_unreachable_watchtower(node_factory, bitcoind, teosd):
 def test_retry_watchtower(node_factory, bitcoind, teosd):
     # The plugin is set to give up on retrying straight-away so we can test this fast.
     l1, l2 = node_factory.line_graph(
-        2, opts=[{}, {"plugin": "watchtower-client", "allow_broken_log": True, "watchtower-max-retry-time": 0}]
+        2, opts=[{}, {"plugin": WT_PLUGIN, "allow_broken_log": True, "watchtower-max-retry-time": 0}]
     )
 
     # We need to register l2 with the tower
@@ -155,7 +159,7 @@ def test_retry_watchtower(node_factory, bitcoind, teosd):
 
 
 def test_misbehaving_watchtower(node_factory, bitcoind, teosd, directory):
-    l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": "watchtower-client", "allow_broken_log": True}])
+    l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": WT_PLUGIN, "allow_broken_log": True}])
 
     # We need to register l2 with the tower
     tower_id = teosd.cli.gettowerinfo()["tower_id"]
@@ -172,7 +176,7 @@ def test_misbehaving_watchtower(node_factory, bitcoind, teosd, directory):
 
 
 def test_get_appointment(node_factory, bitcoind, teosd, directory):
-    l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": "watchtower-client"}])
+    l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": WT_PLUGIN}])
 
     # We need to register l2 with the tower
     tower_id = teosd.cli.gettowerinfo()["tower_id"]
