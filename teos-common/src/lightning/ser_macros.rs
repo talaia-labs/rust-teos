@@ -8,12 +8,12 @@
 */
 
 macro_rules! encode_tlv {
-    ($stream: expr, $type: expr, $field: expr, opt) => {
+    ($stream:expr, $type:expr, $field:expr, opt) => {
         if let Some(ref field) = $field {
             ser_macros::encode_tlv!($stream, $type, field);
         }
     };
-    ($stream: expr, $type: expr, $field: expr, vec) => {
+    ($stream:expr, $type:expr, $field:expr, vec) => {
         // Don't write the vector if it's empty.
         if !$field.is_empty() {
             // We can't just pass `$field` since this will move it out of the struct we are implementing
@@ -22,13 +22,13 @@ macro_rules! encode_tlv {
             ser_macros::encode_tlv!($stream, $type, lightning_vec);
         }
     };
-    ($stream: expr, $type: expr, $field: expr, opt_str) => {
+    ($stream:expr, $type:expr, $field:expr, opt_str) => {
         if let Some(ref field) = $field {
             let lightning_str = ser_utils::LightningVecWriter(field.as_bytes());
             ser_macros::encode_tlv!($stream, $type, lightning_str);
         }
     };
-    ($stream: expr, $type: expr, $field: expr) => {
+    ($stream:expr, $type:expr, $field:expr) => {
         BigSize($type).write($stream)?;
         BigSize($field.serialized_length() as u64).write($stream)?;
         $field.write($stream)?;
@@ -36,7 +36,7 @@ macro_rules! encode_tlv {
 }
 
 macro_rules! encode_tlv_stream {
-    ($stream: expr, {$(($type: expr, $field: expr, $fieldty: tt)),* $(,)*}) => { {
+    ($stream:expr, {$(($type:expr, $field:expr, $fieldty:tt)),* $(,)*}) => { {
         #[allow(unused_imports)]
         use {
             lightning::util::ser::BigSize,
@@ -62,14 +62,14 @@ macro_rules! encode_tlv_stream {
 }
 
 macro_rules! decode_tlv {
-    ($reader: expr, $field: ident, opt) => {
+    ($reader:expr, $field:ident, opt) => {
         $field = Some(Readable::read(&mut $reader)?);
     };
-    ($reader: expr, $field: ident, vec) => {
+    ($reader:expr, $field:ident, vec) => {
         let lightning_vec = ser_utils::LightningVecReader::read(&mut $reader)?;
         $field = lightning_vec.0;
     };
-    ($reader: expr, $field: ident, opt_str) => {
+    ($reader:expr, $field:ident, opt_str) => {
         let lightning_str = ser_utils::LightningVecReader::read(&mut $reader)?;
         let inner_str =
             String::from_utf8(lightning_str.0).map_err(|_| DecodeError::InvalidValue)?;
@@ -78,7 +78,7 @@ macro_rules! decode_tlv {
 }
 
 macro_rules! decode_tlv_stream {
-    ($stream: expr, {$(($type: expr, $field: ident, $fieldty: tt)),* $(,)*}) => { {
+    ($stream:expr, {$(($type:expr, $field:ident, $fieldty:tt)),* $(,)*}) => { {
         #[allow(unused_imports)]
         use {
             lightning::ln::msgs::DecodeError,
@@ -137,19 +137,19 @@ macro_rules! decode_tlv_stream {
 }
 
 macro_rules! init_tlv_field_var {
-    ($field: ident, opt) => {
+    ($field:ident, opt) => {
         let mut $field = None;
     };
-    ($field: ident, vec) => {
+    ($field:ident, vec) => {
         let mut $field = Vec::new();
     };
-    ($field: ident, opt_str) => {
+    ($field:ident, opt_str) => {
         let mut $field = None;
     };
 }
 
 macro_rules! impl_writeable_msg {
-    ($st: ty, {$($field: ident),* $(,)*}, {$(($type: expr, $tlvfield: ident, $fieldty: tt)),* $(,)*}) => {
+    ($st:ty, {$($field:ident),* $(,)*}, {$(($type:expr, $tlvfield:ident, $fieldty:tt)),* $(,)*}) => {
         impl lightning::util::ser::Writeable for $st {
             fn write<W: lightning::util::ser::Writer>(&self, w: &mut W) -> Result<(), lightning::io::Error> {
                 $(self.$field.write(w)?;)*
@@ -182,7 +182,7 @@ macro_rules! impl_writeable_msg {
 }
 
 macro_rules! set_msg_type {
-    ($st: ty, $type: expr) => {
+    ($st:ty, $type:expr) => {
         impl $crate::lightning::ser_utils::Type for $st {
             const TYPE: u16 = $type;
         }
@@ -211,7 +211,7 @@ mod tests {
     use lightning::util::ser::{BigSize, Readable, Writeable};
 
     macro_rules! encode_decode_tlv {
-        ($typ: expr, $field: expr, $fieldty: tt) => {{
+        ($typ:expr, $field:expr, $fieldty:tt) => {{
             // Encode the TLV to a stream.
             let mut stream = ser_utils::TestVecWriter(Vec::new());
             encode_tlv!(&mut stream, $typ, $field, $fieldty);
@@ -242,7 +242,7 @@ mod tests {
     }
 
     macro_rules! test_encode_decode_tlv {
-        ($typ: expr, $len: expr, $val: expr, $fieldty: tt) => {
+        ($typ:expr, $len:expr, $val:expr, $fieldty:tt) => {
             let (typ, len, val) = encode_decode_tlv!($typ, $val, $fieldty)?;
             assert_eq!($typ as u64, typ, "Invalid TLV type");
             assert_eq!($len as u64, len, "Invalid TLV length");
@@ -251,7 +251,7 @@ mod tests {
     }
 
     macro_rules! test_opt_ranged_type {
-        ($type: ident, $expected_len: expr) => {
+        ($type:ident, $expected_len:expr) => {
             // This will try some values in the range of `$type`.
             for i in ($type::MIN..$type::MAX)
                 .step_by(($type::MAX / 4 + 1) as usize)
@@ -302,7 +302,7 @@ mod tests {
     }
 
     macro_rules! encode_decode_tlv_stream {
-        ({$(($type: expr, $field_name: ident, $fieldty: tt)),* $(,)*}) => {{
+        ({$(($type:expr, $field_name:ident, $fieldty:tt)),* $(,)*}) => {{
             // Encode the TLVs to a stream.
             let mut stream = ser_utils::TestVecWriter(Vec::new());
             encode_tlv_stream!(&mut stream, {$(($type, $field_name, $fieldty)),*});
@@ -315,7 +315,7 @@ mod tests {
     }
 
     macro_rules! test_encode_decode_tlv_stream {
-        ({$(($type: expr, $field_name: ident, $field: expr, $fieldty: tt)),* $(,)*}) => {
+        ({$(($type:expr, $field_name:ident, $field:expr, $fieldty:tt)),* $(,)*}) => {
             let original_stream = ($($field),*);
             let decoded_stream = {
                 $(let $field_name = $field;)*
@@ -326,7 +326,7 @@ mod tests {
     }
 
     macro_rules! test_encode_decode_tlv_stream_should_panic {
-        ($args: tt) => {
+        ($args:tt) => {
             // Allow unreachable patterns which happen when we have some non-unique tlv types.
             #[allow(unreachable_patterns)]
             // Runs `test_encode_decode_tlv_stream` inside a closure so that we don't need to
