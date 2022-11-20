@@ -4,7 +4,8 @@
 
 use crate::appointment::Locator;
 use crate::lightning::ser_macros::{impl_writeable_msg, set_msg_type};
-use bitcoin::secp256k1::PublicKey;
+use crate::UserId;
+
 use bitcoin::Txid;
 use lightning::io::Error;
 use lightning::ln::wire;
@@ -16,7 +17,7 @@ pub use crate::lightning::ser_utils::Type;
 /// The register message sent by the user to subscribe for the watching service.
 #[derive(Debug)]
 pub struct Register {
-    pub pubkey: PublicKey,
+    pub pubkey: UserId,
     pub appointment_slots: u32,
     pub subscription_period: u32,
 }
@@ -27,8 +28,8 @@ pub struct Register {
 pub struct SubscriptionDetails {
     pub appointment_max_size: u16,
     pub start_block: u32,
-    pub amount_msat: u32,
     // Optional TLV.
+    pub amount_msat: Option<u32>,
     pub invoice: Option<String>,
     pub signature: Option<String>,
 }
@@ -37,7 +38,6 @@ pub struct SubscriptionDetails {
 #[derive(Debug)]
 pub struct AddUpdateAppointment {
     pub locator: Locator,
-    // NOTE: LDK will prefix varying size fields (e.g. vectors and strings) with their length.
     pub encrypted_blob: Vec<u8>,
     pub signature: String,
     // Optional TLV.
@@ -114,12 +114,12 @@ impl_writeable_msg!(Register, {
 impl_writeable_msg!(SubscriptionDetails, {
     appointment_max_size,
     start_block,
-    amount_msat,
 }, {
+    (1, amount_msat, opt),
     // Use `opt_str` and not `opt` to avoid writing a length prefix for strings
     // since it's already written in the length part of the TLV.
-    (1, invoice, opt_str),
-    (3, signature, opt_str),
+    (3, invoice, opt_str),
+    (5, signature, opt_str),
 });
 
 impl_writeable_msg!(AddUpdateAppointment, {
@@ -247,8 +247,9 @@ impl Writeable for TowerMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cryptography::{get_random_bytes, get_random_keypair};
+    use crate::cryptography::get_random_bytes;
     use crate::lightning::ser_utils::{get_random_locator, get_random_txid, TestVecWriter};
+    use crate::test_utils::get_random_user_id;
     use lightning::io::Cursor;
     use lightning::util::ser::{Readable, Writeable};
     use std::cmp::PartialEq;
@@ -269,14 +270,14 @@ mod tests {
     #[test]
     fn test_tower_messages_empty_tlvs() {
         test_msg(Register {
-            pubkey: get_random_keypair().1,
+            pubkey: get_random_user_id(),
             appointment_slots: 4300,
             subscription_period: 4032,
         });
         test_msg(SubscriptionDetails {
             appointment_max_size: 3032,
             start_block: 358943,
-            amount_msat: 41893,
+            amount_msat: None,
             invoice: None,
             signature: None,
         });
@@ -327,12 +328,12 @@ mod tests {
         test_msg(SubscriptionDetails {
             appointment_max_size: 4498,
             start_block: 4934503,
-            amount_msat: 891431,
+            amount_msat: Some(891431),
             invoice: Some(String::from(
                 "lnbc100p1psj9jhxdqud3jxktt5w46x7unfv9kz6mn0v3jsnp4q0d3p2sfluzdx45...",
             )),
             signature: Some(String::from(
-                "sign: user_pubkey || appointment_max_size || start_block || amount_msat || invoice_id?",
+                "sign: user_pubkey || appointment_max_size || start_block || amount_msat? || invoice?",
             )),
         });
         test_msg(AddUpdateAppointment {

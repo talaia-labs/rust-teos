@@ -8,7 +8,9 @@
 */
 
 use crate::appointment::{Locator, LOCATOR_LEN};
+use crate::UserId;
 
+use bitcoin::secp256k1::constants::PUBLIC_KEY_SIZE;
 use lightning::io::{copy, sink, Error, ErrorKind, Read};
 use lightning::ln::msgs::DecodeError;
 use lightning::util::ser::{MaybeReadable, Readable, Writeable, Writer};
@@ -33,6 +35,23 @@ impl Readable for Locator {
 impl Writeable for Locator {
     fn write<W: Writer>(&self, writer: &mut W) -> Result<(), Error> {
         writer.write_all(&self.to_vec())
+    }
+}
+
+// Deserialization for a UserId inside a lightning message.
+impl Readable for UserId {
+    fn read<R: Read>(reader: &mut R) -> Result<Self, DecodeError> {
+        let mut buf = [0; PUBLIC_KEY_SIZE];
+        reader.read_exact(&mut buf)?;
+        let user_id = Self::from_slice(&buf).map_err(|_| DecodeError::InvalidValue)?;
+        Ok(user_id)
+    }
+}
+
+// Serialization for a UserId inside a lighting message.
+impl Writeable for UserId {
+    fn write<W: Writer>(&self, writer: &mut W) -> Result<(), Error> {
+        self.0.write(writer)
     }
 }
 
