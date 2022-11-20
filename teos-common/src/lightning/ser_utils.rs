@@ -26,8 +26,7 @@ impl Readable for Locator {
     fn read<R: Read>(reader: &mut R) -> Result<Self, DecodeError> {
         let mut buf = [0; LOCATOR_LEN];
         reader.read_exact(&mut buf)?;
-        let locator = Self::from_slice(&buf).map_err(|_| DecodeError::InvalidValue)?;
-        Ok(locator)
+        Self::from_slice(&buf).map_err(|_| DecodeError::InvalidValue)
     }
 }
 
@@ -43,8 +42,7 @@ impl Readable for UserId {
     fn read<R: Read>(reader: &mut R) -> Result<Self, DecodeError> {
         let mut buf = [0; PUBLIC_KEY_SIZE];
         reader.read_exact(&mut buf)?;
-        let user_id = Self::from_slice(&buf).map_err(|_| DecodeError::InvalidValue)?;
-        Ok(user_id)
+        Self::from_slice(&buf).map_err(|_| DecodeError::InvalidValue)
     }
 }
 
@@ -77,7 +75,7 @@ impl<T: MaybeReadable> Readable for LightningVecReader<T> {
                 Ok(None) => {}
                 // If we failed to read any bytes at all, we reached the end of our TLV
                 // stream and have simply exhausted all entries.
-                Err(e) if e == DecodeError::ShortRead && !track_read.have_read => break,
+                Err(ref e) if e == &DecodeError::ShortRead && !track_read.have_read => break,
                 Err(e) => return Err(e),
             }
         }
