@@ -258,10 +258,10 @@ mod tests {
     fn test_msg<T: Debug + Readable + Writeable + PartialEq>(msg: T) {
         // Get a writer and write the message to it.
         let mut stream = TestVecWriter(Vec::new());
-        msg.write(&mut stream).ok().unwrap();
+        msg.write(&mut stream).unwrap();
         // Create a reader out of the written buffer.
         let mut stream = Cursor::new(stream.0);
-        let read_msg: T = Readable::read(&mut stream).ok().unwrap();
+        let read_msg: T = Readable::read(&mut stream).unwrap();
         // Assert the serialized then deserialized message is the same as the original one.
         assert_eq!(msg, read_msg);
     }

@@ -201,7 +201,9 @@ pub(super) use set_msg_type;
 
 #[cfg(test)]
 mod tests {
-    use crate::appointment::{Locator, LOCATOR_LEN};
+    use std::mem::size_of;
+
+    use crate::appointment::Locator;
     use crate::lightning::ser_utils::Type;
     use crate::lightning::{ser_macros, ser_utils};
     use lightning::io;
@@ -287,11 +289,14 @@ mod tests {
         test_encode_decode_tlv!(1, s.as_ref().unwrap().len(), s, opt_str);
 
         let v = vec![1_u8, 2, 3, 6];
-        test_encode_decode_tlv!(1, v.len(), v, vec);
+        test_encode_decode_tlv!(1, v.len() * size_of::<u8>(), v, vec);
+
+        let v = vec![1_u16, 2, 3, 809];
+        test_encode_decode_tlv!(1, v.len() * size_of::<u16>(), v, vec);
 
         let l = ser_utils::get_random_locator();
         let v = vec![l; 5];
-        test_encode_decode_tlv!(1, v.len() * LOCATOR_LEN, v, vec);
+        test_encode_decode_tlv!(1, v.len() * size_of::<Locator>(), v, vec);
 
         Ok(())
     }
@@ -312,11 +317,8 @@ mod tests {
     macro_rules! test_encode_decode_tlv_stream {
         ({$(($type: expr, $field_name: ident, $field: expr, $fieldty: tt)),* $(,)*}) => {
             let original_stream = ($($field),*);
-            #[allow(unused_assignments)]
             let decoded_stream = {
-                // Initialize the fields we will read from. An unused_assignment happens here.
-                $(init_tlv_field_var!($field_name, $fieldty);)*
-                $($field_name = $field;)*
+                $(let $field_name = $field;)*
                 encode_decode_tlv_stream!({$(($type, $field_name, $fieldty)),*})
             };
             assert_eq!(original_stream, decoded_stream, "The decoded stream doesn't match the original one");
@@ -328,7 +330,7 @@ mod tests {
             // Allow unreachable patterns which happen when we have some non-unique tlv types.
             #[allow(unreachable_patterns)]
             // Runs `test_encode_decode_tlv_stream` inside a closure so that we don't need to
-            // return a `Result<(), DecodeError` from the test functions.
+            // return a `Result<(), DecodeError`> from the test functions.
             // `should_panic` tests must not return anything.
             (|| {
                 test_encode_decode_tlv_stream!($args);

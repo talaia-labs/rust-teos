@@ -9,7 +9,7 @@
 
 use crate::appointment::{Locator, LOCATOR_LEN};
 
-use lightning::io::{copy, sink, Error, Read};
+use lightning::io::{copy, sink, Error, ErrorKind, Read};
 use lightning::ln::msgs::DecodeError;
 use lightning::util::ser::{MaybeReadable, Readable, Writeable, Writer};
 
@@ -32,8 +32,7 @@ impl Readable for Locator {
 // Serialization for a Locator inside a lighting message.
 impl Writeable for Locator {
     fn write<W: Writer>(&self, writer: &mut W) -> Result<(), Error> {
-        writer.write_all(&self.to_vec())?;
-        Ok(())
+        writer.write_all(&self.to_vec())
     }
 }
 
@@ -112,7 +111,7 @@ impl<R: Read> FixedLengthReader<R> {
     /// Consume the remaining bytes.
     #[inline]
     pub fn eat_remaining(&mut self) -> Result<(), DecodeError> {
-        copy(self, &mut sink()).unwrap();
+        copy(self, &mut sink()).or(Err(DecodeError::Io(ErrorKind::Other)))?;
         if self.bytes_read != self.total_bytes {
             Err(DecodeError::ShortRead)
         } else {
