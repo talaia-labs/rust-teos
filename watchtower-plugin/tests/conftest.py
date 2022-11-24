@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import pytest
 import logging
 import subprocess
@@ -86,6 +87,7 @@ class TeosD(TailableProc):
         # made me think that re-initializing it may work (TailableProc.__init(...)) given that re-sets the logs and the
         # offset, but this also fails some times. I don't think it is work wasting much more time here atm.
         # self.wait_for_log("Tower ready", timeout=TIMEOUT)
+        time.sleep(2)
         logging.info("TeosD started")
 
     def stop(self):
