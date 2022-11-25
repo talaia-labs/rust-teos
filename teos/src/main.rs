@@ -19,13 +19,14 @@ use lightning_block_sync::poll::{
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
 use teos::api::internal::InternalAPI;
-use teos::api::{http, tor};
+use teos::api::{http, tor::TorAPI};
 use teos::bitcoin_cli::BitcoindClient;
 use teos::carrier::Carrier;
 use teos::chain_monitor::ChainMonitor;
 use teos::config::{self, Config, Opt};
 use teos::dbm::DBM;
 use teos::gatekeeper::Gatekeeper;
+use teos::protos as msgs;
 use teos::protos::private_tower_services_server::PrivateTowerServicesServer;
 use teos::protos::public_tower_services_server::PublicTowerServicesServer;
 use teos::responder::Responder;
@@ -273,8 +274,36 @@ async fn main() {
     log::info!("Bootstrap completed. Turning on interfaces");
 
     // Build interfaces
+    let http_api_addr = format!("{}:{}", conf.api_bind, conf.api_port)
+        .parse()
+        .unwrap();
+    let mut addresses = vec![msgs::NetworkAddress::from_ipv4(
+        conf.api_bind.clone(),
+        conf.api_port,
+    )];
+
+    // Create Tor endpoint if required
+    let tor_api = if conf.tor_support {
+        let tor_api = TorAPI::new(
+            http_api_addr,
+            conf.onion_hidden_service_port,
+            conf.tor_control_port,
+            path_network,
+        )
+        .await;
+        addresses.push(msgs::NetworkAddress::from_torv3(
+            tor_api.get_onion_address(),
+            conf.api_port,
+        ));
+
+        Some(tor_api)
+    } else {
+        None
+    };
+
     let rpc_api = Arc::new(InternalAPI::new(
         watcher,
+        addresses,
         bitcoind_reachable.clone(),
         shutdown_trigger,
     ));
@@ -290,9 +319,6 @@ async fn main() {
         "http://{}:{}",
         conf.internal_api_bind, conf.internal_api_port
     );
-    let http_api_addr = format!("{}:{}", conf.api_bind, conf.api_port)
-        .parse()
-        .unwrap();
 
     // Generate mtls certificates to data directory so the admin can securely connect
     // to the server to perform administrative tasks.
@@ -336,21 +362,13 @@ async fn main() {
     // Add Tor Onion Service for public API
     let mut tor_task = Option::None;
     let (tor_service_ready, ready_signal_tor) = triggered::trigger();
-    if conf.tor_support {
+    if let Some(tor_api) = tor_api {
         log::info!("Starting up Tor hidden service");
-        let tor_control_port = conf.tor_control_port;
-        let onion_port = conf.onion_hidden_service_port;
 
         tor_task = Some(task::spawn(async move {
-            if let Err(e) = tor::expose_onion_service(
-                tor_control_port,
-                http_api_addr,
-                onion_port,
-                path_network,
-                tor_service_ready,
-                shutdown_signal_tor,
-            )
-            .await
+            if let Err(e) = tor_api
+                .expose_onion_service(tor_service_ready, shutdown_signal_tor)
+                .await
             {
                 eprintln!("Cannot connect to the Tor backend: {}", e);
                 std::process::exit(1);
@@ -367,8 +385,8 @@ async fn main() {
     http_api_task.await.unwrap();
     private_api_task.await.unwrap();
     public_api_task.await.unwrap();
-    if conf.tor_support {
-        tor_task.unwrap().await.unwrap();
+    if let Some(tor_task) = tor_task {
+        tor_task.await.unwrap();
     }
 
     log::info!("Shutting down tower");

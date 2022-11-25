@@ -45,6 +45,7 @@ use crate::carrier::Carrier;
 use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, UserInfo};
+use crate::protos as msgs;
 use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
 use crate::rpc_errors;
 use crate::watcher::{Breach, Watcher};
@@ -496,6 +497,7 @@ pub(crate) async fn create_api_with_config(
     (
         Arc::new(InternalAPI::new(
             Arc::new(watcher),
+            vec![msgs::NetworkAddress::from_ipv4("address".to_string(), 21)],
             bitcoind_reachable,
             shutdown_trigger,
         )),
