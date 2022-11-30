@@ -235,12 +235,6 @@ impl Retrier {
                 return Err(Error::permanent("Tower was abandoned. Skipping retry"));
             }
 
-            if !self.has_pending_appointments() {
-                // will this ever happen ??
-                // FIXME: success/Ok() here instead so not to mark the tower as unreachable.
-                return Err(Error::permanent("Tower has no data pending for retry"));
-            }
-
             let net_addr = wt_client
                 .towers
                 .get(&self.tower_id)
@@ -778,10 +772,7 @@ mod tests {
 
         // If there are no pending appointments the method will simply return
         let r = Retrier::empty(wt_client, tower_id).run().await;
-        assert_eq!(
-            r,
-            Err(Error::permanent("Tower has no data pending for retry"))
-        );
+        assert_eq!(r, Ok(()));
     }
 
     #[tokio::test]
