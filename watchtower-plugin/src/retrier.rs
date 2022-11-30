@@ -188,10 +188,8 @@ impl Retrier {
         {
             let mut state = self.wt_client.lock().unwrap();
             if !state
-                .towers
-                .get(&self.tower_id)
+                .get_tower_status(&self.tower_id)
                 .unwrap()
-                .status
                 .is_subscription_error()
             {
                 state.set_tower_status(self.tower_id, crate::TowerStatus::TemporaryUnreachable);
@@ -374,8 +372,8 @@ impl Retrier {
     pub fn set_tower_status_if_failed(&self) {
         if *self.status.lock().unwrap() == RetrierStatus::Failed {
             let mut state = self.wt_client.lock().unwrap();
-            if let Some(tower) = state.towers.get(&self.tower_id) {
-                if tower.status.is_temporary_unreachable() {
+            if let Some(status) = state.get_tower_status(&self.tower_id) {
+                if status.is_temporary_unreachable() {
                     log::warn!("Setting {} as unreachable", self.tower_id);
                     state.set_tower_status(self.tower_id, crate::TowerStatus::Unreachable);
                 }
@@ -478,10 +476,8 @@ mod tests {
             wt_client
                 .lock()
                 .unwrap()
-                .towers
-                .get(&tower_id)
-                .unwrap()
-                .status,
+                .get_tower_status(&tower_id)
+                .unwrap(),
             TowerStatus::Reachable
         );
         assert!(!wt_client
@@ -539,10 +535,8 @@ mod tests {
         assert!(wt_client
             .lock()
             .unwrap()
-            .towers
-            .get(&tower_id)
+            .get_tower_status(&tower_id)
             .unwrap()
-            .status
             .is_temporary_unreachable());
 
         // Wait until the task gives up and check again
@@ -550,10 +544,8 @@ mod tests {
         assert!(wt_client
             .lock()
             .unwrap()
-            .towers
-            .get(&tower_id)
+            .get_tower_status(&tower_id)
             .unwrap()
-            .status
             .is_unreachable());
 
         task.abort();
@@ -611,10 +603,8 @@ mod tests {
             wt_client
                 .lock()
                 .unwrap()
-                .towers
-                .get(&tower_id)
-                .unwrap()
-                .status,
+                .get_tower_status(&tower_id)
+                .unwrap(),
             TowerStatus::Reachable
         );
         assert!(!wt_client
@@ -694,10 +684,8 @@ mod tests {
         assert!(wt_client
             .lock()
             .unwrap()
-            .towers
-            .get(&tower_id)
+            .get_tower_status(&tower_id)
             .unwrap()
-            .status
             .is_misbehaving());
         api_mock.assert();
 

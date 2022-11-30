@@ -128,6 +128,11 @@ impl WTClient {
         self.dbm.load_tower_record(tower_id)
     }
 
+    /// Gets the given tower status (identified by tower_id), if found.
+    pub fn get_tower_status(&self, tower_id: &TowerId) -> Option<TowerStatus> {
+        Some(self.towers.get(tower_id)?.status)
+    }
+
     /// Sets the tower status to any of the `TowerStatus` variants.
     pub fn set_tower_status(&mut self, tower_id: TowerId, status: TowerStatus) {
         if let Some(tower) = self.towers.get_mut(&tower_id) {
@@ -352,6 +357,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_tower_status() {
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+
+        // If the tower is unknown, get_tower_status returns None
+        let tower_id = get_random_user_id();
+        assert!(wt_client.get_tower_status(&tower_id).is_none());
+
+        // Add a tower
+        let receipt = get_random_registration_receipt();
+        wt_client
+            .add_update_tower(tower_id, "talaia.watch", &receipt)
+            .unwrap();
+
+        // If the tower is known, get_tower_status matches getting the same data from the towers collection
+        assert_eq!(
+            wt_client.towers.get(&tower_id).unwrap().status,
+            wt_client.get_tower_status(&tower_id).unwrap()
+        )
+    }
+
+    #[tokio::test]
     async fn test_set_tower_status() {
         let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let mut wt_client =
@@ -377,7 +405,7 @@ mod tests {
             TowerStatus::Misbehaving,
         ] {
             wt_client.set_tower_status(tower_id, status);
-            assert_eq!(status, wt_client.towers.get(&tower_id).unwrap().status);
+            assert_eq!(status, wt_client.get_tower_status(&tower_id).unwrap());
         }
     }
 

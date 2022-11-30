@@ -280,7 +280,7 @@ async fn get_tower_info(
     // Notice we need to check the status in memory since we cannot distinguish between unreachable and temporary unreachable
     // by just checking the data in the database.
     Ok(json!(
-        tower_info.with_status(state.towers.get(&tower_id).unwrap().status)
+        tower_info.with_status(state.get_tower_status(&tower_id).unwrap())
     ))
 }
 
@@ -293,10 +293,10 @@ async fn retry_tower(
 ) -> Result<serde_json::Value, Error> {
     let tower_id = TowerId::try_from(v).map_err(|e| anyhow!(e))?;
     let state = plugin.state().lock().unwrap();
-    if let Some(tower) = state.towers.get(&tower_id) {
-        if tower.status.is_temporary_unreachable() {
+    if let Some(status) = state.get_tower_status(&tower_id) {
+        if status.is_temporary_unreachable() {
             return Err(anyhow!("{} is already being retried", tower_id));
-        } else if !tower.status.is_retryable() {
+        } else if !status.is_retryable() {
             return Err(anyhow!(
                 "Tower status must be unreachable or have a subscription issue to manually retry",
             ));
