@@ -4,8 +4,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use teos_common::appointment::Appointment;
 use teos_common::cryptography;
 use teos_common::protos as common_msgs;
-use teos_common::receipts::AppointmentReceipt;
-use teos_common::TowerId;
+use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
+use teos_common::{TowerId, UserId};
 
 use crate::MisbehaviorProof;
 
@@ -50,6 +50,36 @@ impl From<RequestError> for AddAppointmentError {
     fn from(r: RequestError) -> Self {
         AddAppointmentError::RequestError(r)
     }
+}
+
+/// Handles the logic of interacting with the `register` endpoint of the tower.
+pub async fn register(
+    tower_id: TowerId,
+    user_id: UserId,
+    tower_net_addr: &str,
+    proxy: Option<String>,
+) -> Result<RegistrationReceipt, RequestError> {
+    log::info!("Registering in the Eye of Satoshi (tower_id={})", tower_id);
+    process_post_response(
+        post_request(
+            &format!("{}/register", tower_net_addr),
+            &common_msgs::RegisterRequest {
+                user_id: user_id.to_vec(),
+            },
+            proxy,
+        )
+        .await,
+    )
+    .await
+    .map(|r: common_msgs::RegisterResponse| {
+        RegistrationReceipt::with_signature(
+            user_id,
+            r.available_slots,
+            r.subscription_start,
+            r.subscription_expiry,
+            r.subscription_signature,
+        )
+    })
 }
 
 /// Encapsulates the logging and response parsing of sending and appointment to the tower.
@@ -179,7 +209,8 @@ mod tests {
 
     use crate::test_utils::get_dummy_add_appointment_response;
     use teos_common::test_utils::{
-        generate_random_appointment, get_random_appointment_receipt, get_random_user_id,
+        generate_random_appointment, get_random_appointment_receipt,
+        get_random_registration_receipt, get_random_user_id,
     };
 
     mod request_error {
@@ -200,6 +231,70 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_register() {
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let mut registration_receipt = get_random_registration_receipt();
+        registration_receipt.sign(&tower_sk);
+
+        let server = MockServer::start();
+        let api_mock = server.mock(|when, then| {
+            when.method(POST).path("/register");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!(registration_receipt));
+        });
+
+        let receipt = register(
+            TowerId(tower_pk),
+            registration_receipt.user_id(),
+            &format!("http://{}", server.address()),
+            None,
+        )
+        .await
+        .unwrap();
+
+        api_mock.assert();
+        assert_eq!(receipt, registration_receipt);
+    }
+
+    #[tokio::test]
+    async fn test_register_connection_error() {
+        let error = register(
+            get_random_user_id(),
+            get_random_user_id(),
+            "http://server_addr",
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, RequestError::ConnectionError { .. }))
+    }
+
+    #[tokio::test]
+    async fn test_register_deserialize_error() {
+        let server = MockServer::start();
+        let api_mock = server.mock(|when, then| {
+            when.method(POST).path("/register");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!([]));
+        });
+
+        let error = register(
+            get_random_user_id(),
+            get_random_user_id(),
+            &format!("http://{}", server.address()),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        api_mock.assert();
+        assert!(matches!(error, RequestError::DeserializeError { .. }))
     }
 
     #[tokio::test]

@@ -90,6 +90,11 @@ impl TowerStatus {
     pub fn is_subscription_error(&self) -> bool {
         *self == TowerStatus::SubscriptionError
     }
+
+    /// Whether the tower can be manually retried
+    pub fn is_retryable(&self) -> bool {
+        self.is_unreachable() || self.is_subscription_error()
+    }
 }
 
 /// Summarized data associated with a given tower.
@@ -268,11 +273,12 @@ mod tests {
 
     mod tower_status {
         use super::*;
+        use TowerStatus::*;
 
         #[test]
         fn test_is_reachable() {
             for status in STATUSES {
-                if status == TowerStatus::Reachable {
+                if status == Reachable {
                     assert!(status.is_reachable())
                 } else {
                     assert!(!status.is_reachable());
@@ -281,9 +287,31 @@ mod tests {
         }
 
         #[test]
+        fn test_is_temporary_reachable() {
+            for status in STATUSES {
+                if status == TemporaryUnreachable {
+                    assert!(status.is_temporary_unreachable())
+                } else {
+                    assert!(!status.is_temporary_unreachable());
+                }
+            }
+        }
+
+        #[test]
+        fn test_is_unreachable() {
+            for status in STATUSES {
+                if status == Unreachable {
+                    assert!(status.is_unreachable())
+                } else {
+                    assert!(!status.is_unreachable());
+                }
+            }
+        }
+
+        #[test]
         fn test_is_misbehaving() {
             for status in STATUSES {
-                if status == TowerStatus::Misbehaving {
+                if status == Misbehaving {
                     assert!(status.is_misbehaving())
                 } else {
                     assert!(!status.is_misbehaving());
@@ -294,10 +322,21 @@ mod tests {
         #[test]
         fn test_is_subscription_error() {
             for status in STATUSES {
-                if status == TowerStatus::SubscriptionError {
+                if status == SubscriptionError {
                     assert!(status.is_subscription_error())
                 } else {
                     assert!(!status.is_subscription_error());
+                }
+            }
+        }
+
+        #[test]
+        fn test_is_retryable() {
+            for status in STATUSES {
+                if status == Unreachable || status == SubscriptionError {
+                    assert!(status.is_retryable())
+                } else {
+                    assert!(!status.is_retryable());
                 }
             }
         }

@@ -13,25 +13,25 @@ use cln_plugin::{anyhow, Builder, Error, Plugin};
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::protos as common_msgs;
-use teos_common::receipts::RegistrationReceipt;
 use teos_common::TowerId;
 use teos_common::{cryptography, errors};
 
 use watchtower_plugin::convert::{CommitmentRevocation, GetAppointmentParams, RegisterParams};
 use watchtower_plugin::net::http::{
-    add_appointment, post_request, process_post_response, AddAppointmentError, ApiResponse,
-    RequestError,
+    self, post_request, process_post_response, AddAppointmentError, ApiResponse, RequestError,
 };
 use watchtower_plugin::retrier::RetryManager;
 use watchtower_plugin::wt_client::WTClient;
 use watchtower_plugin::TowerStatus;
 
 fn to_cln_error(e: RequestError) -> Error {
-    match e {
+    let e = match e {
         RequestError::ConnectionError(e) => anyhow!(e),
         RequestError::DeserializeError(e) => anyhow!(e),
         RequestError::Unexpected(e) => anyhow!(e),
-    }
+    };
+    log::info!("{}", e);
+    e
 }
 
 /// Registers the client to a given tower.
@@ -72,38 +72,15 @@ async fn register(
 
     let proxy = plugin.state().lock().unwrap().proxy.clone();
 
-    let register_endpoint = format!("{}/register", tower_net_addr);
-    log::info!("Registering in the Eye of Satoshi (tower_id={})", tower_id);
-
-    let receipt = process_post_response(
-        post_request(
-            &register_endpoint,
-            &common_msgs::RegisterRequest {
-                user_id: user_id.to_vec(),
-            },
-            proxy,
-        )
-        .await,
-    )
-    .await
-    .map(|r: common_msgs::RegisterResponse| {
-        RegistrationReceipt::with_signature(
-            user_id,
-            r.available_slots,
-            r.subscription_start,
-            r.subscription_expiry,
-            r.subscription_signature,
-        )
-    })
-    .map_err(|e| {
-        let mut state = plugin.state().lock().unwrap();
-        if e.is_connection() && state.towers.contains_key(&tower_id) {
-            state.set_tower_status(tower_id, TowerStatus::TemporaryUnreachable);
-        }
-        let e = to_cln_error(e);
-        log::info!("{}", e);
-        e
-    })?;
+    let receipt = http::register(tower_id, user_id, &tower_net_addr, proxy)
+        .await
+        .map_err(|e| {
+            let mut state = plugin.state().lock().unwrap();
+            if e.is_connection() && state.towers.contains_key(&tower_id) {
+                state.set_tower_status(tower_id, TowerStatus::TemporaryUnreachable);
+            }
+            to_cln_error(e)
+        })?;
 
     if !receipt.verify(&tower_id) {
         return Err(anyhow!(
@@ -319,9 +296,9 @@ async fn retry_tower(
     if let Some(tower) = state.towers.get(&tower_id) {
         if tower.status.is_temporary_unreachable() {
             return Err(anyhow!("{} is already being retried", tower_id));
-        } else if !tower.status.is_unreachable() {
+        } else if !tower.status.is_retryable() {
             return Err(anyhow!(
-                "Tower status must be unreachable to manually retry",
+                "Tower status must be unreachable or have a subscription issue to manually retry",
             ));
         }
 
@@ -405,8 +382,14 @@ async fn on_commitment_revocation(
 
     for (tower_id, net_addr, status) in towers {
         if status.is_reachable() {
-            match add_appointment(tower_id, &net_addr, proxy.clone(), &appointment, &signature)
-                .await
+            match http::add_appointment(
+                tower_id,
+                &net_addr,
+                proxy.clone(),
+                &appointment,
+                &signature,
+            )
+            .await
             {
                 Ok((slots, receipt)) => {
                     plugin

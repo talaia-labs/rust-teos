@@ -25,7 +25,7 @@ pub struct RegistrationReceipt {
     available_slots: u32,
     subscription_start: u32,
     subscription_expiry: u32,
-    #[serde(skip)]
+    #[serde(rename = "subscription_signature")]
     signature: Option<String>,
 }
 

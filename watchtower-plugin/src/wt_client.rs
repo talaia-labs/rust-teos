@@ -92,11 +92,8 @@ impl WTClient {
             if receipt.subscription_expiry() <= tower.subscription_expiry {
                 return Err(SubscriptionError::Expiry);
             } else {
-                let previous_receipt = self
-                    .dbm
-                    .load_registration_receipt(tower_id, self.user_id)
-                    .unwrap();
-                if receipt.available_slots() <= previous_receipt.available_slots() {
+                let tower_info = self.dbm.load_tower_record(tower_id).unwrap();
+                if receipt.available_slots() <= tower_info.available_slots {
                     return Err(SubscriptionError::Slots);
                 }
             }
@@ -268,7 +265,8 @@ mod tests {
 
         // Adding a new tower will add a summary to towers and the full data to the
         let mut receipt = get_random_registration_receipt();
-        let tower_id = get_random_user_id();
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
         let tower_info = TowerInfo::empty(
             "talaia.watch".to_owned(),
             receipt.available_slots(),
@@ -308,18 +306,20 @@ mod tests {
         );
 
         // If we try to update without increasing both the end_time and the slots, this will fail
-        let receipt_same_slots = RegistrationReceipt::new(
+        let mut receipt_same_slots = RegistrationReceipt::new(
             receipt.user_id(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry() + 1,
         );
-        let receipt_same_expiry = RegistrationReceipt::new(
+        receipt_same_slots.sign(&tower_sk);
+        let mut receipt_same_expiry = RegistrationReceipt::new(
             receipt.user_id(),
             receipt.available_slots() + 1,
             receipt.subscription_start(),
             receipt.subscription_expiry(),
         );
+        receipt_same_expiry.sign(&tower_sk);
 
         assert!(matches!(
             wt_client.add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt),
@@ -337,6 +337,18 @@ mod tests {
             ),
             Err(SubscriptionError::Expiry)
         ));
+
+        // Decrease the slots count (simulate exhaustion) and update with more than the current count it should work
+        let locator = generate_random_appointment(None).locator;
+        wt_client.add_appointment_receipt(
+            tower_id,
+            locator,
+            0,
+            &get_random_appointment_receipt(tower_sk),
+        );
+        wt_client
+            .add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt_same_slots)
+            .unwrap();
     }
 
     #[tokio::test]
