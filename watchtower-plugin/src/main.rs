@@ -96,14 +96,13 @@ async fn register(
         )
     })
     .map_err(|e| {
-        if e.is_connection() {
-            plugin
-                .state()
-                .lock()
-                .unwrap()
-                .set_tower_status(tower_id, TowerStatus::TemporaryUnreachable);
+        let mut state = plugin.state().lock().unwrap();
+        if e.is_connection() && state.towers.contains_key(&tower_id) {
+            state.set_tower_status(tower_id, TowerStatus::TemporaryUnreachable);
         }
-        to_cln_error(e)
+        let e = to_cln_error(e);
+        log::info!("{}", e);
+        e
     })?;
 
     if !receipt.verify(&tower_id) {
