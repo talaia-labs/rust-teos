@@ -1,13 +1,10 @@
-import os
-import json
-import time
-import pytest
-import logging
+from pathlib import Path
 import subprocess
 
 from pyln.testing.fixtures import *  # noqa: F401,F403
 from pyln.testing.utils import DEVELOPER, BITCOIND_CONFIG, TIMEOUT, TailableProc
 
+WT_PLUGIN = Path("~/.cargo/bin/watchtower-client").expanduser()
 TEOSD_CONFIG = {
     "btc_network": "regtest",
     "polling_delta": 0,
