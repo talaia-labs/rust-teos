@@ -2,7 +2,7 @@ from pathlib import Path
 import subprocess
 
 from pyln.testing.fixtures import *  # noqa: F401,F403
-from pyln.testing.utils import DEVELOPER, BITCOIND_CONFIG, TIMEOUT, TailableProc
+from pyln.testing.utils import DEVELOPER, BITCOIND_CONFIG, TailableProc
 
 WT_PLUGIN = Path("~/.cargo/bin/watchtower-client").expanduser()
 TEOSD_CONFIG = {
@@ -56,9 +56,9 @@ class TeosCLI:
 
 class TeosD(TailableProc):
     def __init__(self, bitcoind_rpcport, directory="/tmp/watchtower-test"):
-        TailableProc.__init__(self, directory, verbose=True)
         self.teos_dir = os.path.join(directory, "teos")
         self.prefix = "teosd"
+        TailableProc.__init__(self, self.teos_dir)
         self.cli = TeosCLI(directory)
 
         if not os.path.exists(self.teos_dir):
@@ -79,16 +79,14 @@ class TeosD(TailableProc):
         if overwrite_key:
             self.cmd_line.append("--overwritekey")
         TailableProc.start(self)
-        # FIXME: Temporarily removing this because I cannot figure out why some times the TailableProc cannot find the
-        # proper logline even if it is there. This normally happens after stopping and starting the TaibleProc, which
-        # made me think that re-initializing it may work (TailableProc.__init(...)) given that re-sets the logs and the
-        # offset, but this also fails some times. I don't think it is work wasting much more time here atm.
-        # self.wait_for_log("Tower ready", timeout=TIMEOUT)
-        time.sleep(2)
+        self.wait_for_log("Tower ready")
+
         logging.info("TeosD started")
 
     def stop(self):
         self.cli.stop()
+        self.wait_for_log("Shutting down tower")
+
         return TailableProc.stop(self)
 
 
