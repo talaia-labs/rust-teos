@@ -221,7 +221,7 @@ mod tests {
 
         let (response, receipt) = add_appointment(
             TowerId(tower_pk),
-            &format!("http://{}", server.address()),
+            &server.base_url(),
             None,
             &appointment,
             appointment_receipt.user_signature(),
@@ -253,7 +253,7 @@ mod tests {
 
         let (response, receipt) = send_appointment(
             TowerId(tower_pk),
-            &format!("http://{}", server.address()),
+            &server.base_url(),
             None,
             &appointment,
             appointment_receipt.user_signature(),
@@ -286,7 +286,7 @@ mod tests {
         let tower_id = get_random_user_id();
         let error = send_appointment(
             tower_id,
-            &format!("http://{}", server.address()),
+            &server.base_url(),
             None,
             &appointment,
             appointment_receipt.user_signature(),
@@ -340,7 +340,7 @@ mod tests {
 
         let error = send_appointment(
             get_random_user_id(),
-            &format!("http://{}", server.address()),
+            &server.base_url(),
             None,
             &generate_random_appointment(None),
             "user_sig",
@@ -373,7 +373,7 @@ mod tests {
 
         let error = send_appointment(
             get_random_user_id(),
-            &format!("http://{}", server.address()),
+            &server.base_url(),
             None,
             &generate_random_appointment(None),
             "user_sig",
@@ -393,7 +393,7 @@ mod tests {
             then.status(200).header("content-type", "application/json");
         });
 
-        let response = post_request(&format!("http://{}", server.address()), json!(""), None)
+        let response = post_request(&server.base_url(), json!(""), None)
             .await
             .unwrap();
 
@@ -425,7 +425,7 @@ mod tests {
 
         // Any expected response work here as long as it cannot be properly deserialized
         let error = process_post_response::<ApiResponse<common_msgs::GetAppointmentResponse>>(
-            post_request(&format!("http://{}", server.address()), json!(""), None).await,
+            post_request(&server.base_url(), json!(""), None).await,
         )
         .await
         .unwrap_err();
