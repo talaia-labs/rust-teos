@@ -220,7 +220,7 @@ impl DBM {
         let mut stmt = self
             .connection
             .prepare(
-                "SELECT * 
+                "SELECT available_slots, subscription_start, subscription_expiry, signature
                     FROM registration_receipts 
                     WHERE tower_id = ?1 AND subscription_expiry = (SELECT MAX(subscription_expiry) 
                         FROM registration_receipts 
@@ -230,10 +230,10 @@ impl DBM {
 
         let receipt = stmt
             .query_row([tower_id.to_vec()], |row| {
-                let slots: u32 = row.get(1).unwrap();
-                let start: u32 = row.get(2).unwrap();
-                let expiry: u32 = row.get(3).unwrap();
-                let signature: String = row.get(4).unwrap();
+                let slots: u32 = row.get(0).unwrap();
+                let start: u32 = row.get(1).unwrap();
+                let expiry: u32 = row.get(2).unwrap();
+                let signature: String = row.get(3).unwrap();
 
                 Ok(RegistrationReceipt::with_signature(
                     user_id, slots, start, expiry, signature,
@@ -333,13 +333,13 @@ impl DBM {
     ) -> Result<AppointmentReceipt, Error> {
         let mut stmt = self
             .connection
-            .prepare("SELECT * FROM appointment_receipts WHERE tower_id = ?1 and locator = ?2")
+            .prepare("SELECT start_block, user_signature, tower_signature FROM appointment_receipts WHERE tower_id = ?1 and locator = ?2")
             .unwrap();
 
         stmt.query_row(params![tower_id.to_vec(), locator.to_vec()], |row| {
-            let start_block = row.get::<_, u32>(2).unwrap();
-            let user_sig = row.get::<_, String>(3).unwrap();
-            let tower_sig = row.get::<_, String>(4).unwrap();
+            let start_block = row.get::<_, u32>(0).unwrap();
+            let user_sig = row.get::<_, String>(1).unwrap();
+            let tower_sig = row.get::<_, String>(2).unwrap();
 
             Ok(AppointmentReceipt::with_signature(
                 user_sig,
@@ -549,7 +549,7 @@ impl DBM {
         let mut appointments = Vec::new();
         let mut stmt = self
             .connection
-            .prepare(&format!("SELECT * FROM appointments as a, {} as t WHERE a.locator = t.locator AND t.tower_id = ?", table))
+            .prepare(&format!("SELECT a.locator, a.encrypted_blob, a.to_self_delay FROM appointments as a, {} as t WHERE a.locator = t.locator AND t.tower_id = ?", table))
             .unwrap();
         let mut rows = stmt.query([tower_id.to_vec()]).unwrap();
 
