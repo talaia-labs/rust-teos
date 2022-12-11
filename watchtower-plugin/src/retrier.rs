@@ -400,7 +400,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -475,7 +475,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, "http://unreachable.tower".into(), &receipt)
+            .add_update_tower(tower_id, "http://unreachable.tower", &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -537,7 +537,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -553,7 +553,7 @@ mod tests {
             then.status(400)
                 .header("content-type", "application/json")
                 .json_body(json!(ApiError {
-                    error: "error_msg".into(),
+                    error: "error_msg".to_owned(),
                     error_code: 1,
                 }));
         });
@@ -616,7 +616,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -682,7 +682,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Remove the tower (to simulate it has been abandoned)
@@ -720,7 +720,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -767,7 +767,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // If there are no pending appointments the method will simply return
@@ -790,7 +790,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -836,7 +836,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, "http://unreachable.tower".into(), &receipt)
+            .add_update_tower(tower_id, "http://unreachable.tower", &receipt)
             .unwrap();
 
         // Add some pending appointments and try again (with an unreachable tower).
@@ -868,7 +868,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         let api_mock = server.mock(|when, then| {
@@ -876,7 +876,7 @@ mod tests {
             then.status(400)
                 .header("content-type", "application/json")
                 .json_body(json!(ApiError {
-                    error: "error_msg".into(),
+                    error: "error_msg".to_owned(),
                     error_code: errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR,
                 }));
         });
@@ -911,7 +911,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         let api_mock = server.mock(|when, then| {
@@ -919,7 +919,7 @@ mod tests {
             then.status(400)
                 .header("content-type", "application/json")
                 .json_body(json!(ApiError {
-                    error: "error_msg".into(),
+                    error: "error_msg".to_owned(),
                     error_code: 1,
                 }));
         });
@@ -962,7 +962,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.base_url(), &receipt)
             .unwrap();
 
         // Remove the tower (to simulate it has been abandoned)

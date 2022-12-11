@@ -312,7 +312,7 @@ mod tests {
 
         #[test]
         fn test_new() {
-            let net_addr: String = "addr".into();
+            let net_addr: String = "addr".to_owned();
 
             let tower_summary = TowerSummary::new(
                 net_addr.clone(),
@@ -336,7 +336,7 @@ mod tests {
 
         #[test]
         fn test_with_appointments() {
-            let net_addr: String = "addr".into();
+            let net_addr: String = "addr".to_owned();
 
             let pending_appointments =
                 HashSet::from_iter([generate_random_appointment(None).locator]);
@@ -368,7 +368,7 @@ mod tests {
         #[test]
         fn test_with_status() {
             let mut tower_summary = TowerSummary::new(
-                "addr".into(),
+                "addr".to_owned(),
                 AVAILABLE_SLOTS,
                 SUBSCRIPTION_START,
                 SUBSCRIPTION_EXPIRY,
@@ -407,7 +407,7 @@ mod tests {
         #[test]
         fn test_new() {
             let tower_info = TowerInfo::new(
-                "addr".into(),
+                "addr".to_owned(),
                 AVAILABLE_SLOTS,
                 SUBSCRIPTION_START,
                 SUBSCRIPTION_EXPIRY,
@@ -423,7 +423,7 @@ mod tests {
         #[test]
         fn test_with_status() {
             let mut tower_info = TowerInfo::empty(
-                "addr".into(),
+                "addr".to_owned(),
                 AVAILABLE_SLOTS,
                 SUBSCRIPTION_START,
                 SUBSCRIPTION_EXPIRY,
@@ -437,7 +437,7 @@ mod tests {
         #[test]
         fn test_set_misbehaving_proof() {
             let mut tower_info = TowerInfo::empty(
-                "addr".into(),
+                "addr".to_owned(),
                 AVAILABLE_SLOTS,
                 SUBSCRIPTION_START,
                 SUBSCRIPTION_EXPIRY,
@@ -445,9 +445,9 @@ mod tests {
             assert_eq!(tower_info.misbehaving_proof, None);
 
             let appointment_receipt = AppointmentReceipt::with_signature(
-                "user_signature".into(),
+                "user_signature".to_owned(),
                 SUBSCRIPTION_START + 1,
-                "tower_signature".into(),
+                "tower_signature".to_owned(),
             );
             let proof = MisbehaviorProof::new(
                 generate_random_appointment(None).locator,

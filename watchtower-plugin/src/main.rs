@@ -46,7 +46,7 @@ async fn register(
     v: serde_json::Value,
 ) -> Result<serde_json::Value, Error> {
     let params = RegisterParams::try_from(v).map_err(|x| anyhow!(x))?;
-    let host = params.host.unwrap_or_else(|| "localhost".into());
+    let host = params.host.unwrap_or_else(|| "localhost".to_owned());
     let tower_id = params.tower_id;
     let user_id = plugin.state().lock().unwrap().user_id;
 
@@ -115,7 +115,7 @@ async fn register(
         .state()
         .lock()
         .unwrap()
-        .add_update_tower(tower_id, tower_net_addr, &receipt).map_err(|e| {
+        .add_update_tower(tower_id, &tower_net_addr, &receipt).map_err(|e| {
             if e.is_expiry() {
                 anyhow!("Registration receipt contains a subscription expiry that is not higher than the one we are currently registered for")
             } else {
