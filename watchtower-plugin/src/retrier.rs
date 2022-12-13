@@ -11,7 +11,7 @@ use teos_common::cryptography;
 use teos_common::errors;
 use teos_common::UserId as TowerId;
 
-use crate::net::http::{add_appointment, AddAppointmentError};
+use crate::net::http::{self, AddAppointmentError};
 use crate::wt_client::WTClient;
 
 pub struct RetryManager {
@@ -134,7 +134,7 @@ pub enum RetrierStatus {
     /// Retrier is currently retrying the tower. If the retrier receives new appointments, it will
     /// **try** to send them along (but it might not send them).
     ///
-    /// If a retrier status is `Running`, then its associated tower is temporary unreachable.
+    /// If a retrier status is `Running`, then its associated tower is either temporary unreachable or subscription error.
     Running,
     /// Retrier failed retrying the tower. Should not be re-started.
     ///
@@ -181,12 +181,21 @@ impl Retrier {
         // We shouldn't be retrying failed and running retriers.
         debug_assert_eq!(*self.status.lock().unwrap(), RetrierStatus::Stopped);
 
-        // Set the tower as temporary unreachable and the retrier status to running.
-        self.wt_client
-            .lock()
-            .unwrap()
-            .set_tower_status(self.tower_id, crate::TowerStatus::TemporaryUnreachable);
-        self.set_status(RetrierStatus::Running);
+        // When manually retrying the tower may be in either SubscriptionError or Unreachable state.
+        // Flag this as TemporaryUnreachable only if there is no SubscriptionError.
+        // Rationale: if there is a subscription error that needs to be handled first, otherwise we'll
+        //            waste a retry cycle with a request that will always fail.
+        {
+            let mut state = self.wt_client.lock().unwrap();
+            if !state
+                .get_tower_status(&self.tower_id)
+                .unwrap()
+                .is_subscription_error()
+            {
+                state.set_tower_status(self.tower_id, crate::TowerStatus::TemporaryUnreachable);
+            }
+            self.set_status(RetrierStatus::Running);
+        }
 
         tokio::spawn(async move {
             let r = retry_notify(
@@ -229,21 +238,47 @@ impl Retrier {
 
     async fn run(&self) -> Result<(), Error<&'static str>> {
         // Create a new scope so we can get all the data only locking the WTClient once.
-        let (tower_id, net_addr, user_sk, proxy) = {
+        let (tower_id, status, net_addr, user_id, user_sk, proxy) = {
             let wt_client = self.wt_client.lock().unwrap();
             if wt_client.towers.get(&self.tower_id).is_none() {
                 return Err(Error::permanent("Tower was abandoned. Skipping retry"));
             }
 
-            let net_addr = wt_client
-                .towers
-                .get(&self.tower_id)
-                .unwrap()
-                .net_addr
-                .clone();
-            let user_sk = wt_client.user_sk;
-            (self.tower_id, net_addr, user_sk, wt_client.proxy.clone())
+            let tower = wt_client.towers.get(&self.tower_id).unwrap();
+            (
+                self.tower_id,
+                tower.status,
+                tower.net_addr.clone(),
+                wt_client.user_id,
+                wt_client.user_sk,
+                wt_client.proxy.clone(),
+            )
         };
+
+        // If the tower state is subscription_error we need to re-register first. If we cannot, then the retry is aborted.
+        if status.is_subscription_error() {
+            let receipt = http::register(tower_id, user_id, &net_addr, proxy.clone())
+                .await
+                .map_err(|e| {
+                    log::debug!("Cannot renew registration with tower. Error: {:?}", e);
+                    Error::permanent("Cannot renew registration with tower")
+                })?;
+            if !receipt.verify(&tower_id) {
+                return Err(Error::permanent(
+                        "Registration receipt contains bad signature. Are you using the right tower_id?"
+                    ));
+            }
+            self.wt_client
+            .lock()
+            .unwrap()
+            .add_update_tower(tower_id, &net_addr, &receipt).map_err(|e| {
+                if e.is_expiry() {
+                    Error::permanent("Registration receipt contains a subscription expiry that is not higher than the one we are currently registered for")
+                } else {
+                    Error::permanent("Registration receipt does not contain more slots than the ones we are currently registered for")
+                }
+            })?;
+        }
 
         while self.has_pending_appointments() {
             let locators = self.pending_appointments.lock().unwrap().clone();
@@ -256,7 +291,7 @@ impl Retrier {
                     .load_appointment(locator)
                     .unwrap();
 
-                match add_appointment(
+                match http::add_appointment(
                     tower_id,
                     &net_addr,
                     proxy.clone(),
@@ -295,7 +330,7 @@ impl Retrier {
                                         tower_id,
                                         crate::TowerStatus::SubscriptionError,
                                     );
-                                    return Err(Error::permanent("Subscription error"));
+                                    return Err(Error::transient("Subscription error"));
                                 }
                                 _ => {
                                     log::warn!(
@@ -337,8 +372,8 @@ impl Retrier {
     pub fn set_tower_status_if_failed(&self) {
         if *self.status.lock().unwrap() == RetrierStatus::Failed {
             let mut state = self.wt_client.lock().unwrap();
-            if let Some(tower) = state.towers.get(&self.tower_id) {
-                if tower.status.is_temporary_unreachable() {
+            if let Some(status) = state.get_tower_status(&self.tower_id) {
+                if status.is_temporary_unreachable() {
                     log::warn!("Setting {} as unreachable", self.tower_id);
                     state.set_tower_status(self.tower_id, crate::TowerStatus::Unreachable);
                 }
@@ -359,9 +394,10 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use teos_common::errors;
-    use teos_common::receipts::AppointmentReceipt;
+    use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
     use teos_common::test_utils::{
         generate_random_appointment, get_random_registration_receipt, get_random_user_id,
+        get_registration_receipt_from_previous,
     };
 
     use crate::net::http::ApiError;
@@ -440,10 +476,8 @@ mod tests {
             wt_client
                 .lock()
                 .unwrap()
-                .towers
-                .get(&tower_id)
-                .unwrap()
-                .status,
+                .get_tower_status(&tower_id)
+                .unwrap(),
             TowerStatus::Reachable
         );
         assert!(!wt_client
@@ -501,10 +535,8 @@ mod tests {
         assert!(wt_client
             .lock()
             .unwrap()
-            .towers
-            .get(&tower_id)
+            .get_tower_status(&tower_id)
             .unwrap()
-            .status
             .is_temporary_unreachable());
 
         // Wait until the task gives up and check again
@@ -512,10 +544,8 @@ mod tests {
         assert!(wt_client
             .lock()
             .unwrap()
-            .towers
-            .get(&tower_id)
+            .get_tower_status(&tower_id)
             .unwrap()
-            .status
             .is_unreachable());
 
         task.abort();
@@ -573,10 +603,8 @@ mod tests {
             wt_client
                 .lock()
                 .unwrap()
-                .towers
-                .get(&tower_id)
-                .unwrap()
-                .status,
+                .get_tower_status(&tower_id)
+                .unwrap(),
             TowerStatus::Reachable
         );
         assert!(!wt_client
@@ -656,10 +684,8 @@ mod tests {
         assert!(wt_client
             .lock()
             .unwrap()
-            .towers
-            .get(&tower_id)
+            .get_tower_status(&tower_id)
             .unwrap()
-            .status
             .is_misbehaving());
         api_mock.assert();
 
@@ -702,6 +728,87 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert!(!wt_client.lock().unwrap().towers.contains_key(&tower_id));
 
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn test_manage_retry_subscription_error() {
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let (tx, rx) = unbounded_channel();
+        let wt_client = Arc::new(Mutex::new(
+            WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
+        ));
+        let server = MockServer::start();
+
+        // Add a tower with pending appointments
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
+        let mut registration_receipt =
+            RegistrationReceipt::new(wt_client.lock().unwrap().user_id, 21, 42, 420);
+        registration_receipt.sign(&tower_sk);
+        wt_client
+            .lock()
+            .unwrap()
+            .add_update_tower(tower_id, &server.base_url(), &registration_receipt)
+            .unwrap();
+
+        // Add appointment to pending
+        let appointment = generate_random_appointment(None);
+        wt_client
+            .lock()
+            .unwrap()
+            .add_pending_appointment(tower_id, &appointment);
+
+        // Mock the add_appointment response (this is right, so after the re-registration the appointments are accepted)
+        let mut add_appointment_receipt = AppointmentReceipt::new(
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            42,
+        );
+        add_appointment_receipt.sign(&tower_sk);
+        let add_appointment_response =
+            get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
+        let add_appointment_mock = server.mock(|when, then| {
+            when.method(POST).path("/add_appointment");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!(add_appointment_response));
+        });
+
+        // Mock the re-registration
+        let mut re_registration_receipt =
+            get_registration_receipt_from_previous(&registration_receipt);
+        re_registration_receipt.sign(&tower_sk);
+        let register_mock = server.mock(|when, then| {
+            when.method(POST).path("/register");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!(re_registration_receipt));
+        });
+
+        // Set the status as SubscriptionError so we simulate the retrier faced this in a previous round
+        wt_client
+            .lock()
+            .unwrap()
+            .set_tower_status(tower_id, TowerStatus::SubscriptionError);
+
+        // Start the task and send the tower to the channel for retry
+        let wt_client_clone = wt_client.clone();
+        let task = tokio::spawn(async move {
+            RetryManager::new(wt_client_clone, rx, MAX_ELAPSED_TIME, MAX_INTERVAL_TIME)
+                .manage_retry()
+                .await
+        });
+        tx.send((tower_id, appointment.locator)).unwrap();
+
+        // Wait for the elapsed time and check how the tower status changed
+        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
+        let state = wt_client.lock().unwrap();
+        let tower = state.towers.get(&tower_id).unwrap();
+        assert!(tower.status.is_reachable());
+        assert!(tower.pending_appointments.is_empty());
+
+        register_mock.assert();
+        add_appointment_mock.assert();
         task.abort();
     }
 
@@ -892,7 +999,7 @@ mod tests {
         let retrier = Retrier::new(wt_client, tower_id, appointment.locator);
         let r = retrier.run().await;
 
-        assert_eq!(r, Err(Error::permanent("Subscription error")));
+        assert_eq!(r, Err(Error::transient("Subscription error")));
         api_mock.assert();
     }
 

@@ -289,6 +289,9 @@ impl DBM {
             if self.exists_misbehaving_proof(tower_id) {
                 tower.status = TowerStatus::Misbehaving;
             } else if !tower.pending_appointments.is_empty() {
+                // TODO: We could set the status to SubscriptionError here if we checked the state of the subscription
+                // (using available_slots and expiry). This will be possible once we implement cln rpc queries (which are
+                // already viable since cln-plugin = "0.1.1").
                 tower.status = TowerStatus::TemporaryUnreachable;
             }
 

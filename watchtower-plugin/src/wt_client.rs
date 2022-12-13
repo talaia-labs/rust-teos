@@ -92,11 +92,8 @@ impl WTClient {
             if receipt.subscription_expiry() <= tower.subscription_expiry {
                 return Err(SubscriptionError::Expiry);
             } else {
-                let previous_receipt = self
-                    .dbm
-                    .load_registration_receipt(tower_id, self.user_id)
-                    .unwrap();
-                if receipt.available_slots() <= previous_receipt.available_slots() {
+                let tower_info = self.dbm.load_tower_record(tower_id).unwrap();
+                if receipt.available_slots() <= tower_info.available_slots {
                     return Err(SubscriptionError::Slots);
                 }
             }
@@ -129,6 +126,11 @@ impl WTClient {
     /// Loads a tower record from the database.
     pub fn load_tower_info(&self, tower_id: TowerId) -> Result<TowerInfo, DBError> {
         self.dbm.load_tower_record(tower_id)
+    }
+
+    /// Gets the given tower status (identified by tower_id), if found.
+    pub fn get_tower_status(&self, tower_id: &TowerId) -> Option<TowerStatus> {
+        Some(self.towers.get(tower_id)?.status)
     }
 
     /// Sets the tower status to any of the `TowerStatus` variants.
@@ -268,7 +270,8 @@ mod tests {
 
         // Adding a new tower will add a summary to towers and the full data to the
         let mut receipt = get_random_registration_receipt();
-        let tower_id = get_random_user_id();
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
         let tower_info = TowerInfo::empty(
             "talaia.watch".to_owned(),
             receipt.available_slots(),
@@ -308,18 +311,20 @@ mod tests {
         );
 
         // If we try to update without increasing both the end_time and the slots, this will fail
-        let receipt_same_slots = RegistrationReceipt::new(
+        let mut receipt_same_slots = RegistrationReceipt::new(
             receipt.user_id(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry() + 1,
         );
-        let receipt_same_expiry = RegistrationReceipt::new(
+        receipt_same_slots.sign(&tower_sk);
+        let mut receipt_same_expiry = RegistrationReceipt::new(
             receipt.user_id(),
             receipt.available_slots() + 1,
             receipt.subscription_start(),
             receipt.subscription_expiry(),
         );
+        receipt_same_expiry.sign(&tower_sk);
 
         assert!(matches!(
             wt_client.add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt),
@@ -337,6 +342,41 @@ mod tests {
             ),
             Err(SubscriptionError::Expiry)
         ));
+
+        // Decrease the slots count (simulate exhaustion) and update with more than the current count it should work
+        let locator = generate_random_appointment(None).locator;
+        wt_client.add_appointment_receipt(
+            tower_id,
+            locator,
+            0,
+            &get_random_appointment_receipt(tower_sk),
+        );
+        wt_client
+            .add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt_same_slots)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_tower_status() {
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+
+        // If the tower is unknown, get_tower_status returns None
+        let tower_id = get_random_user_id();
+        assert!(wt_client.get_tower_status(&tower_id).is_none());
+
+        // Add a tower
+        let receipt = get_random_registration_receipt();
+        wt_client
+            .add_update_tower(tower_id, "talaia.watch", &receipt)
+            .unwrap();
+
+        // If the tower is known, get_tower_status matches getting the same data from the towers collection
+        assert_eq!(
+            wt_client.towers.get(&tower_id).unwrap().status,
+            wt_client.get_tower_status(&tower_id).unwrap()
+        )
     }
 
     #[tokio::test]
@@ -365,7 +405,7 @@ mod tests {
             TowerStatus::Misbehaving,
         ] {
             wt_client.set_tower_status(tower_id, status);
-            assert_eq!(status, wt_client.towers.get(&tower_id).unwrap().status);
+            assert_eq!(status, wt_client.get_tower_status(&tower_id).unwrap());
         }
     }
 
