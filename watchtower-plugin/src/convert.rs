@@ -3,6 +3,7 @@ use std::{convert::TryFrom, str::FromStr};
 
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use bitcoin::{Transaction, Txid};
 
@@ -120,31 +121,42 @@ impl TryFrom<serde_json::Value> for RegisterParams {
             },
             serde_json::Value::Array(mut a) => {
                 let param_count = a.len();
+
                 match param_count {
                     1 => RegisterParams::try_from(a.pop().unwrap()),
                     2 | 3 => {
-                        let tower_id = a.get(0).unwrap();
-                        let host = a.get(1).unwrap();
-
-                        if !tower_id.is_string() {
-                            return Err(RegisterError::InvalidId(format!("tower_id must be a string. Received: {}", tower_id)));
-                        }
-                        if !host.is_string() {
-                            return Err(RegisterError::InvalidHost(format!("host must be a string. Received: {}", host)));
-                        }
-                        let port = if param_count == 3 {
-                            let p = a.get(2).unwrap();
-                            if !p.is_u64() {
-                                return Err(RegisterError::InvalidPort(format!("port must be a number. Received: {}", p))); 
-                            }
-                            p.as_u64()
-                        } else{
+                        let tower_id = a.get(0).unwrap().as_str().ok_or_else(|| RegisterError::InvalidId("tower_id must be a string".to_string()))?;
+                        let host = Some(a.get(1).unwrap().as_str().ok_or_else(|| RegisterError::InvalidHost("host must be a string".to_string()))?);
+                        let port = if let Some(p) = a.get(2) {
+                            Some(p.as_u64().ok_or_else(|| RegisterError::InvalidPort(format!("port must be a number. Received: {}", p)))?)
+                        } else {
                             None
                         };
 
-                        RegisterParams::new(tower_id.as_str().unwrap(), host.as_str(), port)
+                        RegisterParams::new(tower_id, host, port)
                     }
                     _ => Err(RegisterError::InvalidFormat(format!("Unexpected request format. The request needs 1-3 parameters. Received: {}", param_count))),
+                }
+            },
+            serde_json::Value::Object(mut m) => {
+                let allowed_keys = ["tower_id", "host", "port"];
+                let param_count = m.len();
+
+                 if m.is_empty() || param_count > allowed_keys.len() {
+                    Err(RegisterError::InvalidFormat(format!("Unexpected request format. The request needs 1-3 parameters. Received: {}", param_count)))
+                 } else if !m.contains_key(allowed_keys[0]){
+                    Err(RegisterError::InvalidId(format!("{} is mandatory", allowed_keys[0])))
+                 } else if !m.iter().all(|(k, _)| allowed_keys.contains(&k.as_str())) {
+                    Err(RegisterError::InvalidFormat("Invalid named parameter found in request".to_owned()))
+                 } else {
+                    let mut params = Vec::with_capacity(allowed_keys.len());
+                    for k in allowed_keys {
+                        if let Some(v) = m.remove(k) {
+                            params.push(v);
+                        }
+                    }
+
+                    RegisterParams::try_from(json!(params))
                 }
             },
             _ => Err(RegisterError::InvalidFormat(
@@ -215,6 +227,33 @@ impl TryFrom<serde_json::Value> for GetAppointmentParams {
                     Ok(Self { tower_id, locator })
                 }
             }
+            serde_json::Value::Object(mut m) => {
+                let allowed_keys = ["tower_id", "locator"];
+
+                if m.len() > allowed_keys.len() {
+                    return Err(GetAppointmentError::InvalidFormat(
+                        "Invalid named argument found in request".to_owned(),
+                    ));
+                }
+
+                // DISCUSS: There may be a more idiomatic way of doing this
+                for k in allowed_keys.iter() {
+                    if !m.contains_key(*k) {
+                        return Err(GetAppointmentError::InvalidFormat(format!(
+                            "{} is mandatory",
+                            k
+                        )));
+                    }
+                }
+
+                let mut params = Vec::with_capacity(allowed_keys.len());
+                for k in allowed_keys {
+                    if let Some(v) = m.remove(k) {
+                        params.push(v);
+                    }
+                }
+                GetAppointmentParams::try_from(json!(params))
+            }
             _ => Err(GetAppointmentError::InvalidFormat(format!(
                 "Unexpected request format. Expected: tower_id locator. Received: '{}'",
                 value
@@ -238,6 +277,7 @@ pub struct CommitmentRevocation {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     const VALID_ID: &str = "020dea894c967319407265764aba31bdef75d463f96800f34dd6df61380d82dfc0";
 
@@ -373,6 +413,61 @@ mod tests {
         }
 
         #[test]
+        fn test_try_from_json_dict() {
+            let id = json!(VALID_ID);
+            let host = json!("host");
+            let port = json!(80);
+
+            for v in [
+                HashMap::from([("tower_id", &id), ("host", &host), ("port", &port)]),
+                HashMap::from([("tower_id", &id), ("host", &host)]),
+                HashMap::from([("tower_id", &id)]),
+            ] {
+                let p = RegisterParams::try_from(json!(v));
+                assert!(matches!(p, Ok(..)));
+            }
+
+            // Id key missing
+            let p =
+                RegisterParams::try_from(json!(HashMap::from([("host", &host), ("port", &port)])));
+            assert!(matches!(p, Err(RegisterError::InvalidId(..))));
+
+            // Wrong id key
+            let p = RegisterParams::try_from(json!(HashMap::from([
+                ("wrong_tower_id", &id),
+                ("tower_id", &id),
+                ("host", &host),
+                ("port", &port)
+            ])));
+            assert!(matches!(p, Err(RegisterError::InvalidFormat(..))));
+
+            // Wrong host key
+            let p = RegisterParams::try_from(json!(HashMap::from([
+                ("tower_id", &id),
+                ("wrong_host", &host),
+                ("port", &port)
+            ])));
+            assert!(matches!(p, Err(RegisterError::InvalidFormat(..))));
+
+            // Wrong port key
+            let p = RegisterParams::try_from(json!(HashMap::from([
+                ("tower_id", &id),
+                ("host", &host),
+                ("wrong_port", &port)
+            ])));
+            assert!(matches!(p, Err(RegisterError::InvalidFormat(..))));
+
+            // Wrong param count (params should be 1-3)
+            let p = RegisterParams::try_from(json!(HashMap::from([
+                ("tower_id", &id),
+                ("host", &host),
+                ("port", &port),
+                ("another_param", &json!(0))
+            ])));
+            assert!(matches!(p, Err(RegisterError::InvalidFormat(..))));
+        }
+
+        #[test]
         fn test_try_from_other_json() {
             // Unexpected json object (it must be either String or Array)
             let p = RegisterParams::try_from(json!(true));
@@ -413,6 +508,40 @@ mod tests {
             // Locator is not a hex string
             let p = GetAppointmentParams::try_from(json!(vec![&id, &number_locator]));
             assert!(matches!(p, Err(GetAppointmentError::InvalidLocator(..))));
+        }
+
+        #[test]
+        fn test_try_from_dict() {
+            let id = json!(VALID_ID);
+            let locator = json!("c69517f00d9482e6b1c41639f9bdfd5c");
+
+            // Valid params
+            let p = GetAppointmentParams::try_from(json!(HashMap::from([
+                ("tower_id", &id),
+                ("locator", &locator)
+            ])));
+            assert!(matches!(p, Ok(..)));
+
+            // Wrong keys
+            let p = GetAppointmentParams::try_from(json!(HashMap::from([
+                ("wrong_tower_id", &id),
+                ("locator", &locator)
+            ])));
+            assert!(matches!(p, Err(GetAppointmentError::InvalidFormat(..))));
+
+            let p = GetAppointmentParams::try_from(json!(HashMap::from([
+                ("tower_id", &id),
+                ("wrong_locator", &locator)
+            ])));
+            assert!(matches!(p, Err(GetAppointmentError::InvalidFormat(..))));
+
+            // Too many parameters
+            let p = GetAppointmentParams::try_from(json!(HashMap::from([
+                ("tower_id", &id),
+                ("locator", &locator),
+                ("another_param", &json!(0))
+            ])));
+            assert!(matches!(p, Err(GetAppointmentError::InvalidFormat(..))));
         }
 
         #[test]
