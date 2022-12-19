@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::sync::mpsc::UnboundedSender;
@@ -12,7 +13,48 @@ use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
 use crate::dbm::DBM;
+use crate::retrier::RetrierStatus;
 use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
+
+#[derive(Eq, PartialEq)]
+pub enum RevocationData {
+    Fresh(Locator),
+    Stale(HashSet<Locator>),
+    None,
+}
+
+impl RevocationData {
+    pub fn is_none(&self) -> bool {
+        *self == RevocationData::None
+    }
+}
+
+impl From<RevocationData> for HashSet<Locator> {
+    fn from(r: RevocationData) -> Self {
+        match r {
+            RevocationData::Fresh(l) => HashSet::from_iter(vec![l]),
+            RevocationData::Stale(hs) => hs,
+            RevocationData::None => HashSet::new(),
+        }
+    }
+}
+
+impl std::fmt::Debug for RevocationData {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                RevocationData::Fresh(l) => format!("Fresh: {}", l),
+                RevocationData::Stale(hs) => format!(
+                    "Stale: {:?}",
+                    hs.iter().map(|l| l.to_string()).collect::<Vec<_>>()
+                ),
+                RevocationData::None => "None".to_owned(),
+            }
+        )
+    }
+}
 
 /// Represents the watchtower client that is being used as the CoreLN plugin state.
 pub struct WTClient {
@@ -20,8 +62,10 @@ pub struct WTClient {
     pub dbm: DBM,
     /// A collection of towers the client is registered to.
     pub towers: HashMap<TowerId, TowerSummary>,
-    /// Queue of unreachable towers
-    pub unreachable_towers: UnboundedSender<(TowerId, Locator)>,
+    /// Queue of unreachable towers.
+    pub unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
+    // Map of existing retriers and its state.
+    pub retriers: HashMap<TowerId, RetrierStatus>,
     /// The user secret key.
     pub user_sk: SecretKey,
     /// The user identifier.
@@ -33,7 +77,7 @@ pub struct WTClient {
 impl WTClient {
     pub async fn new(
         data_dir: PathBuf,
-        unreachable_towers: UnboundedSender<(TowerId, Locator)>,
+        unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
     ) -> Self {
         // Create data dir if it does not exist
         fs::create_dir_all(&data_dir).await.unwrap_or_else(|e| {
@@ -58,9 +102,12 @@ impl WTClient {
         let towers = dbm.load_towers();
         for (tower_id, tower) in towers.iter() {
             if tower.status.is_temporary_unreachable() {
-                for locator in tower.pending_appointments.iter() {
-                    unreachable_towers.send((*tower_id, *locator)).unwrap();
-                }
+                unreachable_towers
+                    .send((
+                        *tower_id,
+                        RevocationData::Stale(tower.pending_appointments.iter().cloned().collect()),
+                    ))
+                    .unwrap();
             }
         }
 
@@ -72,6 +119,7 @@ impl WTClient {
         WTClient {
             towers,
             unreachable_towers,
+            retriers: HashMap::new(),
             dbm,
             user_sk,
             user_id,
@@ -136,7 +184,11 @@ impl WTClient {
     /// Sets the tower status to any of the `TowerStatus` variants.
     pub fn set_tower_status(&mut self, tower_id: TowerId, status: TowerStatus) {
         if let Some(tower) = self.towers.get_mut(&tower_id) {
-            tower.status = status
+            if tower.status != status {
+                tower.status = status
+            } else {
+                log::debug!("{} status is already {}", tower_id, status)
+            }
         } else {
             log::error!(
                 "Cannot change tower status to {}. Unknown tower_id: {}",
@@ -144,6 +196,11 @@ impl WTClient {
                 tower_id
             );
         }
+    }
+
+    /// Gets the given tower status (identified by tower_id), if found.
+    pub fn get_retrier_status(&self, tower_id: &TowerId) -> Option<&RetrierStatus> {
+        self.retriers.get(tower_id)
     }
 
     /// Adds an appointment receipt to the tower record.
