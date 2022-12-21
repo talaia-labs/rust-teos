@@ -582,7 +582,6 @@ mod tests {
 
     use httpmock::prelude::*;
     use serde_json::json;
-    use std::iter::FromIterator;
     use tempdir::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -596,8 +595,10 @@ mod tests {
     use crate::net::http::ApiError;
     use crate::test_utils::get_dummy_add_appointment_response;
 
+    const LONG_AUTO_RETRY_DELAY: u16 = 60;
+    const SHORT_AUTO_RETRY_DELAY: u16 = 3;
+    const API_DELAY: f64 = 0.5;
     const MAX_ELAPSED_TIME: u16 = 2;
-    const AUTO_RETRY_TIME: u16 = 5;
     const MAX_INTERVAL_TIME: u16 = 1;
 
     impl Retrier {
@@ -650,6 +651,7 @@ mod tests {
         let api_mock = server.mock(|when, then| {
             when.method(POST).path("/add_appointment");
             then.status(200)
+                .delay(Duration::from_secs_f64(API_DELAY))
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
         });
@@ -661,31 +663,32 @@ mod tests {
                 wt_client_clone,
                 rx,
                 MAX_ELAPSED_TIME,
-                AUTO_RETRY_TIME,
+                LONG_AUTO_RETRY_DELAY,
                 MAX_INTERVAL_TIME,
             )
             .manage_retry()
             .await
         });
-        tx.send((
-            tower_id,
-            RevocationData::Stale(HashSet::from_iter([appointment.locator])),
-        ))
-        .unwrap();
+        tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
+            .unwrap();
 
         // Wait for the elapsed time and check how the tower status changed
-        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
-        assert_eq!(
-            wt_client
-                .lock()
-                .unwrap()
-                .get_tower_status(&tower_id)
-                .unwrap(),
-            TowerStatus::Reachable
-        );
-        assert!(!wt_client
+        tokio::time::sleep(Duration::from_secs((API_DELAY / 2.0) as u64)).await;
+        assert!(wt_client
             .lock()
             .unwrap()
+            .get_retrier_status(&tower_id)
+            .unwrap()
+            .is_running());
+        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
+
+        let state = wt_client.lock().unwrap();
+        assert_eq!(
+            state.get_tower_status(&tower_id).unwrap(),
+            TowerStatus::Reachable
+        );
+        assert!(!state.retriers.contains_key(&tower_id));
+        assert!(!state
             .towers
             .get(&tower_id)
             .unwrap()
@@ -706,7 +709,7 @@ mod tests {
         ));
 
         // Add a tower with pending appointments
-        let (_, tower_pk) = cryptography::get_random_keypair();
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let receipt = get_random_registration_receipt();
         wt_client
@@ -725,41 +728,101 @@ mod tests {
         // Start the task and send the tower to the channel for retry
         let wt_client_clone = wt_client.clone();
 
-        let max_elapsed_time = MAX_ELAPSED_TIME + 1;
-        let task = tokio::spawn(async move {
-            RetryManager::new(
-                wt_client_clone,
-                rx,
-                MAX_ELAPSED_TIME,
-                AUTO_RETRY_TIME,
-                MAX_INTERVAL_TIME,
-            )
-            .manage_retry()
-            .await
-        });
-        tx.send((
-            tower_id,
-            RevocationData::Stale(HashSet::from_iter([appointment.locator])),
-        ))
-        .unwrap();
+        let mut retry_manager = RetryManager::new(
+            wt_client_clone,
+            rx,
+            MAX_ELAPSED_TIME + 1,
+            SHORT_AUTO_RETRY_DELAY,
+            MAX_INTERVAL_TIME,
+        );
+        let task = tokio::spawn(async move { retry_manager.manage_retry().await });
+        tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
+            .unwrap();
 
         // Wait for the elapsed time and check how the tower status changed
-        tokio::time::sleep(Duration::from_secs(max_elapsed_time as u64 / 3)).await;
+        tokio::time::sleep(Duration::from_secs_f64(
+            (MAX_ELAPSED_TIME as f64 + 1.0) / 2.0,
+        ))
+        .await;
         assert!(wt_client
             .lock()
             .unwrap()
             .get_tower_status(&tower_id)
             .unwrap()
             .is_temporary_unreachable());
+        assert!(wt_client
+            .lock()
+            .unwrap()
+            .get_retrier_status(&tower_id)
+            .unwrap()
+            .is_running());
 
-        // Wait until the task gives up and check again
-        tokio::time::sleep(Duration::from_secs(max_elapsed_time as u64)).await;
+        // Wait until the task gives up and check again (this gives up due to accumulation of transient errors,
+        // so the retiers will be idle).
+        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
         assert!(wt_client
             .lock()
             .unwrap()
             .get_tower_status(&tower_id)
             .unwrap()
             .is_unreachable());
+        assert!(wt_client
+            .lock()
+            .unwrap()
+            .get_retrier_status(&tower_id)
+            .unwrap()
+            .is_idle());
+
+        // Add a proper server and check that the auto-retry works
+        // Prepare the mock response
+        let server = MockServer::start();
+        let mut add_appointment_receipt = AppointmentReceipt::new(
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            42,
+        );
+        add_appointment_receipt.sign(&tower_sk);
+        let add_appointment_response =
+            get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
+        let api_mock = server.mock(|when, then| {
+            when.method(POST).path("/add_appointment");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!(add_appointment_response));
+        });
+
+        // Update the tower details
+        wt_client
+            .lock()
+            .unwrap()
+            .add_update_tower(
+                tower_id,
+                &server.base_url(),
+                &get_registration_receipt_from_previous(&receipt),
+            )
+            .unwrap();
+
+        // Wait and check. We wait twice the short retry delay because it can be the case that the first auto retry
+        // is performed while we are patching the mock.
+        tokio::time::sleep(Duration::from_secs((SHORT_AUTO_RETRY_DELAY * 2) as u64)).await;
+        assert_eq!(
+            wt_client
+                .lock()
+                .unwrap()
+                .get_tower_status(&tower_id)
+                .unwrap(),
+            TowerStatus::Reachable
+        );
+        assert!(!wt_client
+            .lock()
+            .unwrap()
+            .towers
+            .get(&tower_id)
+            .unwrap()
+            .pending_appointments
+            .contains(&appointment.locator));
+        assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
+
+        api_mock.assert();
 
         task.abort();
     }
@@ -794,6 +857,7 @@ mod tests {
         let api_mock = server.mock(|when, then| {
             when.method(POST).path("/add_appointment");
             then.status(400)
+                .delay(Duration::from_secs_f64(API_DELAY))
                 .header("content-type", "application/json")
                 .json_body(json!(ApiError {
                     error: "error_msg".to_owned(),
@@ -808,19 +872,23 @@ mod tests {
                 wt_client_clone,
                 rx,
                 MAX_ELAPSED_TIME,
-                AUTO_RETRY_TIME,
+                LONG_AUTO_RETRY_DELAY,
                 MAX_INTERVAL_TIME,
             )
             .manage_retry()
             .await
         });
-        tx.send((
-            tower_id,
-            RevocationData::Stale(HashSet::from_iter([appointment.locator])),
-        ))
-        .unwrap();
-
+        tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
+            .unwrap();
         // Wait for the elapsed time and check how the tower status changed
+        tokio::time::sleep(Duration::from_secs((API_DELAY / 2.0) as u64)).await;
+        assert!(wt_client
+            .lock()
+            .unwrap()
+            .get_retrier_status(&tower_id)
+            .unwrap()
+            .is_running());
+
         tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
         assert_eq!(
             wt_client
@@ -830,6 +898,7 @@ mod tests {
                 .unwrap(),
             TowerStatus::Reachable
         );
+        assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
         assert!(!wt_client
             .lock()
             .unwrap()
@@ -889,6 +958,7 @@ mod tests {
         let api_mock = server.mock(|when, then| {
             when.method(POST).path("/add_appointment");
             then.status(200)
+                .delay(Duration::from_secs_f64(API_DELAY))
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
         });
@@ -900,19 +970,24 @@ mod tests {
                 wt_client_clone,
                 rx,
                 MAX_ELAPSED_TIME,
-                AUTO_RETRY_TIME,
+                LONG_AUTO_RETRY_DELAY,
                 MAX_INTERVAL_TIME,
             )
             .manage_retry()
             .await
         });
-        tx.send((
-            tower_id,
-            RevocationData::Stale(HashSet::from_iter([appointment.locator])),
-        ))
-        .unwrap();
+        tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
+            .unwrap();
 
         // Wait for the elapsed time and check how the tower status changed
+        tokio::time::sleep(Duration::from_secs_f64(API_DELAY / 2.0)).await;
+        assert!(wt_client
+            .lock()
+            .unwrap()
+            .get_retrier_status(&tower_id)
+            .unwrap()
+            .is_running());
+
         tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
         assert!(wt_client
             .lock()
@@ -920,6 +995,7 @@ mod tests {
             .get_tower_status(&tower_id)
             .unwrap()
             .is_misbehaving());
+        assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
         api_mock.assert();
 
         task.abort();
@@ -954,21 +1030,15 @@ mod tests {
                 wt_client_clone,
                 rx,
                 MAX_ELAPSED_TIME,
-                AUTO_RETRY_TIME,
+                LONG_AUTO_RETRY_DELAY,
                 MAX_INTERVAL_TIME,
             )
             .manage_retry()
             .await
         });
 
-        // Send the id and check how it gets removed
-        tx.send((
-            tower_id,
-            RevocationData::Stale(HashSet::from_iter([
-                generate_random_appointment(None).locator
-            ])),
-        ))
-        .unwrap();
+        // Send a retry request and check how the tower is removed
+        tx.send((tower_id, RevocationData::None)).unwrap();
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert!(!wt_client.lock().unwrap().towers.contains_key(&tower_id));
 
@@ -1014,6 +1084,7 @@ mod tests {
         let add_appointment_mock = server.mock(|when, then| {
             when.method(POST).path("/add_appointment");
             then.status(200)
+                .delay(Duration::from_secs_f64(API_DELAY))
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
         });
@@ -1025,6 +1096,7 @@ mod tests {
         let register_mock = server.mock(|when, then| {
             when.method(POST).path("/register");
             then.status(200)
+                .delay(Duration::from_secs_f64(API_DELAY))
                 .header("content-type", "application/json")
                 .json_body(json!(re_registration_receipt));
         });
@@ -1042,27 +1114,170 @@ mod tests {
                 wt_client_clone,
                 rx,
                 MAX_ELAPSED_TIME,
-                AUTO_RETRY_TIME,
+                LONG_AUTO_RETRY_DELAY,
                 MAX_INTERVAL_TIME,
             )
             .manage_retry()
             .await
         });
-        tx.send((
-            tower_id,
-            RevocationData::Stale(HashSet::from_iter([appointment.locator])),
-        ))
-        .unwrap();
+        tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_secs_f64(API_DELAY / 2.0)).await;
+        assert!(wt_client
+            .lock()
+            .unwrap()
+            .get_retrier_status(&tower_id)
+            .unwrap()
+            .is_running());
 
         // Wait for the elapsed time and check how the tower status changed
         tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
         let state = wt_client.lock().unwrap();
+        assert!(!state.retriers.contains_key(&tower_id));
+
         let tower = state.towers.get(&tower_id).unwrap();
         assert!(tower.status.is_reachable());
         assert!(tower.pending_appointments.is_empty());
 
         register_mock.assert();
         add_appointment_mock.assert();
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn test_manage_retry_while_idle() {
+        use crate::dbm::DBM;
+        // Let's try adding a tower, setting it to idle and send revocation data in all its forms
+        // This replicates the three types of data the retrier can receive:
+        // - Initialization (from db) with stale data
+        // - Regular (fresh) data from `on_commitment_revocation`
+        // - A wake up call with no data
+
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let (tx, rx) = unbounded_channel();
+
+        // Stale data is sent on WTClient initialization if found in the database. We'll force that to happen by populating the DB before initializing the WTClient
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
+
+        let mut dbm = DBM::new(&tmp_path.path().to_path_buf().join("watchtowers_db.sql3")).unwrap();
+        let receipt = get_random_registration_receipt();
+        dbm.store_tower_record(tower_id, "http://unreachable.tower", &receipt)
+            .unwrap();
+
+        let appointment = generate_random_appointment(None);
+        dbm.store_pending_appointment(tower_id, &appointment)
+            .unwrap();
+
+        // Now we can create the WTClient and check that the data is pending
+        let wt_client = Arc::new(Mutex::new(
+            WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
+        ));
+
+        // Also create the retrier thread so retries can be managed
+        let wt_client_clone = wt_client.clone();
+        let task = tokio::spawn(async move {
+            RetryManager::new(
+                wt_client_clone,
+                rx,
+                MAX_ELAPSED_TIME,
+                LONG_AUTO_RETRY_DELAY,
+                MAX_INTERVAL_TIME,
+            )
+            .manage_retry()
+            .await
+        });
+
+        {
+            // After the retriers gives up, it should go idling and flag the tower as unreachable
+            tokio::time::sleep(Duration::from_secs((MAX_ELAPSED_TIME) as u64)).await;
+            let state = wt_client.lock().unwrap();
+            assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
+
+            let tower = state.towers.get(&tower_id).unwrap();
+            assert!(tower.pending_appointments.contains(&appointment.locator));
+            assert_eq!(tower.status, TowerStatus::Unreachable);
+        }
+
+        // With the retrier idling all fresh data sent to it will be stored but it won't trigger a retry.
+        // (we can check the data was stored later on)
+        let new_appointment = generate_random_appointment(None);
+        wt_client
+            .lock()
+            .unwrap()
+            .add_pending_appointment(tower_id, &new_appointment);
+        tx.send((tower_id, RevocationData::Fresh(new_appointment.locator)))
+            .unwrap();
+
+        {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let state = wt_client.lock().unwrap();
+            assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
+            let tower = state.towers.get(&tower_id).unwrap();
+            assert_eq!(tower.status, TowerStatus::Unreachable);
+        }
+
+        let mut add_appointment_receipt = AppointmentReceipt::new(
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            42,
+        );
+
+        // Mock a proper response
+        let server = MockServer::start();
+        add_appointment_receipt.sign(&tower_sk);
+        let add_appointment_response =
+            get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
+        let api_mock = server.mock(|when, then| {
+            when.method(POST).path("/add_appointment");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!(add_appointment_response));
+        });
+
+        // Patch the tower address
+        wt_client
+            .lock()
+            .unwrap()
+            .towers
+            .get_mut(&tower_id)
+            .unwrap()
+            .net_addr = server.base_url();
+
+        // Check pending data is still there now, and is it not once the retrier succeeds
+        assert_eq!(
+            wt_client
+                .lock()
+                .unwrap()
+                .towers
+                .get(&tower_id)
+                .unwrap()
+                .pending_appointments
+                .len(),
+            2,
+        );
+
+        // Send a retry flag to the retrier to force a retry.
+        tx.send((tower_id, RevocationData::None)).unwrap();
+
+        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
+        // FIXME: Here we should be able to check this, however, due to httpmock limitations, we cannot return a response based on the request.
+        // Therefore, both requests will be responded with the same data. Given pending_appointments is a HashSet, we cannot even know which request
+        // will be sent first (sets are initialized with a random state, which decided the order or iteration).
+        // https://github.com/alexliesenfeld/httpmock/issues/49
+        // assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
+        // assert!(wt_client
+        //     .lock()
+        //     .unwrap()
+        //     .towers
+        //     .get(&tower_id)
+        //     .unwrap()
+        //     .pending_appointments
+        //     .is_empty());
+
+        // This is not much tbh, but looks like its the best we can do at the moment without experiencing random errors.
+        // Depending on what appointment is sent first the api will be hit either one or two times.
+        assert!(api_mock.hits() >= 1 && api_mock.hits() <= 2);
         task.abort();
     }
 
