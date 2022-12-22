@@ -155,6 +155,20 @@ impl TowerSummary {
         self.status = status;
         self
     }
+
+    /// Updates the main information about the summary while preserving the appointment maps.
+    pub fn udpate(
+        &mut self,
+        net_addr: String,
+        available_slots: u32,
+        subscription_start: u32,
+        subscription_expiry: u32,
+    ) {
+        self.net_addr = net_addr;
+        self.available_slots = available_slots;
+        self.subscription_start = subscription_start;
+        self.subscription_expiry = subscription_expiry;
+    }
 }
 
 impl From<TowerInfo> for TowerSummary {

@@ -150,15 +150,25 @@ impl WTClient {
         self.dbm
             .store_tower_record(tower_id, tower_net_addr, receipt)
             .unwrap();
-        self.towers.insert(
-            tower_id,
-            TowerSummary::new(
+
+        if let Some(summary) = self.towers.get_mut(&tower_id) {
+            summary.udpate(
                 tower_net_addr.to_owned(),
                 receipt.available_slots(),
                 receipt.subscription_start(),
                 receipt.subscription_expiry(),
-            ),
-        );
+            );
+        } else {
+            self.towers.insert(
+                tower_id,
+                TowerSummary::new(
+                    tower_net_addr.to_owned(),
+                    receipt.available_slots(),
+                    receipt.subscription_start(),
+                    receipt.subscription_expiry(),
+                ),
+            );
+        };
 
         Ok(())
     }
