@@ -1663,7 +1663,7 @@ mod tests {
             watcher.last_known_block_height.load(Ordering::Relaxed),
             chain.get_block_count()
         );
-        watcher.block_connected(&chain.generate(None), chain.get_block_count() as u32);
+        watcher.block_connected(&chain.generate(None), chain.get_block_count());
         assert_eq!(
             watcher.last_known_block_height.load(Ordering::Relaxed),
             chain.get_block_count()

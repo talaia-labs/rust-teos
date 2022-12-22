@@ -219,7 +219,7 @@ async fn get_subscription_info(
 
 fn router(
     grpc_conn: PublicTowerServicesClient<Channel>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let register = warp::post()
         .and(warp::path("register"))
         .and(warp::body::content_length_limit(REGISTER_BODY_LEN).and(warp::body::json()))
