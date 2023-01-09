@@ -62,7 +62,7 @@ pub struct Opt {
     #[structopt(long)]
     pub rpc_port: Option<u16>,
 
-    /// Network bitcoind is connected to. Either bitcoin, testnet, signet or regtest [default: bitcoin]
+    /// Network bitcoind is connected to. Either mainnet, testnet, signet or regtest [default: mainnet]
     #[structopt(long)]
     pub btc_network: Option<String>,
 
