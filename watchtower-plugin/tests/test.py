@@ -212,6 +212,7 @@ def test_get_appointment(node_factory, bitcoind, teosd, directory):
 
     # And after. Now this should be a tracker
     bitcoind.generate_block()
+    teosd.wait_for_log("New tracker added")
     tracker = l2.rpc.getappointment(tower_id, locator)["appointment"]
     assert "dispute_txid" in tracker and "penalty_txid" in tracker and "penalty_rawtx" in tracker
 
