@@ -22,7 +22,7 @@ use watchtower_plugin::net::http::{
 };
 use watchtower_plugin::retrier::RetryManager;
 use watchtower_plugin::wt_client::{RevocationData, WTClient};
-use watchtower_plugin::TowerStatus;
+use watchtower_plugin::{constants, TowerStatus};
 
 fn to_cln_error(e: RequestError) -> Error {
     let e = match e {
@@ -75,15 +75,9 @@ async fn register(
     // Otherwise the tower could just generate a subscription starting far in the future. For this we need to access lightning RPC
     // which is not available in the current version of `cln-plugin` (but already on master). Add it for the next release.
 
-    // FIXME: This is a workaround. Ideally, `cln_plugin::options::Value` will implement `as_u64` so we can simply call and unwrap
-    // given that we are certain the option exists.
     let port = params.port.unwrap_or(
-        if let Value::Integer(x) = plugin.option("watchtower-port").unwrap() {
-            x as u16
-        } else {
-            // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
-            9814
-        },
+        u16::try_from(plugin.option(constants::WT_PORT).unwrap().as_i64().unwrap())
+            .map_err(|_| anyhow!("{} out of range", constants::WT_PORT))?,
     );
 
     let mut tower_net_addr = format!("{}:{}", host, port);
@@ -521,76 +515,86 @@ async fn on_commitment_revocation(
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let data_dir = match env::var("TOWERS_DATA_DIR") {
+    let data_dir = match env::var(constants::TOWERS_DATA_DIR) {
         Ok(v) => PathBuf::from(v),
-        Err(_) => home_dir().unwrap().join(".watchtower"),
+        Err(_) => home_dir().unwrap().join(constants::DEFAULT_TOWERS_DATA_DIR),
     };
 
     let builder = Builder::new(stdin(), stdout())
         .option(ConfigOption::new(
-            "watchtower-port",
-            Value::Integer(9814),
-            "tower API port",
+            constants::WT_PORT,
+            Value::Integer(constants::DEFAULT_WT_PORT),
+            constants::WT_PORT_DESC,
         ))
         .option(ConfigOption::new(
-            "watchtower-max-retry-time",
-            Value::Integer(900),
-            "the time (in seconds) after where the retrier will give up trying to send data to a temporary unreachable tower",
+            constants::WT_MAX_RETRY_TIME,
+            Value::Integer(constants::DEFAULT_WT_MAX_RETRY_TIME),
+            constants::WT_MAX_RETRY_TIME_DESC,
         ))
         .option(ConfigOption::new(
-            "watchtower-proxy",
+            constants::WT_PROXY,
             Value::OptString,
-            "Socks v5 proxy IP address and port for the watchtower client",
-        )).option(ConfigOption::new(
-            "watchtower-auto-retry-delay",
-            Value::Integer(86400),
-            "the time (in seconds) that a retrier will wait before auto-retrying a failed tower. Defaults to once a day",
-         ))
+            constants::WT_PROXY_DESC,
+        ))
         .option(ConfigOption::new(
-            "dev-watchtower-max-retry-interval",
-            Value::Integer(60),
-            "the maximum time (in seconds) for a retrier wait interval",
+            constants::WT_AUTO_RETRY_DELAY,
+            Value::Integer(constants::DEFAULT_WT_AUTO_RETRY_DELAY),
+            constants::WT_AUTO_RETRY_DELAY_DESC,
+        ))
+        .option(ConfigOption::new(
+            constants::DEV_WT_MAX_RETRY_INTERVAL,
+            Value::Integer(constants::DEFAULT_DEV_WT_MAX_RETRY_INTERVAL),
+            constants::DEV_WT_MAX_RETRY_INTERVAL_DESC,
         ))
         .rpcmethod(
-            "registertower",
-            "Registers the client public key (user id) with the tower.",
+            constants::RPC_REGISTER_TOWER,
+            constants::RPC_REGISTER_TOWER_DESC,
             register,
-        ).rpcmethod(
-            "getregistrationreceipt",
-            "Gets the latest registration receipt given a tower id.",
+        )
+        .rpcmethod(
+            constants::RPC_GET_REGISTRATION_RECEIPT,
+            constants::RPC_GET_REGISTRATION_RECEIPT_DESC,
             get_registration_receipt,
         )
         .rpcmethod(
-            "getappointment",
-            "Gets appointment data from the tower given the tower id and the locator.",
+            constants::RPC_GET_APPOINTMENT,
+            constants::RPC_GET_APPOINTMENT_DESC,
             get_appointment,
-        ).rpcmethod(
-            "getappointmentreceipt",
-            "Gets a (local) appointment receipt given a tower id and an locator.",
+        )
+        .rpcmethod(
+            constants::RPC_GET_APPOINTMENT_RECEIPT,
+            constants::RPC_GET_APPOINTMENT_RECEIPT_DESC,
             get_appointment_receipt,
         )
         .rpcmethod(
-            "getsubscriptioninfo",
-            "Gets the subscription information directly from the tower.",
+            constants::RPC_GET_SUBSCRIPTION_INFO,
+            constants::RPC_GET_SUBSCRIPTION_INFO_DESC,
             get_subscription_info,
         )
-        .rpcmethod("listtowers", "Lists all registered towers.", list_towers)
         .rpcmethod(
-            "gettowerinfo",
-            "Shows the info about a given tower.",
+            constants::RPC_LIST_TOWERS,
+            constants::RPC_LIST_TOWERS_DESC,
+            list_towers,
+        )
+        .rpcmethod(
+            constants::RPC_GET_TOWER_INFO,
+            constants::RPC_GET_TOWER_INFO_DESC,
             get_tower_info,
         )
         .rpcmethod(
-            "retrytower",
-            "Retries to send pending appointment to an unreachable tower.",
+            constants::RPC_RETRY_TOWER,
+            constants::RPC_RETRY_TOWER_DESC,
             retry_tower,
         )
         .rpcmethod(
-            "abandontower",
-            "Forgets about a tower and wipes all local data.",
+            constants::RPC_ABANDON_TOWER,
+            constants::RPC_ABANDON_TOWER_DESC,
             abandon_tower,
         )
-        .hook("commitment_revocation", on_commitment_revocation);
+        .hook(
+            constants::HOOK_COMMITMENT_REVOCATION,
+            on_commitment_revocation,
+        );
 
     // We're unwrapping here given it does not seem we actually have anything to check at the moment.
     // Change this so the plugin can be disabled soon if this happens not to be the case.
@@ -602,41 +606,48 @@ async fn main() -> Result<(), Error> {
 
     let (tx, rx) = unbounded_channel();
     let wt_client = Arc::new(Mutex::new(WTClient::new(data_dir, tx).await));
-    // FIXME: This is a workaround. Ideally, `cln_plugin::options::Value` will implement `as_u64` so we can simply call and unwrap
-    // given that we are certain the option exists.
-    wt_client.lock().unwrap().proxy =
-        if let Value::String(x) = midstate.option("watchtower-proxy").unwrap() {
-            if !x.is_empty() {
-                Some(x)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-    let max_elapsed_time =
-        if let Value::Integer(x) = midstate.option("watchtower-max-retry-time").unwrap() {
-            x as u16
-        } else {
-            // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
-            900
-        };
-    let auto_retry_delay =
-        if let Value::Integer(x) = midstate.option("watchtower-auto-retry-delay").unwrap() {
-            x as u16
-        } else {
-            // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
-            3600
-        };
-    let max_interval_time = if let Value::Integer(x) = midstate
-        .option("dev-watchtower-max-retry-interval")
+
+    wt_client.lock().unwrap().proxy = midstate
+        .option(constants::WT_PROXY)
         .unwrap()
-    {
-        x as u16
-    } else {
-        // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
-        60
-    };
+        .as_str()
+        .map(|x| x.to_owned());
+
+    let max_elapsed_time = u16::try_from(
+        midstate
+            .option(constants::WT_MAX_RETRY_TIME)
+            .unwrap()
+            .as_i64()
+            .unwrap(),
+    )
+    .map_err(|e| {
+        log::error!("{} out of range", constants::WT_MAX_RETRY_TIME);
+        e
+    })?;
+
+    let auto_retry_delay = u16::try_from(
+        midstate
+            .option(constants::WT_AUTO_RETRY_DELAY)
+            .unwrap()
+            .as_i64()
+            .unwrap(),
+    )
+    .map_err(|e| {
+        log::error!("{} out of range", constants::WT_AUTO_RETRY_DELAY);
+        e
+    })?;
+
+    let max_interval_time = u16::try_from(
+        midstate
+            .option(constants::DEV_WT_MAX_RETRY_INTERVAL)
+            .unwrap()
+            .as_i64()
+            .unwrap(),
+    )
+    .map_err(|e| {
+        log::error!("{} out of range", constants::DEV_WT_MAX_RETRY_INTERVAL);
+        e
+    })?;
 
     let plugin = midstate.start(wt_client.clone()).await?;
     tokio::spawn(async move {
