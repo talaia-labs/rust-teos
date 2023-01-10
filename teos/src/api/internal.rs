@@ -351,11 +351,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             Some(info) => Ok(Response::new(msgs::GetUserResponse {
                 available_slots: info.available_slots,
                 subscription_expiry: info.subscription_expiry,
-                appointments: info
-                    .appointments
-                    .iter()
-                    .map(|(uuid, _)| uuid.to_vec())
-                    .collect(),
+                appointments: info.appointments.keys().map(|uuid| uuid.to_vec()).collect(),
             })),
             None => Err(Status::new(Code::NotFound, "User not found")),
         }

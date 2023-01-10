@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 use std::env;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use home::home_dir;
 use serde_json::json;
@@ -21,7 +21,7 @@ use watchtower_plugin::net::http::{
     self, post_request, process_post_response, AddAppointmentError, ApiResponse, RequestError,
 };
 use watchtower_plugin::retrier::RetryManager;
-use watchtower_plugin::wt_client::WTClient;
+use watchtower_plugin::wt_client::{RevocationData, WTClient};
 use watchtower_plugin::TowerStatus;
 
 fn to_cln_error(e: RequestError) -> Error {
@@ -32,6 +32,27 @@ fn to_cln_error(e: RequestError) -> Error {
     };
     log::info!("{}", e);
     e
+}
+
+/// Sends fresh data to a retrier as long as is does not exist, or it does and its running.
+fn send_to_retrier(state: &MutexGuard<WTClient>, tower_id: TowerId, locator: Locator) {
+    if if let Some(status) = state.get_retrier_status(&tower_id) {
+        // A retrier in the retriers map can only be running or idle
+        status.is_running()
+    } else {
+        true
+    } {
+        state
+            .unreachable_towers
+            .send((tower_id, RevocationData::Fresh(locator)))
+            .unwrap();
+    } else {
+        log::debug!(
+            "Not sending data to idle retrier ({}, {})",
+            tower_id,
+            locator
+        )
+    }
 }
 
 /// Registers the client to a given tower.
@@ -286,38 +307,52 @@ async fn get_tower_info(
 
 /// Triggers a manual retry of a tower, tries to send all pending appointments to it.
 ///
-/// Only works if the tower is unreachable or there's been a subscription error.
+/// Only works if the tower is unreachable or there's been a subscription error (and the tower is not already being retried).
 async fn retry_tower(
     plugin: Plugin<Arc<Mutex<WTClient>>>,
     v: serde_json::Value,
 ) -> Result<serde_json::Value, Error> {
     let tower_id = TowerId::try_from(v).map_err(|e| anyhow!(e))?;
     let state = plugin.state().lock().unwrap();
-    if let Some(status) = state.get_tower_status(&tower_id) {
-        if status.is_temporary_unreachable() {
-            return Err(anyhow!("{} is already being retried", tower_id));
-        } else if !status.is_retryable() {
+    if let Some(tower_status) = state.get_tower_status(&tower_id) {
+        if let Some(retrier_status) = state.retriers.get(&tower_id) {
+            if retrier_status.is_idle() {
+                // We don't send any associated data in this case given the idle retrier already has it all.
+                state
+                    .unreachable_towers
+                    .send((tower_id, RevocationData::None))
+                    .map_err(|e| anyhow!(e))?;
+            } else {
+                // Status can only be running or idle for data in the retriers map.
+                return Err(anyhow!("{} is already being retried", tower_id));
+            }
+        } else if tower_status.is_retryable() {
+            // We do send associated data here given there is no retrier associated to this tower.
+            state
+                .unreachable_towers
+                .send((
+                    tower_id,
+                    RevocationData::Stale(
+                        state
+                            .towers
+                            .get(&tower_id)
+                            .unwrap()
+                            .pending_appointments
+                            .iter()
+                            .cloned()
+                            .collect(),
+                    ),
+                ))
+                .map_err(|e| anyhow!(e))?;
+        } else {
             return Err(anyhow!(
                 "Tower status must be unreachable or have a subscription issue to manually retry",
             ));
         }
-
-        for locator in state
-            .towers
-            .get(&tower_id)
-            .unwrap()
-            .pending_appointments
-            .iter()
-        {
-            state
-                .unreachable_towers
-                .send((tower_id, *locator))
-                .map_err(|e| anyhow!(e))?;
-        }
-        Ok(json!(format!("Retrying {}", tower_id)))
     } else {
-        Err(anyhow!("Unknown tower {}", tower_id))
+        return Err(anyhow!("Unknown tower {}", tower_id));
     }
+    Ok(json!(format!("Retrying {}", tower_id)))
 }
 
 /// Forgets about a tower wiping out all local data associated to it.
@@ -410,11 +445,7 @@ async fn on_commitment_revocation(
                             let mut state = plugin.state().lock().unwrap();
                             state.set_tower_status(tower_id, TowerStatus::TemporaryUnreachable);
                             state.add_pending_appointment(tower_id, &appointment);
-
-                            state
-                                .unreachable_towers
-                                .send((tower_id, appointment.locator))
-                                .unwrap();
+                            send_to_retrier(&state, tower_id, appointment.locator);
                         }
                     }
                     AddAppointmentError::ApiError(e) => match e.error_code {
@@ -427,11 +458,7 @@ async fn on_commitment_revocation(
                             let mut state = plugin.state().lock().unwrap();
                             state.set_tower_status(tower_id, TowerStatus::SubscriptionError);
                             state.add_pending_appointment(tower_id, &appointment);
-
-                            state
-                                .unreachable_towers
-                                .send((tower_id, appointment.locator))
-                                .unwrap();
+                            send_to_retrier(&state, tower_id, appointment.locator);
                         }
 
                         _ => {
@@ -482,11 +509,8 @@ async fn on_commitment_revocation(
             let mut state = plugin.state().lock().unwrap();
             state.add_pending_appointment(tower_id, &appointment);
 
-            if status.is_temporary_unreachable() {
-                state
-                    .unreachable_towers
-                    .send((tower_id, appointment.locator))
-                    .unwrap();
+            if !status.is_unreachable() {
+                send_to_retrier(&state, tower_id, appointment.locator);
             }
         }
     }
@@ -517,7 +541,11 @@ async fn main() -> Result<(), Error> {
             "watchtower-proxy",
             Value::OptString,
             "Socks v5 proxy IP address and port for the watchtower client",
-        ))
+        )).option(ConfigOption::new(
+            "watchtower-auto-retry-delay",
+            Value::Integer(86400),
+            "the time (in seconds) that a retrier will wait before auto-retrying a failed tower. Defaults to once a day",
+         ))
         .option(ConfigOption::new(
             "dev-watchtower-max-retry-interval",
             Value::Integer(60),
@@ -593,6 +621,13 @@ async fn main() -> Result<(), Error> {
             // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
             900
         };
+    let auto_retry_delay =
+        if let Value::Integer(x) = midstate.option("watchtower-auto-retry-delay").unwrap() {
+            x as u16
+        } else {
+            // We will never end up here, but we need to define an else. Should be fixed alongside the previous fixme.
+            3600
+        };
     let max_interval_time = if let Value::Integer(x) = midstate
         .option("dev-watchtower-max-retry-interval")
         .unwrap()
@@ -605,9 +640,15 @@ async fn main() -> Result<(), Error> {
 
     let plugin = midstate.start(wt_client.clone()).await?;
     tokio::spawn(async move {
-        RetryManager::new(wt_client, rx, max_elapsed_time, max_interval_time)
-            .manage_retry()
-            .await
+        RetryManager::new(
+            wt_client,
+            rx,
+            max_elapsed_time,
+            auto_retry_delay,
+            max_interval_time,
+        )
+        .manage_retry()
+        .await
     });
     plugin.join().await
 }

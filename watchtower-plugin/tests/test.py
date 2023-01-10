@@ -111,7 +111,36 @@ def test_unreachable_watchtower(node_factory, bitcoind, teosd):
     assert l2.rpc.gettowerinfo(tower_id)["status"] == "reachable"
 
 
-def test_retry_watchtower(node_factory, bitcoind, teosd):
+def test_auto_retry_watchtower(node_factory, bitcoind, teosd):
+    # The plugin is set to give up on retrying straight-away so we can test this fast.
+    l1, l2 = node_factory.line_graph(
+        2, opts=[{}, {"plugin": WT_PLUGIN, "allow_broken_log": True, "watchtower-max-retry-time": 1, "watchtower-auto-retry-delay": 1}]
+    )
+
+    # We need to register l2 with the tower
+    tower_id = teosd.cli.gettowerinfo()["tower_id"]
+    l2.rpc.registertower(tower_id)
+
+    # Stop the tower
+    teosd.stop()
+
+    # Make a new payment with an unreachable tower
+    l1.rpc.pay(l2.rpc.invoice(25000000, "lbl1", "desc1")["bolt11"])
+
+    # Wait until the tower has been flagged as unreachable
+    l2.daemon.wait_for_log(f"Starting to idle")
+    assert l2.rpc.gettowerinfo(tower_id)["status"] == "unreachable"
+    assert l2.rpc.gettowerinfo(tower_id)["pending_appointments"]
+
+    # Start the tower and retry it
+    teosd.start()
+
+    l2.daemon.wait_for_log(f"Finished idling. Flagging {tower_id} for retry")
+    l2.daemon.wait_for_log(f"Retry strategy succeeded for {tower_id}")
+    assert l2.rpc.gettowerinfo(tower_id)["status"] == "reachable"
+
+
+def test_manually_retry_watchtower(node_factory, bitcoind, teosd):
     # The plugin is set to give up on retrying straight-away so we can test this fast.
     l1, l2 = node_factory.line_graph(
         2, opts=[{}, {"plugin": WT_PLUGIN, "allow_broken_log": True, "watchtower-max-retry-time": 0}]
@@ -128,14 +157,16 @@ def test_retry_watchtower(node_factory, bitcoind, teosd):
     l1.rpc.pay(l2.rpc.invoice(25000000, "lbl1", "desc1")["bolt11"])
 
     # Wait until the tower has been flagged as unreachable
-    l2.daemon.wait_for_log(f"Setting {tower_id} as unreachable")
+    l2.daemon.wait_for_log(f"Starting to idle")
     assert l2.rpc.gettowerinfo(tower_id)["status"] == "unreachable"
     assert l2.rpc.gettowerinfo(tower_id)["pending_appointments"]
 
     # Start the tower and retry it
     teosd.start()
 
+    # Manual retry
     l2.rpc.retrytower(tower_id)
+    l2.daemon.wait_for_log(f"Manually finished idling. Flagging {tower_id} for retry")
     l2.daemon.wait_for_log(f"Retry strategy succeeded for {tower_id}")
     assert l2.rpc.gettowerinfo(tower_id)["status"] == "reachable"
 
