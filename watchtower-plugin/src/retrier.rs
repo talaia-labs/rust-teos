@@ -49,7 +49,7 @@ pub struct RetryManager {
     wt_client: Arc<Mutex<WTClient>>,
     unreachable_towers: UnboundedReceiver<(TowerId, RevocationData)>,
     max_elapsed_time_secs: u16,
-    auto_retry_delay: u16,
+    auto_retry_delay: u32,
     max_interval_time_secs: u16,
     retriers: HashMap<TowerId, Arc<Retrier>>,
 }
@@ -59,7 +59,7 @@ impl RetryManager {
         wt_client: Arc<Mutex<WTClient>>,
         unreachable_towers: UnboundedReceiver<(TowerId, RevocationData)>,
         max_elapsed_time_secs: u16,
-        auto_retry_delay: u16,
+        auto_retry_delay: u32,
         max_interval_time_secs: u16,
     ) -> Self {
         RetryManager {
@@ -595,8 +595,8 @@ mod tests {
     use crate::net::http::ApiError;
     use crate::test_utils::get_dummy_add_appointment_response;
 
-    const LONG_AUTO_RETRY_DELAY: u16 = 60;
-    const SHORT_AUTO_RETRY_DELAY: u16 = 3;
+    const LONG_AUTO_RETRY_DELAY: u32 = 60;
+    const SHORT_AUTO_RETRY_DELAY: u32 = 3;
     const API_DELAY: f64 = 0.5;
     const MAX_ELAPSED_TIME: u16 = 2;
     const MAX_INTERVAL_TIME: u16 = 1;

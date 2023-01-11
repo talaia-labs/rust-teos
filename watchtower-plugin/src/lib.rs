@@ -7,6 +7,7 @@ use teos_common::appointment::{Appointment, Locator};
 use teos_common::receipts::AppointmentReceipt;
 use teos_common::TowerId;
 
+pub mod constants;
 pub mod convert;
 pub mod dbm;
 pub mod net;
