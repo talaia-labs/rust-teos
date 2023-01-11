@@ -625,7 +625,7 @@ async fn main() -> Result<(), Error> {
         e
     })?;
 
-    let auto_retry_delay = u16::try_from(
+    let auto_retry_delay = u32::try_from(
         midstate
             .option(constants::WT_AUTO_RETRY_DELAY)
             .unwrap()
