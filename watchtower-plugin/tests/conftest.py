@@ -27,7 +27,9 @@ class TeosCLI:
     def _call(self, method_name, *args):
         try:
             r = subprocess.run(
-                ["teos-cli", f"--datadir={self.datadir}/teos", method_name, *args], capture_output=True, text=True
+                ["teos-cli", f"--datadir={self.datadir}/teos", method_name, *args],
+                capture_output=True,
+                text=True,
             )
             if r.returncode != 0:
                 result = ValueError(f"Unknown method {method_name}")

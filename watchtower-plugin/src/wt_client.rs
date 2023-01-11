@@ -13,6 +13,7 @@ use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
 use crate::dbm::DBM;
+use crate::net::ProxyInfo;
 use crate::retrier::RetrierStatus;
 use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
 
@@ -71,13 +72,21 @@ pub struct WTClient {
     /// The user identifier.
     pub user_id: UserId,
     /// Optional proxy
-    pub proxy: Option<String>,
+    pub proxy: Option<ProxyInfo>,
 }
 
 impl WTClient {
     pub async fn new(
         data_dir: PathBuf,
         unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
+    ) -> Self {
+        Self::with_proxy(data_dir, unreachable_towers, None).await
+    }
+
+    pub async fn with_proxy(
+        data_dir: PathBuf,
+        unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
+        proxy: Option<ProxyInfo>,
     ) -> Self {
         // Create data dir if it does not exist
         fs::create_dir_all(&data_dir).await.unwrap_or_else(|e| {
@@ -123,7 +132,7 @@ impl WTClient {
             dbm,
             user_sk,
             user_id,
-            proxy: None,
+            proxy,
         }
     }
 
@@ -484,7 +493,6 @@ mod tests {
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tower_net_addr = "talaia.watch".to_owned();
 
         let locator = generate_random_appointment(None).locator;
         let registration_receipt = get_random_registration_receipt();
@@ -501,7 +509,7 @@ mod tests {
 
         // Add the tower to the state and try again
         let tower_info = TowerInfo::new(
-            tower_net_addr.clone(),
+            "talaia.watch".to_owned(),
             registration_receipt.available_slots(),
             registration_receipt.subscription_start(),
             registration_receipt.subscription_expiry(),
@@ -510,7 +518,7 @@ mod tests {
             Vec::new(),
         );
         wt_client
-            .add_update_tower(tower_id, &tower_net_addr, &registration_receipt)
+            .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
             .unwrap();
         wt_client.add_appointment_receipt(
             tower_id,
@@ -534,7 +542,6 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
-        let tower_net_addr = "talaia.watch".to_owned();
 
         let registration_receipt = get_random_registration_receipt();
         let appointment = generate_random_appointment(None);
@@ -545,7 +552,7 @@ mod tests {
 
         // Add the tower to the state and try again
         let tower_info = TowerInfo::new(
-            tower_net_addr.clone(),
+            "talaia.watch".to_owned(),
             registration_receipt.available_slots(),
             registration_receipt.subscription_start(),
             registration_receipt.subscription_expiry(),
@@ -555,7 +562,7 @@ mod tests {
         );
 
         wt_client
-            .add_update_tower(tower_id, &tower_net_addr, &registration_receipt)
+            .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
             .unwrap();
         wt_client.add_pending_appointment(tower_id, &appointment);
 
@@ -578,7 +585,6 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
-        let tower_net_addr = "talaia.watch".to_owned();
 
         let registration_receipt = get_random_registration_receipt();
         let appointment = generate_random_appointment(None);
@@ -588,7 +594,7 @@ mod tests {
 
         // Add the tower to the state and try again
         wt_client
-            .add_update_tower(tower_id, &tower_net_addr, &registration_receipt)
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
             .unwrap();
         wt_client.add_pending_appointment(tower_id, &appointment);
 
@@ -610,7 +616,6 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
-        let tower_net_addr = "talaia.watch".to_owned();
 
         let registration_receipt = get_random_registration_receipt();
         let appointment = generate_random_appointment(None);
@@ -621,7 +626,7 @@ mod tests {
 
         // Add the tower to the state and try again
         let tower_info = TowerInfo::new(
-            tower_net_addr.clone(),
+            "talaia.watch".to_owned(),
             registration_receipt.available_slots(),
             registration_receipt.subscription_start(),
             registration_receipt.subscription_expiry(),
@@ -631,7 +636,7 @@ mod tests {
         );
 
         wt_client
-            .add_update_tower(tower_id, &tower_net_addr, &registration_receipt)
+            .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
             .unwrap();
         wt_client.add_invalid_appointment(tower_id, &appointment);
 
@@ -650,13 +655,12 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
-        let tower_net_addr = "talaia.watch".to_owned();
 
         let registration_receipt = get_random_registration_receipt();
         let appointment = generate_random_appointment(None);
 
         wt_client
-            .add_update_tower(tower_id, &tower_net_addr, &registration_receipt)
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
             .unwrap();
         wt_client.add_pending_appointment(tower_id, &appointment);
 
@@ -696,16 +700,16 @@ mod tests {
 
         let tower_id = get_random_user_id();
         let another_tower_id = get_random_user_id();
-        let tower_net_addr = "talaia.watch".to_owned();
+        let tower_net_addr = "talaia.watch";
 
         let registration_receipt = get_random_registration_receipt();
         let appointment = generate_random_appointment(None);
 
         wt_client
-            .add_update_tower(tower_id, &tower_net_addr, &registration_receipt)
+            .add_update_tower(tower_id, tower_net_addr, &registration_receipt)
             .unwrap();
         wt_client
-            .add_update_tower(another_tower_id, &tower_net_addr, &registration_receipt)
+            .add_update_tower(another_tower_id, tower_net_addr, &registration_receipt)
             .unwrap();
         wt_client.add_pending_appointment(tower_id, &appointment);
         wt_client.add_pending_appointment(another_tower_id, &appointment);
@@ -770,7 +774,6 @@ mod tests {
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tower_net_addr = "talaia.watch".to_owned();
 
         // If we call this on an unknown tower it will simply do nothing
         let appointment = generate_random_appointment(None);
@@ -782,7 +785,7 @@ mod tests {
         // // Add the tower to the state and try again
         let registration_receipt = get_random_registration_receipt();
         wt_client
-            .add_update_tower(tower_id, &tower_net_addr, &registration_receipt)
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
             .unwrap();
         wt_client.flag_misbehaving_tower(tower_id, proof.clone());
 
@@ -875,17 +878,11 @@ mod tests {
         let (tower2_sk, tower2_pk) = cryptography::get_random_keypair();
         let tower2_id = TowerId(tower2_pk);
 
-        let tower_info = TowerInfo::empty(
-            "talaia.watch".to_owned(),
-            receipt.available_slots(),
-            receipt.subscription_start(),
-            receipt.subscription_expiry(),
-        );
         wt_client
-            .add_update_tower(tower1_id, &tower_info.net_addr, &receipt)
+            .add_update_tower(tower1_id, "talaia.watch", &receipt)
             .unwrap();
         wt_client
-            .add_update_tower(tower2_id, &tower_info.net_addr, &receipt)
+            .add_update_tower(tower2_id, "talaia.watch", &receipt)
             .unwrap();
 
         let locator = generate_random_appointment(None).locator;

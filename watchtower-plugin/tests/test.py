@@ -1,4 +1,5 @@
 import pytest
+from pyln.client import RpcError
 from conftest import WT_PLUGIN
 
 
@@ -69,7 +70,10 @@ def test_watchtower(node_factory, bitcoind, teosd):
             assert l2.rpc.getappointment(tower_id, locator)["status"] == "dispute_responded"
         else:
             # Once the channel gets irrevocably resolved the tower will forget about it
-            assert l2.rpc.getappointment(tower_id, locator) == {"error": "Appointment not found", "error_code": 36}
+            assert l2.rpc.getappointment(tower_id, locator) == {
+                "error": "Appointment not found",
+                "error_code": 36,
+            }
 
     # Make sure the penalty outputs are in l2's wallet
     fund_txids = [o["txid"] for o in l2.rpc.listfunds()["outputs"]]
@@ -114,7 +118,16 @@ def test_unreachable_watchtower(node_factory, bitcoind, teosd):
 def test_auto_retry_watchtower(node_factory, bitcoind, teosd):
     # The plugin is set to give up on retrying straight-away so we can test this fast.
     l1, l2 = node_factory.line_graph(
-        2, opts=[{}, {"plugin": WT_PLUGIN, "allow_broken_log": True, "watchtower-max-retry-time": 1, "watchtower-auto-retry-delay": 1}]
+        2,
+        opts=[
+            {},
+            {
+                "plugin": WT_PLUGIN,
+                "allow_broken_log": True,
+                "watchtower-max-retry-time": 1,
+                "watchtower-auto-retry-delay": 1,
+            },
+        ],
     )
 
     # We need to register l2 with the tower
@@ -143,7 +156,15 @@ def test_auto_retry_watchtower(node_factory, bitcoind, teosd):
 def test_manually_retry_watchtower(node_factory, bitcoind, teosd):
     # The plugin is set to give up on retrying straight-away so we can test this fast.
     l1, l2 = node_factory.line_graph(
-        2, opts=[{}, {"plugin": WT_PLUGIN, "allow_broken_log": True, "watchtower-max-retry-time": 0}]
+        2,
+        opts=[
+            {},
+            {
+                "plugin": WT_PLUGIN,
+                "allow_broken_log": True,
+                "watchtower-max-retry-time": 0,
+            },
+        ],
     )
 
     # We need to register l2 with the tower
