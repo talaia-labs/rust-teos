@@ -12,6 +12,7 @@ use cln_plugin::options::{ConfigOption, Value};
 use cln_plugin::{anyhow, Builder, Error, Plugin};
 
 use teos_common::appointment::{Appointment, Locator};
+use teos_common::net::http::Endpoint;
 use teos_common::net::NetAddr;
 use teos_common::protos as common_msgs;
 use teos_common::TowerId;
@@ -170,7 +171,7 @@ async fn get_subscription_info(
     let response: common_msgs::GetSubscriptionInfoResponse = process_post_response(
         post_request(
             &tower_net_addr,
-            "get_subscription_info",
+            Endpoint::GetSubscriptionInfo,
             &common_msgs::GetSubscriptionInfoRequest { signature },
             &proxy,
         )
@@ -216,7 +217,7 @@ async fn get_appointment(
     let response: ApiResponse<common_msgs::GetAppointmentResponse> = process_post_response(
         post_request(
             &tower_net_addr,
-            "get_appointment",
+            Endpoint::GetAppointment,
             &common_msgs::GetAppointmentRequest {
                 locator: params.locator.to_vec(),
                 signature,

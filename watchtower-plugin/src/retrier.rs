@@ -586,6 +586,7 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use teos_common::errors;
+    use teos_common::net::http::Endpoint;
     use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
     use teos_common::test_utils::{
         generate_random_appointment, get_random_registration_receipt, get_random_user_id,
@@ -649,7 +650,7 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .delay(Duration::from_secs_f64(API_DELAY))
                 .header("content-type", "application/json")
@@ -784,7 +785,7 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -855,7 +856,7 @@ mod tests {
 
         // Prepare the mock response
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(400)
                 .delay(Duration::from_secs_f64(API_DELAY))
                 .header("content-type", "application/json")
@@ -956,7 +957,7 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .delay(Duration::from_secs_f64(API_DELAY))
                 .header("content-type", "application/json")
@@ -1082,7 +1083,7 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
         let add_appointment_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .delay(Duration::from_secs_f64(API_DELAY))
                 .header("content-type", "application/json")
@@ -1229,7 +1230,7 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -1315,7 +1316,7 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -1385,7 +1386,7 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -1451,7 +1452,7 @@ mod tests {
             .unwrap();
 
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(400)
                 .header("content-type", "application/json")
                 .json_body(json!(ApiError {
@@ -1500,7 +1501,7 @@ mod tests {
             .unwrap();
 
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(400)
                 .header("content-type", "application/json")
                 .json_body(json!(ApiError {

@@ -1,3 +1,5 @@
+pub mod http;
+
 use serde::Serialize;
 use std::fmt;
 

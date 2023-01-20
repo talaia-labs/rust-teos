@@ -3,6 +3,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use teos_common::appointment::Appointment;
 use teos_common::cryptography;
+use teos_common::net::http::Endpoint;
 use teos_common::net::NetAddr;
 use teos_common::protos as common_msgs;
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
@@ -65,7 +66,7 @@ pub async fn register(
     process_post_response(
         post_request(
             tower_net_addr,
-            "register",
+            Endpoint::Register,
             &common_msgs::RegisterRequest {
                 user_id: user_id.to_vec(),
             },
@@ -121,7 +122,13 @@ pub async fn send_appointment(
     };
 
     match process_post_response(
-        post_request(tower_net_addr, "add_appointment", &request_data, proxy).await,
+        post_request(
+            tower_net_addr,
+            Endpoint::AddAppointment,
+            &request_data,
+            proxy,
+        )
+        .await,
     )
     .await?
     {
@@ -151,7 +158,7 @@ pub async fn send_appointment(
 /// Generic function to post different types of requests to the tower.
 pub async fn post_request<S: Serialize>(
     tower_net_addr: &NetAddr,
-    endpoint: &str,
+    endpoint: Endpoint,
     data: S,
     proxy: &Option<ProxyInfo>,
 ) -> Result<Response, RequestError> {
@@ -178,7 +185,7 @@ pub async fn post_request<S: Serialize>(
     };
 
     client
-        .post(format!("{}/{}", tower_net_addr.net_addr(), endpoint))
+        .post(format!("{}{}", tower_net_addr.net_addr(), endpoint.path()))
         .json(&data)
         .send()
         .await
@@ -249,7 +256,7 @@ mod tests {
 
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/register");
+            when.method(POST).path(Endpoint::Register.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(registration_receipt));
@@ -286,7 +293,7 @@ mod tests {
     async fn test_register_deserialize_error() {
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/register");
+            when.method(POST).path(Endpoint::Register.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!([]));
@@ -318,7 +325,7 @@ mod tests {
 
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -350,7 +357,7 @@ mod tests {
 
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -382,7 +389,7 @@ mod tests {
 
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -437,7 +444,7 @@ mod tests {
     async fn test_send_appointment_deserialize_error() {
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!([]));
@@ -470,7 +477,7 @@ mod tests {
 
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(400)
                 .header("content-type", "application/json")
                 .json_body(json!(api_error));
@@ -498,9 +505,14 @@ mod tests {
             then.status(200).header("content-type", "application/json");
         });
 
-        let response = post_request(&NetAddr::new(server.base_url()), "", json!(""), &None)
-            .await
-            .unwrap();
+        let response = post_request(
+            &NetAddr::new(server.base_url()),
+            Endpoint::Register,
+            json!(""),
+            &None,
+        )
+        .await
+        .unwrap();
 
         api_mock.assert();
         assert!(matches!(response, Response { .. }));
@@ -511,7 +523,7 @@ mod tests {
         assert!(matches!(
             post_request(
                 &NetAddr::new("http://unreachable_url".to_owned()),
-                "",
+                Endpoint::Register,
                 json!(""),
                 &None,
             )
@@ -533,7 +545,13 @@ mod tests {
 
         // Any expected response work here as long as it cannot be properly deserialized
         let error = process_post_response::<ApiResponse<common_msgs::GetAppointmentResponse>>(
-            post_request(&NetAddr::new(server.base_url()), "", json!(""), &None).await,
+            post_request(
+                &NetAddr::new(server.base_url()),
+                Endpoint::GetAppointment,
+                json!(""),
+                &None,
+            )
+            .await,
         )
         .await
         .unwrap_err();
