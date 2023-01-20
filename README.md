@@ -66,13 +66,13 @@ For regtest, it should look like:
 btc_network = regtest
 ```
 
-### Running `teosd` with tor
+### Running `teosd` with Tor
 
 This requires a Tor daemon running on the same machine as `teosd` and a control port open on that daemon.
 
 Download Tor from the [torproject site](https://www.torproject.org/download/).
 
-To open tor's control port, you add the following to the Tor config file ([source](https://2019.www.torproject.org/docs/faq.html.en#torrc)):
+To open Tor's control port, you add the following to the Tor config file ([source](https://2019.www.torproject.org/docs/faq.html.en#torrc)):
 
 ```
 ## The port on which Tor will listen for local connections from Tor
