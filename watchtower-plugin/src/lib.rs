@@ -4,6 +4,7 @@ use std::fmt;
 use serde::Serialize;
 
 use teos_common::appointment::{Appointment, Locator};
+use teos_common::net::NetAddr;
 use teos_common::receipts::AppointmentReceipt;
 use teos_common::TowerId;
 
@@ -101,7 +102,8 @@ impl TowerStatus {
 /// Summarized data associated with a given tower.
 #[derive(Clone, Serialize, Debug, PartialEq, Eq)]
 pub struct TowerSummary {
-    pub net_addr: String,
+    #[serde(flatten)]
+    pub net_addr: NetAddr,
     pub available_slots: u32,
     subscription_start: u32,
     pub subscription_expiry: u32,
@@ -121,7 +123,7 @@ impl TowerSummary {
         subscription_expiry: u32,
     ) -> Self {
         Self {
-            net_addr,
+            net_addr: NetAddr::new(net_addr),
             available_slots,
             subscription_start,
             subscription_expiry,
@@ -141,7 +143,7 @@ impl TowerSummary {
         invalid_appointments: HashSet<Locator>,
     ) -> Self {
         Self {
-            net_addr,
+            net_addr: NetAddr::new(net_addr),
             available_slots,
             subscription_start,
             subscription_expiry,
@@ -165,7 +167,7 @@ impl TowerSummary {
         subscription_start: u32,
         subscription_expiry: u32,
     ) {
-        self.net_addr = net_addr;
+        self.net_addr = NetAddr::new(net_addr);
         self.available_slots = available_slots;
         self.subscription_start = subscription_start;
         self.subscription_expiry = subscription_expiry;
@@ -364,6 +366,12 @@ mod tests {
 
         use teos_common::test_utils::generate_random_appointment;
 
+        impl TowerSummary {
+            pub fn set_net_addr(&mut self, net_addr: String) {
+                self.net_addr = NetAddr::new(net_addr);
+            }
+        }
+
         #[test]
         fn test_new() {
             let net_addr: String = "addr".to_owned();
@@ -377,7 +385,7 @@ mod tests {
             assert_eq!(
                 tower_summary,
                 TowerSummary {
-                    net_addr,
+                    net_addr: NetAddr::new(net_addr),
                     available_slots: AVAILABLE_SLOTS,
                     subscription_start: SUBSCRIPTION_START,
                     subscription_expiry: SUBSCRIPTION_EXPIRY,
@@ -408,7 +416,7 @@ mod tests {
             assert_eq!(
                 tower_summary,
                 TowerSummary {
-                    net_addr,
+                    net_addr: NetAddr::new(net_addr),
                     available_slots: AVAILABLE_SLOTS,
                     subscription_start: SUBSCRIPTION_START,
                     subscription_expiry: SUBSCRIPTION_EXPIRY,

@@ -12,6 +12,7 @@ use cln_plugin::options::{ConfigOption, Value};
 use cln_plugin::{anyhow, Builder, Error, Plugin};
 
 use teos_common::appointment::{Appointment, Locator};
+use teos_common::net::NetAddr;
 use teos_common::protos as common_msgs;
 use teos_common::TowerId;
 use teos_common::{cryptography, errors};
@@ -20,6 +21,7 @@ use watchtower_plugin::convert::{CommitmentRevocation, GetAppointmentParams, Reg
 use watchtower_plugin::net::http::{
     self, post_request, process_post_response, AddAppointmentError, ApiResponse, RequestError,
 };
+use watchtower_plugin::net::ProxyInfo;
 use watchtower_plugin::retrier::RetryManager;
 use watchtower_plugin::wt_client::{RevocationData, WTClient};
 use watchtower_plugin::{constants, TowerStatus};
@@ -67,7 +69,7 @@ async fn register(
     v: serde_json::Value,
 ) -> Result<serde_json::Value, Error> {
     let params = RegisterParams::try_from(v).map_err(|x| anyhow!(x))?;
-    let host = params.host.unwrap_or_else(|| "localhost".to_owned());
+    let mut host = params.host.unwrap_or_else(|| "localhost".to_owned());
     let tower_id = params.tower_id;
     let user_id = plugin.state().lock().unwrap().user_id;
 
@@ -80,14 +82,16 @@ async fn register(
             .map_err(|_| anyhow!("{} out of range", constants::WT_PORT))?,
     );
 
-    let mut tower_net_addr = format!("{}:{}", host, port);
-    if !tower_net_addr.starts_with("http") {
-        tower_net_addr = format!("http://{}", tower_net_addr)
-    }
+    let tower_net_addr = {
+        if !host.starts_with("http://") {
+            host = format!("http://{}", host)
+        }
+        NetAddr::new(format!("{}:{}", host, port))
+    };
 
     let proxy = plugin.state().lock().unwrap().proxy.clone();
 
-    let receipt = http::register(tower_id, user_id, &tower_net_addr, proxy)
+    let receipt = http::register(tower_id, user_id, &tower_net_addr, &proxy)
         .await
         .map_err(|e| {
             let mut state = plugin.state().lock().unwrap();
@@ -107,7 +111,7 @@ async fn register(
         .state()
         .lock()
         .unwrap()
-        .add_update_tower(tower_id, &tower_net_addr, &receipt).map_err(|e| {
+        .add_update_tower(tower_id, tower_net_addr.net_addr(), &receipt).map_err(|e| {
             if e.is_expiry() {
                 anyhow!("Registration receipt contains a subscription expiry that is not higher than the one we are currently registered for")
             } else {
@@ -161,14 +165,14 @@ async fn get_subscription_info(
         }
     }?;
 
-    let get_subscription_info = format!("{}/get_subscription_info", tower_net_addr);
     let signature = cryptography::sign("get subscription info".as_bytes(), &user_sk).unwrap();
 
     let response: common_msgs::GetSubscriptionInfoResponse = process_post_response(
         post_request(
-            &get_subscription_info,
+            &tower_net_addr,
+            "get_subscription_info",
             &common_msgs::GetSubscriptionInfoRequest { signature },
-            proxy,
+            &proxy,
         )
         .await,
     )
@@ -203,7 +207,6 @@ async fn get_appointment(
         }
     }?;
 
-    let get_appointment_endpoint = format!("{}/get_appointment", tower_net_addr);
     let signature = cryptography::sign(
         format!("get appointment {}", params.locator).as_bytes(),
         &user_sk,
@@ -212,12 +215,13 @@ async fn get_appointment(
 
     let response: ApiResponse<common_msgs::GetAppointmentResponse> = process_post_response(
         post_request(
-            &get_appointment_endpoint,
+            &tower_net_addr,
+            "get_appointment",
             &common_msgs::GetAppointmentRequest {
                 locator: params.locator.to_vec(),
                 signature,
             },
-            proxy,
+            &proxy,
         )
         .await,
     )
@@ -411,14 +415,7 @@ async fn on_commitment_revocation(
 
     for (tower_id, net_addr, status) in towers {
         if status.is_reachable() {
-            match http::add_appointment(
-                tower_id,
-                &net_addr,
-                proxy.clone(),
-                &appointment,
-                &signature,
-            )
-            .await
+            match http::add_appointment(tower_id, &net_addr, &proxy, &appointment, &signature).await
             {
                 Ok((slots, receipt)) => {
                     plugin
@@ -532,11 +529,6 @@ async fn main() -> Result<(), Error> {
             constants::WT_MAX_RETRY_TIME_DESC,
         ))
         .option(ConfigOption::new(
-            constants::WT_PROXY,
-            Value::OptString,
-            constants::WT_PROXY_DESC,
-        ))
-        .option(ConfigOption::new(
             constants::WT_AUTO_RETRY_DELAY,
             Value::Integer(constants::DEFAULT_WT_AUTO_RETRY_DELAY),
             constants::WT_AUTO_RETRY_DELAY_DESC,
@@ -605,13 +597,20 @@ async fn main() -> Result<(), Error> {
     };
 
     let (tx, rx) = unbounded_channel();
-    let wt_client = Arc::new(Mutex::new(WTClient::new(data_dir, tx).await));
-
-    wt_client.lock().unwrap().proxy = midstate
-        .option(constants::WT_PROXY)
-        .unwrap()
-        .as_str()
-        .map(|x| x.to_owned());
+    let wt_client = Arc::new(Mutex::new(
+        WTClient::with_proxy(
+            data_dir,
+            tx,
+            midstate.configuration().proxy.map(|proxy| {
+                // We don't need to inform `always-use-proxy` needing `proxy` to work. This is done by CLN already when needed.
+                ProxyInfo::new(
+                    proxy,
+                    midstate.configuration().always_use_proxy.unwrap_or(false),
+                )
+            }),
+        )
+        .await,
+    ));
 
     let max_elapsed_time = u16::try_from(
         midstate

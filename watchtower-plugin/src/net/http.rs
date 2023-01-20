@@ -3,10 +3,12 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use teos_common::appointment::Appointment;
 use teos_common::cryptography;
+use teos_common::net::NetAddr;
 use teos_common::protos as common_msgs;
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
+use crate::net::ProxyInfo;
 use crate::MisbehaviorProof;
 
 /// Represents a generic api response.
@@ -56,13 +58,14 @@ impl From<RequestError> for AddAppointmentError {
 pub async fn register(
     tower_id: TowerId,
     user_id: UserId,
-    tower_net_addr: &str,
-    proxy: Option<String>,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
 ) -> Result<RegistrationReceipt, RequestError> {
     log::info!("Registering in the Eye of Satoshi (tower_id={})", tower_id);
     process_post_response(
         post_request(
-            &format!("{}/register", tower_net_addr),
+            tower_net_addr,
+            "register",
             &common_msgs::RegisterRequest {
                 user_id: user_id.to_vec(),
             },
@@ -85,8 +88,8 @@ pub async fn register(
 /// Encapsulates the logging and response parsing of sending and appointment to the tower.
 pub async fn add_appointment(
     tower_id: TowerId,
-    tower_net_addr: &str,
-    proxy: Option<String>,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
 ) -> Result<(u32, AppointmentReceipt), AddAppointmentError> {
@@ -107,8 +110,8 @@ pub async fn add_appointment(
 /// Handles the logic of interacting with the `add_appointment` endpoint of the tower.
 pub async fn send_appointment(
     tower_id: TowerId,
-    tower_net_addr: &str,
-    proxy: Option<String>,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
 ) -> Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointmentError> {
@@ -118,12 +121,7 @@ pub async fn send_appointment(
     };
 
     match process_post_response(
-        post_request(
-            &format!("{}/add_appointment", tower_net_addr),
-            &request_data,
-            proxy,
-        )
-        .await,
+        post_request(tower_net_addr, "add_appointment", &request_data, proxy).await,
     )
     .await?
     {
@@ -152,40 +150,50 @@ pub async fn send_appointment(
 
 /// Generic function to post different types of requests to the tower.
 pub async fn post_request<S: Serialize>(
+    tower_net_addr: &NetAddr,
     endpoint: &str,
     data: S,
-    proxy: Option<String>,
+    proxy: &Option<ProxyInfo>,
 ) -> Result<Response, RequestError> {
-    let url = reqwest::Url::parse(endpoint).map_err(|e| {
-        RequestError::ConnectionError(format!("Cannot connect to the given URL. {}", e))
-    })?;
-    let client = if url.host_str().unwrap().ends_with(".onion") {
-        if let Some(proxy) = proxy {
-            let proxy = reqwest::Proxy::http(format!("socks5h://{}", proxy))
-                .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?;
+    let client = if let Some(proxy) = proxy {
+        if proxy.always_use || tower_net_addr.is_onion() {
             reqwest::Client::builder()
-                .proxy(proxy)
+                .proxy(
+                    reqwest::Proxy::http(proxy.get_socks_addr())
+                        .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?,
+                )
                 .build()
                 .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?
         } else {
+            reqwest::Client::new()
+        }
+    } else {
+        // If there is no proxy we only build the client as long as the address is not onion
+        if tower_net_addr.is_onion() {
             return Err(RequestError::ConnectionError(
                 "Cannot connect to an onion address without a proxy".to_owned(),
             ));
         }
-    } else {
         reqwest::Client::new()
     };
 
-    client.post(endpoint).json(&data).send().await.map_err(|e| {
-        log::debug!("An error ocurred when sending data to the tower: {}", e);
-        if e.is_connect() | e.is_timeout() {
-            RequestError::ConnectionError(
-                "Cannot connect to the tower. Connection refused".to_owned(),
-            )
-        } else {
-            RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".to_owned())
-        }
-    })
+    client
+        .post(format!("{}/{}", tower_net_addr.net_addr(), endpoint))
+        .json(&data)
+        .send()
+        .await
+        .map_err(|e| {
+            log::debug!("An error ocurred when sending data to the tower: {}", e);
+            if e.is_connect() | e.is_timeout() {
+                RequestError::ConnectionError(
+                    "Cannot connect to the tower. Connection refused".to_owned(),
+                )
+            } else {
+                RequestError::Unexpected(
+                    "Unexpected error ocurred (see logs for more info)".to_owned(),
+                )
+            }
+        })
 }
 
 /// Generic function to process the response of a given post request.
@@ -250,8 +258,8 @@ mod tests {
         let receipt = register(
             TowerId(tower_pk),
             registration_receipt.user_id(),
-            &format!("http://{}", server.address()),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
         )
         .await
         .unwrap();
@@ -265,8 +273,8 @@ mod tests {
         let error = register(
             get_random_user_id(),
             get_random_user_id(),
-            "http://server_addr",
-            None,
+            &NetAddr::new("http://server_addr".to_owned()),
+            &None,
         )
         .await
         .unwrap_err();
@@ -287,8 +295,8 @@ mod tests {
         let error = register(
             get_random_user_id(),
             get_random_user_id(),
-            &format!("http://{}", server.address()),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
         )
         .await
         .unwrap_err();
@@ -318,8 +326,8 @@ mod tests {
 
         let (response, receipt) = add_appointment(
             TowerId(tower_pk),
-            &server.base_url(),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -350,8 +358,8 @@ mod tests {
 
         let (response, receipt) = send_appointment(
             TowerId(tower_pk),
-            &server.base_url(),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -383,8 +391,8 @@ mod tests {
         let tower_id = get_random_user_id();
         let error = send_appointment(
             tower_id,
-            &server.base_url(),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -410,8 +418,8 @@ mod tests {
     async fn test_send_appointment_connection_error() {
         let error = send_appointment(
             get_random_user_id(),
-            "http://server_addr",
-            None,
+            &NetAddr::new("http://server_addr".to_owned()),
+            &None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -437,8 +445,8 @@ mod tests {
 
         let error = send_appointment(
             get_random_user_id(),
-            &server.base_url(),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -470,8 +478,8 @@ mod tests {
 
         let error = send_appointment(
             get_random_user_id(),
-            &server.base_url(),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -490,7 +498,7 @@ mod tests {
             then.status(200).header("content-type", "application/json");
         });
 
-        let response = post_request(&server.base_url(), json!(""), None)
+        let response = post_request(&NetAddr::new(server.base_url()), "", json!(""), &None)
             .await
             .unwrap();
 
@@ -500,12 +508,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_post_request_connection_error() {
-        let unreachable_server_url = "http://server_addr";
-
         assert!(matches!(
-            post_request(unreachable_server_url, json!(""), None,)
-                .await
-                .unwrap_err(),
+            post_request(
+                &NetAddr::new("http://unreachable_url".to_owned()),
+                "",
+                json!(""),
+                &None,
+            )
+            .await
+            .unwrap_err(),
             RequestError::ConnectionError { .. }
         ));
     }
@@ -522,7 +533,7 @@ mod tests {
 
         // Any expected response work here as long as it cannot be properly deserialized
         let error = process_post_response::<ApiResponse<common_msgs::GetAppointmentResponse>>(
-            post_request(&server.base_url(), json!(""), None).await,
+            post_request(&NetAddr::new(server.base_url()), "", json!(""), &None).await,
         )
         .await
         .unwrap_err();

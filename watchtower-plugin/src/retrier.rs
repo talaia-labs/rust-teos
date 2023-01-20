@@ -451,7 +451,7 @@ impl Retrier {
 
         // If the tower state is subscription_error we need to re-register first. If we cannot, then the retry is aborted.
         if status.is_subscription_error() {
-            let receipt = http::register(tower_id, user_id, &net_addr, proxy.clone())
+            let receipt = http::register(tower_id, user_id, &net_addr, &proxy)
                 .await
                 .map_err(|e| {
                     log::debug!("Cannot renew registration with tower. Error: {:?}", e);
@@ -466,7 +466,7 @@ impl Retrier {
             self.wt_client
                 .lock()
                 .unwrap()
-                .add_update_tower(tower_id, &net_addr, &receipt)
+                .add_update_tower(tower_id, net_addr.net_addr(), &receipt)
                 .map_err(|e| {
                     let reason = if e.is_expiry() {
                         "Registration receipt contains a subscription expiry that is not higher than the one we are currently registered for"
@@ -491,7 +491,7 @@ impl Retrier {
                 match http::add_appointment(
                     tower_id,
                     &net_addr,
-                    proxy.clone(),
+                    &proxy,
                     &appointment,
                     &cryptography::sign(&appointment.to_vec(), &user_sk).unwrap(),
                 )
@@ -1242,7 +1242,7 @@ mod tests {
             .towers
             .get_mut(&tower_id)
             .unwrap()
-            .net_addr = server.base_url();
+            .set_net_addr(server.base_url());
 
         // Check pending data is still there now, and is it not once the retrier succeeds
         assert_eq!(
