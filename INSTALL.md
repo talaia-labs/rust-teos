@@ -15,3 +15,7 @@ cargo test
 ```
 
 Please refer to the cargo documentation for more detailed instructions.
+
+# Systemd setup for backend
+
+Refer to [contrib](contrib/init/README.md) for a detailed explanation of how to set up your systemd service for `teosd`.

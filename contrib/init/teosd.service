@@ -1,0 +1,45 @@
+[Unit]
+Description=The Eye of Satoshi daemon
+After=bitcoind.service network.target
+Requires=bitcoind.service
+Wants=network.target
+
+[Service]
+ExecStart=/home/teos/.cargo/bin/teosd
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=teos
+
+# Process management
+####################
+Type=simple
+Restart=on-failure
+TimeoutSec=300
+RestartSec=60
+
+# Directory creation and permissions
+####################################
+User=teos
+Group=teos
+
+# Hardening measures
+####################
+# Provide a private /tmp and /var/tmp.
+PrivateTmp=true
+
+# Mount /usr, /boot/ and /etc read-only for the process.
+ProtectSystem=full
+
+# Disallow the process and all of its children to gain
+# new privileges through execve().
+NoNewPrivileges=true
+
+# Use a new /dev namespace only populated with API pseudo devices
+# such as /dev/null, /dev/zero and /dev/random.
+PrivateDevices=true
+
+# Deny the creation of writable and executable memory mappings.
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
