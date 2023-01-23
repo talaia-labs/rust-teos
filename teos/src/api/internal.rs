@@ -232,8 +232,15 @@ impl PrivateTowerServices for Arc<InternalAPI> {
     /// Internally calls [Watcher::get_all_watcher_appointments] and [Watcher::get_all_responder_trackers].
     async fn get_all_appointments(
         &self,
-        _: Request<()>,
+        request: Request<()>,
     ) -> Result<Response<msgs::GetAllAppointmentsResponse>, Status> {
+        log::debug!(
+            "Received a get_all_appointments request from {}",
+            request
+                .remote_addr()
+                .map_or("an unknown address".to_owned(), |a| a.to_string())
+        );
+
         let mut all_appointments = Vec::new();
 
         for (_, appointment) in self.watcher.get_all_watcher_appointments().into_iter() {
@@ -265,6 +272,13 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         &self,
         request: tonic::Request<msgs::GetAppointmentsRequest>,
     ) -> Result<tonic::Response<msgs::GetAppointmentsResponse>, Status> {
+        log::debug!(
+            "Received a get_appointments requests from {}",
+            request
+                .remote_addr()
+                .map_or("an unknown address".to_owned(), |a| a.to_string())
+        );
+
         let mut matching_appointments = vec![];
         let locator = Locator::from_slice(&request.into_inner().locator).map_err(|_| {
             Status::new(
@@ -309,8 +323,15 @@ impl PrivateTowerServices for Arc<InternalAPI> {
     /// and [Watcher::get_trackers_count].
     async fn get_tower_info(
         &self,
-        _: Request<()>,
+        request: Request<()>,
     ) -> Result<Response<msgs::GetTowerInfoResponse>, Status> {
+        log::debug!(
+            "Received a get_tower_info request from {}",
+            request
+                .remote_addr()
+                .map_or("an unknown address".to_owned(), |a| a.to_string())
+        );
+
         Ok(Response::new(msgs::GetTowerInfoResponse {
             tower_id: self.watcher.tower_id.to_vec(),
             addresses: self.get_addresses().clone(),
@@ -323,7 +344,17 @@ impl PrivateTowerServices for Arc<InternalAPI> {
 
     /// Get user endpoint. Gets all users in the tower. Part of the private API.
     /// Internally calls [Watcher::get_user_ids].
-    async fn get_users(&self, _: Request<()>) -> Result<Response<msgs::GetUsersResponse>, Status> {
+    async fn get_users(
+        &self,
+        request: Request<()>,
+    ) -> Result<Response<msgs::GetUsersResponse>, Status> {
+        log::debug!(
+            "Received a get_users requests from {}",
+            request
+                .remote_addr()
+                .map_or("an unknown address".to_owned(), |a| a.to_string())
+        );
+
         let user_ids = self
             .watcher
             .get_user_ids()
@@ -340,6 +371,13 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         &self,
         request: Request<msgs::GetUserRequest>,
     ) -> Result<Response<msgs::GetUserResponse>, Status> {
+        log::debug!(
+            "Received a get_user request from {}",
+            request
+                .remote_addr()
+                .map_or("an unknown address".to_owned(), |a| a.to_string())
+        );
+
         let user_id = UserId::from_slice(&request.into_inner().user_id).map_err(|_| {
             Status::new(
                 Code::InvalidArgument,
@@ -358,10 +396,15 @@ impl PrivateTowerServices for Arc<InternalAPI> {
     }
 
     /// Stop endpoint. Stops the tower daemon. Part of the private API.
-    async fn stop(&self, _: Request<()>) -> Result<Response<()>, Status> {
+    async fn stop(&self, request: Request<()>) -> Result<Response<()>, Status> {
         self.shutdown_trigger.trigger();
 
-        log::debug!("Received shutting down signal, notifying components");
+        log::debug!(
+            "Received a shutting down request from {}, notifying components",
+            request
+                .remote_addr()
+                .map_or("an unknown address".to_owned(), |a| a.to_string())
+        );
         Ok(Response::new(()))
     }
 }
