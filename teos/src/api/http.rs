@@ -98,13 +98,13 @@ fn parse_grpc_response<T: serde::Serialize>(
     match result {
         Ok(r) => {
             let inner = r.into_inner();
-            log::info!("Request succeeded");
+            log::debug!("Request succeeded");
             log::debug!("Response: {}", serde_json::json!(inner));
             (reply::json(&inner), StatusCode::OK)
         }
         Err(s) => {
             let (status_code, error_code) = match_status(&s);
-            log::info!("Request failed, error_code={}", error_code);
+            log::debug!("Request failed, error_code={}", error_code);
             log::debug!("Response: {}", serde_json::json!(s.message()));
             (
                 reply::json(&ApiError::new(s.message().into(), error_code)),
@@ -119,10 +119,10 @@ async fn register(
     addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
-    match addr {
-        Some(a) => log::info!("Received register request from {}", a),
-        None => log::info!("Received register request from unknown address"),
-    }
+    log::debug!(
+        "Received a register request from {}",
+        addr.map_or("an unknown address".to_owned(), |a| a.to_string())
+    );
 
     let user_id = req.user_id.clone();
     if user_id.is_empty() {
@@ -145,10 +145,10 @@ async fn add_appointment(
     addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
-    match addr {
-        Some(a) => log::info!("Received add_appointment request from {}", a),
-        None => log::info!("Received add_appointment request from unknown address"),
-    }
+    log::debug!(
+        "Received an add_appointment request from {}",
+        addr.map_or("an unknown address".to_owned(), |a| a.to_string())
+    );
 
     if let Some(a) = &req.appointment {
         if a.locator.is_empty() {
@@ -177,10 +177,10 @@ async fn get_appointment(
     addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
-    match addr {
-        Some(a) => log::info!("Received get_appointment request from {}", a),
-        None => log::info!("Received get_appointment request from unknown address"),
-    }
+    log::debug!(
+        "Received an get_appointment request from {}",
+        addr.map_or("an unknown address".to_owned(), |a| a.to_string())
+    );
 
     if req.locator.is_empty() {
         return Err(ApiError::empty_field("locator"));
@@ -205,10 +205,10 @@ async fn get_subscription_info(
     addr: Option<std::net::SocketAddr>,
     mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
-    match addr {
-        Some(a) => log::info!("Received get_subscription_info request from {}", a),
-        None => log::info!("Received get_subscription_info request from unknown address"),
-    }
+    log::debug!(
+        "Received an get_subscription_info request from {}",
+        addr.map_or("an unknown address".to_owned(), |a| a.to_string())
+    );
 
     if req.signature.is_empty() {
         return Err(ApiError::empty_field("signature"));
