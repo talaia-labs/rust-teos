@@ -2979,7 +2979,7 @@ dependencies = [
 
 [[package]]
 name = "teos"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "bitcoin",
  "bitcoincore-rpc",
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "teos-common"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "bitcoin",
  "chacha20poly1305",
@@ -3744,7 +3744,7 @@ checksum = "6a89911bd99e5f3659ec4acf9c4d93b0a90fe4a2a11f15328472058edc5261be"
 
 [[package]]
 name = "watchtower-plugin"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "backoff",
  "bitcoin",
