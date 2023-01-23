@@ -17,7 +17,7 @@ pub fn data_dir_absolute_path(data_dir: String) -> PathBuf {
 }
 
 pub fn from_file<T: Default + serde::de::DeserializeOwned>(path: PathBuf) -> T {
-    match std::fs::read(&path) {
+    match std::fs::read(path) {
         Ok(file_content) => toml::from_slice::<T>(&file_content).map_or_else(
             |e| {
                 eprintln!("Couldn't parse config file: {}", e);
@@ -62,7 +62,7 @@ pub struct Opt {
     #[structopt(long)]
     pub rpc_port: Option<u16>,
 
-    /// Network bitcoind is connected to. Either bitcoin, testnet, signet or regtest [default: bitcoin]
+    /// Network bitcoind is connected to. Either mainnet, testnet, signet or regtest [default: mainnet]
     #[structopt(long)]
     pub btc_network: Option<String>,
 
@@ -90,6 +90,10 @@ pub struct Opt {
     #[structopt(long)]
     pub debug: bool,
 
+    /// Runs third party libs in debug mode
+    #[structopt(long)]
+    pub deps_debug: bool,
+
     /// Overwrites the tower secret key. THIS IS IRREVERSIBLE AND WILL CHANGE YOUR TOWER ID
     #[structopt(long)]
     pub overwrite_key: bool,
@@ -102,7 +106,7 @@ pub struct Opt {
     #[structopt(long)]
     pub tor_control_port: Option<u16>,
 
-    /// Port for the onion hidden service to listen on [default: 2121]
+    /// Port for the onion hidden service to listen on [default: 9814]
     #[structopt(long)]
     pub onion_hidden_service_port: Option<u16>,
 }
@@ -133,6 +137,7 @@ pub struct Config {
 
     // Flags
     pub debug: bool,
+    pub deps_debug: bool,
     pub overwrite_key: bool,
 
     // General
@@ -191,6 +196,7 @@ impl Config {
 
         self.tor_support |= options.tor_support;
         self.debug |= options.debug;
+        self.deps_debug |= options.deps_debug;
         self.overwrite_key = options.overwrite_key;
     }
 
@@ -251,7 +257,7 @@ impl Default for Config {
             api_port: 9814,
             tor_support: false,
             tor_control_port: 9051,
-            onion_hidden_service_port: 2121,
+            onion_hidden_service_port: 9814,
             rpc_bind: "127.0.0.1".into(),
             rpc_port: 8814,
             btc_network: "mainnet".into(),
@@ -261,6 +267,7 @@ impl Default for Config {
             btc_rpc_port: 0,
 
             debug: false,
+            deps_debug: false,
             overwrite_key: false,
             subscription_slots: 10000,
             subscription_duration: 4320,
@@ -295,6 +302,7 @@ mod tests {
                 data_dir: String::from("~/.teos"),
 
                 debug: false,
+                deps_debug: false,
                 overwrite_key: false,
             }
         }

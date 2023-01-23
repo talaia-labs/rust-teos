@@ -1,4 +1,5 @@
-use simple_logger::init_with_level;
+use log::LevelFilter;
+use simple_logger::SimpleLogger;
 use std::fs;
 use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut};
@@ -18,19 +19,21 @@ use lightning_block_sync::poll::{
 use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
 
 use teos::api::internal::InternalAPI;
-use teos::api::{http, tor};
+use teos::api::{http, tor::TorAPI};
 use teos::bitcoin_cli::BitcoindClient;
 use teos::carrier::Carrier;
 use teos::chain_monitor::ChainMonitor;
 use teos::config::{self, Config, Opt};
 use teos::dbm::DBM;
 use teos::gatekeeper::Gatekeeper;
+use teos::protos as msgs;
 use teos::protos::private_tower_services_server::PrivateTowerServicesServer;
 use teos::protos::public_tower_services_server::PublicTowerServicesServer;
 use teos::responder::Responder;
 use teos::tls::tls_init;
 use teos::watcher::Watcher;
 
+use teos_common::constants::IRREVOCABLY_RESOLVED;
 use teos_common::cryptography::get_random_keypair;
 use teos_common::TowerId;
 
@@ -43,7 +46,7 @@ where
     B: DerefMut<Target = T> + Sized + Send + Sync,
     T: BlockSource,
 {
-    let mut last_n_blocks = Vec::new();
+    let mut last_n_blocks = Vec::with_capacity(n);
     for _ in 0..n {
         let block = poller.fetch_block(&last_known_block).await.unwrap();
         last_known_block = poller
@@ -83,11 +86,22 @@ async fn main() {
     });
 
     // Set log level
-    if conf.debug {
-        init_with_level(log::Level::Debug).unwrap()
-    } else {
-        init_with_level(log::Level::Info).unwrap()
-    }
+    SimpleLogger::new()
+        .with_level(if conf.deps_debug {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Warn
+        })
+        .with_module_level(
+            "teos",
+            if conf.debug {
+                LevelFilter::Debug
+            } else {
+                LevelFilter::Info
+            },
+        )
+        .init()
+        .unwrap();
 
     if is_default {
         log::info!("Loading default configuration")
@@ -175,6 +189,20 @@ async fn main() {
     } else {
         validate_best_block_header(&mut derefed).await.unwrap()
     };
+
+    // DISCUSS: This is not really required (and only triggered in regtest). This is only in place so the caches can be
+    // populated with enough blocks mainly because the size of the cache is based on the amount of blocks passed when initializing.
+    // However, we could add an additional parameter to specify the size of the cache, and initialize with however may blocks we
+    // could pull from the backend. Adding this functionality just for regtest seemed unnecessary though, hence the check.
+    if tip.height < IRREVOCABLY_RESOLVED {
+        log::error!(
+            "Not enough blocks to start teosd (required: {}). Mine at least {} more",
+            IRREVOCABLY_RESOLVED,
+            IRREVOCABLY_RESOLVED - tip.height
+        );
+        std::process::exit(1);
+    }
+
     log::info!("Last known block: {}", tip.header.block_hash());
 
     // This is how chain poller names bitcoin networks.
@@ -185,7 +213,7 @@ async fn main() {
     };
 
     let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
-    let last_n_blocks = get_last_n_blocks(&mut poller, tip, 6).await;
+    let last_n_blocks = get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize).await;
 
     // Build components
     let gatekeeper = Arc::new(Gatekeeper::new(
@@ -196,12 +224,18 @@ async fn main() {
         dbm.clone(),
     ));
 
-    let carrier = Carrier::new(rpc, bitcoind_reachable.clone(), tip.deref().height);
-    let responder = Arc::new(Responder::new(carrier, gatekeeper.clone(), dbm.clone()));
+    let carrier = Carrier::new(rpc, bitcoind_reachable.clone(), tip.height);
+    let responder = Arc::new(Responder::new(
+        &last_n_blocks,
+        tip.height,
+        carrier,
+        gatekeeper.clone(),
+        dbm.clone(),
+    ));
     let watcher = Arc::new(Watcher::new(
         gatekeeper.clone(),
         responder.clone(),
-        last_n_blocks,
+        &last_n_blocks[0..6],
         tip.height,
         tower_sk,
         TowerId(tower_pk),
@@ -240,8 +274,36 @@ async fn main() {
     log::info!("Bootstrap completed. Turning on interfaces");
 
     // Build interfaces
+    let http_api_addr = format!("{}:{}", conf.api_bind, conf.api_port)
+        .parse()
+        .unwrap();
+    let mut addresses = vec![msgs::NetworkAddress::from_ipv4(
+        conf.api_bind.clone(),
+        conf.api_port,
+    )];
+
+    // Create Tor endpoint if required
+    let tor_api = if conf.tor_support {
+        let tor_api = TorAPI::new(
+            http_api_addr,
+            conf.onion_hidden_service_port,
+            conf.tor_control_port,
+            path_network,
+        )
+        .await;
+        addresses.push(msgs::NetworkAddress::from_torv3(
+            tor_api.get_onion_address(),
+            conf.api_port,
+        ));
+
+        Some(tor_api)
+    } else {
+        None
+    };
+
     let rpc_api = Arc::new(InternalAPI::new(
         watcher,
+        addresses,
         bitcoind_reachable.clone(),
         shutdown_trigger,
     ));
@@ -257,9 +319,6 @@ async fn main() {
         "http://{}:{}",
         conf.internal_api_bind, conf.internal_api_port
     );
-    let http_api_addr = format!("{}:{}", conf.api_bind, conf.api_port)
-        .parse()
-        .unwrap();
 
     // Generate mtls certificates to data directory so the admin can securely connect
     // to the server to perform administrative tasks.
@@ -303,22 +362,13 @@ async fn main() {
     // Add Tor Onion Service for public API
     let mut tor_task = Option::None;
     let (tor_service_ready, ready_signal_tor) = triggered::trigger();
-    if conf.tor_support {
+    if let Some(tor_api) = tor_api {
         log::info!("Starting up Tor hidden service");
-        let tor_control_port = conf.tor_control_port;
-        let api_port = conf.api_port;
-        let onion_port = conf.onion_hidden_service_port;
 
         tor_task = Some(task::spawn(async move {
-            if let Err(e) = tor::expose_onion_service(
-                tor_control_port,
-                api_port,
-                onion_port,
-                path_network,
-                tor_service_ready,
-                shutdown_signal_tor,
-            )
-            .await
+            if let Err(e) = tor_api
+                .expose_onion_service(tor_service_ready, shutdown_signal_tor)
+                .await
             {
                 eprintln!("Cannot connect to the Tor backend: {}", e);
                 std::process::exit(1);
@@ -335,8 +385,8 @@ async fn main() {
     http_api_task.await.unwrap();
     private_api_task.await.unwrap();
     public_api_task.await.unwrap();
-    if conf.tor_support {
-        tor_task.unwrap().await.unwrap();
+    if let Some(tor_task) = tor_task {
+        tor_task.await.unwrap();
     }
 
     log::info!("Shutting down tower");

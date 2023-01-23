@@ -2,7 +2,7 @@
 api_bind = "127.0.0.1"
 api_port = 9814
 tor_control_port = 9051
-onion_hidden_service_port = 2121
+onion_hidden_service_port = 9814
 tor_support = false
 
 # RPC
@@ -18,6 +18,7 @@ btc_rpc_port = 8332
 
 # Flags
 debug = false
+deps_debug = false
 overwrite_key = false
 
 # General

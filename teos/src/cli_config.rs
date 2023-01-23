@@ -4,7 +4,7 @@ use serde::Deserialize;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt, Clone)]
-#[structopt(rename_all = "snake_case")]
+#[structopt(rename_all = "lower_case")]
 pub enum Command {
     /// Gets information about all appointments stored in the tower
     GetAllAppointments,
@@ -54,10 +54,6 @@ pub struct Opt {
     #[structopt(long, default_value = "~/.teos")]
     pub data_dir: String,
 
-    /// Runs teos-cli in debug mode [default: false]
-    #[structopt(long)]
-    pub debug: bool,
-
     /// Command
     #[structopt(subcommand)]
     pub command: Command,
@@ -74,7 +70,6 @@ pub struct Opt {
 pub struct Config {
     pub rpc_bind: String,
     pub rpc_port: u16,
-    pub debug: bool,
 }
 
 impl Config {
@@ -86,8 +81,6 @@ impl Config {
         if options.rpc_port.is_some() {
             self.rpc_port = options.rpc_port.unwrap();
         }
-
-        self.debug |= options.debug;
     }
 }
 
@@ -102,7 +95,6 @@ impl Default for Config {
         Self {
             rpc_bind: "localhost".into(),
             rpc_port: 8814,
-            debug: false,
         }
     }
 }

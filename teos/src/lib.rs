@@ -22,6 +22,7 @@ pub mod responder;
 #[doc(hidden)]
 mod rpc_errors;
 pub mod tls;
+mod tx_index;
 pub mod watcher;
 
 #[cfg(test)]

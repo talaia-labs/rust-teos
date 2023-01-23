@@ -12,6 +12,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "GetUserResponse.appointments",
             "#[serde(serialize_with = \"teos_common::ser::serde_vec_bytes::serialize\")]",
         )
+        .field_attribute(
+            "NetworkAddress.address_type",
+            "#[serde(rename = \"type\", with = \"crate::api::serde::serde_address_type\")]",
+        )
         .compile(
             &[
                 "proto/teos/v2/appointment.proto",

@@ -3,10 +3,13 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use teos_common::appointment::Appointment;
 use teos_common::cryptography;
+use teos_common::net::http::Endpoint;
+use teos_common::net::NetAddr;
 use teos_common::protos as common_msgs;
-use teos_common::receipts::AppointmentReceipt;
-use teos_common::TowerId;
+use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
+use teos_common::{TowerId, UserId};
 
+use crate::net::ProxyInfo;
 use crate::MisbehaviorProof;
 
 /// Represents a generic api response.
@@ -52,11 +55,42 @@ impl From<RequestError> for AddAppointmentError {
     }
 }
 
+/// Handles the logic of interacting with the `register` endpoint of the tower.
+pub async fn register(
+    tower_id: TowerId,
+    user_id: UserId,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
+) -> Result<RegistrationReceipt, RequestError> {
+    log::info!("Registering in the Eye of Satoshi (tower_id={})", tower_id);
+    process_post_response(
+        post_request(
+            tower_net_addr,
+            Endpoint::Register,
+            &common_msgs::RegisterRequest {
+                user_id: user_id.to_vec(),
+            },
+            proxy,
+        )
+        .await,
+    )
+    .await
+    .map(|r: common_msgs::RegisterResponse| {
+        RegistrationReceipt::with_signature(
+            user_id,
+            r.available_slots,
+            r.subscription_start,
+            r.subscription_expiry,
+            r.subscription_signature,
+        )
+    })
+}
+
 /// Encapsulates the logging and response parsing of sending and appointment to the tower.
 pub async fn add_appointment(
     tower_id: TowerId,
-    tower_net_addr: &str,
-    proxy: Option<String>,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
 ) -> Result<(u32, AppointmentReceipt), AddAppointmentError> {
@@ -77,19 +111,20 @@ pub async fn add_appointment(
 /// Handles the logic of interacting with the `add_appointment` endpoint of the tower.
 pub async fn send_appointment(
     tower_id: TowerId,
-    tower_net_addr: &str,
-    proxy: Option<String>,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
 ) -> Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointmentError> {
     let request_data = common_msgs::AddAppointmentRequest {
         appointment: Some(appointment.clone().into()),
-        signature: signature.into(),
+        signature: signature.to_owned(),
     };
 
     match process_post_response(
         post_request(
-            &format!("{}/add_appointment", tower_net_addr),
+            tower_net_addr,
+            Endpoint::AddAppointment,
             &request_data,
             proxy,
         )
@@ -99,7 +134,7 @@ pub async fn send_appointment(
     {
         ApiResponse::Response::<common_msgs::AddAppointmentResponse>(r) => {
             let receipt = AppointmentReceipt::with_signature(
-                signature.into(),
+                signature.to_owned(),
                 r.start_block,
                 r.signature.clone(),
             );
@@ -122,38 +157,50 @@ pub async fn send_appointment(
 
 /// Generic function to post different types of requests to the tower.
 pub async fn post_request<S: Serialize>(
-    endpoint: &str,
+    tower_net_addr: &NetAddr,
+    endpoint: Endpoint,
     data: S,
-    proxy: Option<String>,
+    proxy: &Option<ProxyInfo>,
 ) -> Result<Response, RequestError> {
-    let url = reqwest::Url::parse(endpoint).map_err(|e| {
-        RequestError::ConnectionError(format!("Cannot connect to the given URL. {}", e))
-    })?;
-    let client = if url.host_str().unwrap().ends_with(".onion") {
-        if let Some(proxy) = proxy {
-            let proxy = reqwest::Proxy::http(format!("socks5h://{}", proxy))
-                .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?;
+    let client = if let Some(proxy) = proxy {
+        if proxy.always_use || tower_net_addr.is_onion() {
             reqwest::Client::builder()
-                .proxy(proxy)
+                .proxy(
+                    reqwest::Proxy::http(proxy.get_socks_addr())
+                        .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?,
+                )
                 .build()
                 .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?
         } else {
-            return Err(RequestError::ConnectionError(
-                "Cannot connect to an onion address without a proxy".into(),
-            ));
+            reqwest::Client::new()
         }
     } else {
+        // If there is no proxy we only build the client as long as the address is not onion
+        if tower_net_addr.is_onion() {
+            return Err(RequestError::ConnectionError(
+                "Cannot connect to an onion address without a proxy".to_owned(),
+            ));
+        }
         reqwest::Client::new()
     };
 
-    client.post(endpoint).json(&data).send().await.map_err(|e| {
-        log::error!("{:?}", e);
-        if e.is_connect() | e.is_timeout() {
-            RequestError::ConnectionError("Cannot connect to the tower. Connection refused".into())
-        } else {
-            RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".into())
-        }
-    })
+    client
+        .post(format!("{}{}", tower_net_addr.net_addr(), endpoint.path()))
+        .json(&data)
+        .send()
+        .await
+        .map_err(|e| {
+            log::debug!("An error ocurred when sending data to the tower: {}", e);
+            if e.is_connect() | e.is_timeout() {
+                RequestError::ConnectionError(
+                    "Cannot connect to the tower. Connection refused".to_owned(),
+                )
+            } else {
+                RequestError::Unexpected(
+                    "Unexpected error ocurred (see logs for more info)".to_owned(),
+                )
+            }
+        })
 }
 
 /// Generic function to process the response of a given post request.
@@ -177,7 +224,8 @@ mod tests {
 
     use crate::test_utils::get_dummy_add_appointment_response;
     use teos_common::test_utils::{
-        generate_random_appointment, get_random_appointment_receipt, get_random_user_id,
+        generate_random_appointment, get_random_appointment_receipt,
+        get_random_registration_receipt, get_random_user_id,
     };
 
     mod request_error {
@@ -187,17 +235,81 @@ mod tests {
         fn test_is_connection() {
             let error_message = "error_msg";
             for error in [
-                RequestError::ConnectionError(error_message.into()),
-                RequestError::DeserializeError(error_message.into()),
-                RequestError::Unexpected(error_message.into()),
+                RequestError::ConnectionError(error_message.to_owned()),
+                RequestError::DeserializeError(error_message.to_owned()),
+                RequestError::Unexpected(error_message.to_owned()),
             ] {
-                if error == RequestError::ConnectionError(error_message.into()) {
+                if error == RequestError::ConnectionError(error_message.to_owned()) {
                     assert!(error.is_connection())
                 } else {
                     assert!(!error.is_connection())
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_register() {
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let mut registration_receipt = get_random_registration_receipt();
+        registration_receipt.sign(&tower_sk);
+
+        let server = MockServer::start();
+        let api_mock = server.mock(|when, then| {
+            when.method(POST).path(Endpoint::Register.path());
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!(registration_receipt));
+        });
+
+        let receipt = register(
+            TowerId(tower_pk),
+            registration_receipt.user_id(),
+            &NetAddr::new(server.base_url()),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        api_mock.assert();
+        assert_eq!(receipt, registration_receipt);
+    }
+
+    #[tokio::test]
+    async fn test_register_connection_error() {
+        let error = register(
+            get_random_user_id(),
+            get_random_user_id(),
+            &NetAddr::new("http://server_addr".to_owned()),
+            &None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, RequestError::ConnectionError { .. }))
+    }
+
+    #[tokio::test]
+    async fn test_register_deserialize_error() {
+        let server = MockServer::start();
+        let api_mock = server.mock(|when, then| {
+            when.method(POST).path(Endpoint::Register.path());
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!([]));
+        });
+
+        let error = register(
+            get_random_user_id(),
+            get_random_user_id(),
+            &NetAddr::new(server.base_url()),
+            &None,
+        )
+        .await
+        .unwrap_err();
+
+        api_mock.assert();
+        assert!(matches!(error, RequestError::DeserializeError { .. }))
     }
 
     #[tokio::test]
@@ -213,7 +325,7 @@ mod tests {
 
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -221,8 +333,8 @@ mod tests {
 
         let (response, receipt) = add_appointment(
             TowerId(tower_pk),
-            &format!("http://{}", server.address()),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -245,7 +357,7 @@ mod tests {
 
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -253,8 +365,8 @@ mod tests {
 
         let (response, receipt) = send_appointment(
             TowerId(tower_pk),
-            &format!("http://{}", server.address()),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -277,7 +389,7 @@ mod tests {
 
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!(add_appointment_response));
@@ -286,8 +398,8 @@ mod tests {
         let tower_id = get_random_user_id();
         let error = send_appointment(
             tower_id,
-            &format!("http://{}", server.address()),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -313,8 +425,8 @@ mod tests {
     async fn test_send_appointment_connection_error() {
         let error = send_appointment(
             get_random_user_id(),
-            "http://server_addr",
-            None,
+            &NetAddr::new("http://server_addr".to_owned()),
+            &None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -332,7 +444,7 @@ mod tests {
     async fn test_send_appointment_deserialize_error() {
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!([]));
@@ -340,8 +452,8 @@ mod tests {
 
         let error = send_appointment(
             get_random_user_id(),
-            &format!("http://{}", server.address()),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -359,13 +471,13 @@ mod tests {
     #[tokio::test]
     async fn test_send_appointment_api_error() {
         let api_error = ApiError {
-            error: "error_msg".into(),
+            error: "error_msg".to_owned(),
             error_code: 1,
         };
 
         let server = MockServer::start();
         let api_mock = server.mock(|when, then| {
-            when.method(POST).path("/add_appointment");
+            when.method(POST).path(Endpoint::AddAppointment.path());
             then.status(400)
                 .header("content-type", "application/json")
                 .json_body(json!(api_error));
@@ -373,8 +485,8 @@ mod tests {
 
         let error = send_appointment(
             get_random_user_id(),
-            &format!("http://{}", server.address()),
-            None,
+            &NetAddr::new(server.base_url()),
+            &None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -393,9 +505,14 @@ mod tests {
             then.status(200).header("content-type", "application/json");
         });
 
-        let response = post_request(&format!("http://{}", server.address()), json!(""), None)
-            .await
-            .unwrap();
+        let response = post_request(
+            &NetAddr::new(server.base_url()),
+            Endpoint::Register,
+            json!(""),
+            &None,
+        )
+        .await
+        .unwrap();
 
         api_mock.assert();
         assert!(matches!(response, Response { .. }));
@@ -403,12 +520,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_post_request_connection_error() {
-        let unreachable_server_url = "http://server_addr";
-
         assert!(matches!(
-            post_request(unreachable_server_url, json!(""), None,)
-                .await
-                .unwrap_err(),
+            post_request(
+                &NetAddr::new("http://unreachable_url".to_owned()),
+                Endpoint::Register,
+                json!(""),
+                &None,
+            )
+            .await
+            .unwrap_err(),
             RequestError::ConnectionError { .. }
         ));
     }
@@ -425,7 +545,13 @@ mod tests {
 
         // Any expected response work here as long as it cannot be properly deserialized
         let error = process_post_response::<ApiResponse<common_msgs::GetAppointmentResponse>>(
-            post_request(&format!("http://{}", server.address()), json!(""), None).await,
+            post_request(
+                &NetAddr::new(server.base_url()),
+                Endpoint::GetAppointment,
+                json!(""),
+                &None,
+            )
+            .await,
         )
         .await
         .unwrap_err();

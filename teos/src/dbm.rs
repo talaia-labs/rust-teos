@@ -165,7 +165,10 @@ impl DBM {
     /// Loads all users from the database.
     pub(crate) fn load_all_users(&self) -> HashMap<UserId, UserInfo> {
         let mut users = HashMap::new();
-        let mut stmt = self.connection.prepare("SELECT * FROM users").unwrap();
+        let mut stmt = self
+            .connection
+            .prepare("SELECT user_id, available_slots, subscription_start, subscription_expiry FROM users")
+            .unwrap();
         let mut rows = stmt.query([]).unwrap();
 
         while let Ok(Some(row)) = rows.next() {
@@ -278,21 +281,28 @@ impl DBM {
         let key = uuid.to_vec();
         let mut stmt = self
             .connection
-            .prepare("SELECT * FROM appointments WHERE UUID=(?)")
+            .prepare(
+                "SELECT locator, encrypted_blob, to_self_delay, user_signature, start_block, user_id
+                    FROM appointments WHERE UUID=(?)"
+            )
             .unwrap();
 
         stmt.query_row([key], |row| {
-            let raw_locator: Vec<u8> = row.get(1).unwrap();
-            let locator = Locator::from_slice(&raw_locator).unwrap();
-            let raw_userid: Vec<u8> = row.get(6).unwrap();
-            let user_id = UserId::from_slice(&raw_userid).unwrap();
+            let raw_locator: Vec<u8> = row.get(0).unwrap();
+            let encrypted_blob = row.get(1).unwrap();
+            let to_self_delay = row.get(2).unwrap();
+            let user_signature = row.get(3).unwrap();
+            let start_block = row.get(4).unwrap();
+            let raw_userid: Vec<u8> = row.get(5).unwrap();
 
-            let appointment = Appointment::new(locator, row.get(2).unwrap(), row.get(3).unwrap());
+            let locator = Locator::from_slice(&raw_locator).unwrap();
+            let user_id = UserId::from_slice(&raw_userid).unwrap();
+            let appointment = Appointment::new(locator, encrypted_blob, to_self_delay);
             Ok(ExtendedAppointment::new(
                 appointment,
                 user_id,
-                row.get(4).unwrap(),
-                row.get(5).unwrap(),
+                user_signature,
+                start_block,
             ))
         })
         .map_err(|_| Error::NotFound)
@@ -306,7 +316,9 @@ impl DBM {
     ) -> HashMap<UUID, ExtendedAppointment> {
         let mut appointments = HashMap::new();
 
-        let mut sql = "SELECT * FROM appointments as a LEFT JOIN trackers as t ON a.UUID=t.UUID WHERE t.UUID IS NULL".to_string();
+        let mut sql =
+            "SELECT a.UUID, a.locator, a.encrypted_blob, a.to_self_delay, a.user_signature, a.start_block, a.user_id
+                FROM appointments as a LEFT JOIN trackers as t ON a.UUID=t.UUID WHERE t.UUID IS NULL".to_string();
         // If a locator was passed, filter based on it.
         if locator.is_some() {
             sql.push_str(" AND a.locator=(?)");
@@ -447,17 +459,22 @@ impl DBM {
     /// Loads a [TransactionTracker] from the database.
     pub(crate) fn load_tracker(&self, uuid: UUID) -> Result<TransactionTracker, Error> {
         let key = uuid.to_vec();
-        let mut stmt = self.connection.prepare(
-            "SELECT t.*, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID WHERE t.UUID=(?)").unwrap();
+        let mut stmt = self
+            .connection.prepare(
+                "SELECT t.dispute_tx, t.penalty_tx, t.height, t.confirmed, a.user_id
+                    FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID WHERE t.UUID=(?)"
+            )
+            .unwrap();
 
         stmt.query_row([key], |row| {
-            let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
+            let raw_dispute_tx: Vec<u8> = row.get(0).unwrap();
+            let raw_penalty_tx: Vec<u8> = row.get(1).unwrap();
+            let height: u32 = row.get(2).unwrap();
+            let confirmed: bool = row.get(3).unwrap();
+            let raw_userid: Vec<u8> = row.get(4).unwrap();
+
             let dispute_tx = consensus::deserialize(&raw_dispute_tx).unwrap();
-            let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
             let penalty_tx = consensus::deserialize(&raw_penalty_tx).unwrap();
-            let height: u32 = row.get(3).unwrap();
-            let confirmed: bool = row.get(4).unwrap();
-            let raw_userid: Vec<u8> = row.get(5).unwrap();
             let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             Ok(TransactionTracker {
@@ -478,7 +495,9 @@ impl DBM {
     ) -> HashMap<UUID, TransactionTracker> {
         let mut trackers = HashMap::new();
 
-        let mut sql = "SELECT t.*, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID".to_string();
+        let mut sql = "SELECT t.UUID, t.dispute_tx, t.penalty_tx, t.height, t.confirmed, a.user_id
+            FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID"
+            .to_string();
         // If a locator was passed, filter based on it.
         if locator.is_some() {
             sql.push_str(" WHERE a.locator=(?)");
@@ -593,7 +612,10 @@ mod tests {
             let key = user_id.to_vec();
             let mut stmt = self
                 .connection
-                .prepare("SELECT * FROM users WHERE user_id=(?)")
+                .prepare(
+                    "SELECT user_id, available_slots, subscription_start, subscription_expiry
+                        FROM users WHERE user_id=(?)",
+                )
                 .unwrap();
             let user = stmt
                 .query_row([&key], |row| {

@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::sync::mpsc::UnboundedSender;
@@ -12,7 +13,49 @@ use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
 use crate::dbm::DBM;
+use crate::net::ProxyInfo;
+use crate::retrier::RetrierStatus;
 use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
+
+#[derive(Eq, PartialEq)]
+pub enum RevocationData {
+    Fresh(Locator),
+    Stale(HashSet<Locator>),
+    None,
+}
+
+impl RevocationData {
+    pub fn is_none(&self) -> bool {
+        *self == RevocationData::None
+    }
+}
+
+impl From<RevocationData> for HashSet<Locator> {
+    fn from(r: RevocationData) -> Self {
+        match r {
+            RevocationData::Fresh(l) => HashSet::from_iter(vec![l]),
+            RevocationData::Stale(hs) => hs,
+            RevocationData::None => HashSet::new(),
+        }
+    }
+}
+
+impl std::fmt::Debug for RevocationData {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                RevocationData::Fresh(l) => format!("Fresh: {}", l),
+                RevocationData::Stale(hs) => format!(
+                    "Stale: {:?}",
+                    hs.iter().map(|l| l.to_string()).collect::<Vec<_>>()
+                ),
+                RevocationData::None => "None".to_owned(),
+            }
+        )
+    }
+}
 
 /// Represents the watchtower client that is being used as the CoreLN plugin state.
 pub struct WTClient {
@@ -20,20 +63,30 @@ pub struct WTClient {
     pub dbm: DBM,
     /// A collection of towers the client is registered to.
     pub towers: HashMap<TowerId, TowerSummary>,
-    /// Queue of unreachable towers
-    pub unreachable_towers: UnboundedSender<(TowerId, Locator)>,
+    /// Queue of unreachable towers.
+    pub unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
+    // Map of existing retriers and its state.
+    pub retriers: HashMap<TowerId, RetrierStatus>,
     /// The user secret key.
     pub user_sk: SecretKey,
     /// The user identifier.
     pub user_id: UserId,
     /// Optional proxy
-    pub proxy: Option<String>,
+    pub proxy: Option<ProxyInfo>,
 }
 
 impl WTClient {
     pub async fn new(
         data_dir: PathBuf,
-        unreachable_towers: UnboundedSender<(TowerId, Locator)>,
+        unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
+    ) -> Self {
+        Self::with_proxy(data_dir, unreachable_towers, None).await
+    }
+
+    pub async fn with_proxy(
+        data_dir: PathBuf,
+        unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
+        proxy: Option<ProxyInfo>,
     ) -> Self {
         // Create data dir if it does not exist
         fs::create_dir_all(&data_dir).await.unwrap_or_else(|e| {
@@ -58,9 +111,12 @@ impl WTClient {
         let towers = dbm.load_towers();
         for (tower_id, tower) in towers.iter() {
             if tower.status.is_temporary_unreachable() {
-                for locator in tower.pending_appointments.iter() {
-                    unreachable_towers.send((*tower_id, *locator)).unwrap();
-                }
+                unreachable_towers
+                    .send((
+                        *tower_id,
+                        RevocationData::Stale(tower.pending_appointments.iter().cloned().collect()),
+                    ))
+                    .unwrap();
             }
         }
 
@@ -72,10 +128,11 @@ impl WTClient {
         WTClient {
             towers,
             unreachable_towers,
+            retriers: HashMap::new(),
             dbm,
             user_sk,
             user_id,
-            proxy: None,
+            proxy,
         }
     }
 
@@ -83,7 +140,7 @@ impl WTClient {
     pub fn add_update_tower(
         &mut self,
         tower_id: TowerId,
-        tower_net_addr: String,
+        tower_net_addr: &str,
         receipt: &RegistrationReceipt,
     ) -> Result<(), SubscriptionError> {
         if let Some(tower) = self.towers.get(&tower_id) {
@@ -92,28 +149,35 @@ impl WTClient {
             if receipt.subscription_expiry() <= tower.subscription_expiry {
                 return Err(SubscriptionError::Expiry);
             } else {
-                let previous_receipt = self
-                    .dbm
-                    .load_registration_receipt(tower_id, self.user_id)
-                    .unwrap();
-                if receipt.available_slots() <= previous_receipt.available_slots() {
+                let tower_info = self.dbm.load_tower_record(tower_id).unwrap();
+                if receipt.available_slots() <= tower_info.available_slots {
                     return Err(SubscriptionError::Slots);
                 }
             }
         }
 
         self.dbm
-            .store_tower_record(tower_id, &tower_net_addr, receipt)
+            .store_tower_record(tower_id, tower_net_addr, receipt)
             .unwrap();
-        self.towers.insert(
-            tower_id,
-            TowerSummary::new(
-                tower_net_addr,
+
+        if let Some(summary) = self.towers.get_mut(&tower_id) {
+            summary.udpate(
+                tower_net_addr.to_owned(),
                 receipt.available_slots(),
                 receipt.subscription_start(),
                 receipt.subscription_expiry(),
-            ),
-        );
+            );
+        } else {
+            self.towers.insert(
+                tower_id,
+                TowerSummary::new(
+                    tower_net_addr.to_owned(),
+                    receipt.available_slots(),
+                    receipt.subscription_start(),
+                    receipt.subscription_expiry(),
+                ),
+            );
+        };
 
         Ok(())
     }
@@ -131,10 +195,19 @@ impl WTClient {
         self.dbm.load_tower_record(tower_id)
     }
 
+    /// Gets the given tower status (identified by tower_id), if found.
+    pub fn get_tower_status(&self, tower_id: &TowerId) -> Option<TowerStatus> {
+        Some(self.towers.get(tower_id)?.status)
+    }
+
     /// Sets the tower status to any of the `TowerStatus` variants.
     pub fn set_tower_status(&mut self, tower_id: TowerId, status: TowerStatus) {
         if let Some(tower) = self.towers.get_mut(&tower_id) {
-            tower.status = status
+            if tower.status != status {
+                tower.status = status
+            } else {
+                log::debug!("{} status is already {}", tower_id, status)
+            }
         } else {
             log::error!(
                 "Cannot change tower status to {}. Unknown tower_id: {}",
@@ -142,6 +215,11 @@ impl WTClient {
                 tower_id
             );
         }
+    }
+
+    /// Gets the given tower status (identified by tower_id), if found.
+    pub fn get_retrier_status(&self, tower_id: &TowerId) -> Option<&RetrierStatus> {
+        self.retriers.get(tower_id)
     }
 
     /// Adds an appointment receipt to the tower record.
@@ -268,16 +346,17 @@ mod tests {
 
         // Adding a new tower will add a summary to towers and the full data to the
         let mut receipt = get_random_registration_receipt();
-        let tower_id = get_random_user_id();
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
         let tower_info = TowerInfo::empty(
-            "talaia.watch".into(),
+            "talaia.watch".to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
         );
 
         wt_client
-            .add_update_tower(tower_id, tower_info.net_addr.clone(), &receipt)
+            .add_update_tower(tower_id, &tower_info.net_addr, &receipt)
             .unwrap();
         assert_eq!(
             wt_client.towers.get(&tower_id),
@@ -289,13 +368,13 @@ mod tests {
         receipt = get_registration_receipt_from_previous(&receipt);
 
         let updated_tower_info = TowerInfo::empty(
-            "talaia.watch".into(),
+            "talaia.watch".to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
         );
         wt_client
-            .add_update_tower(tower_id, updated_tower_info.net_addr.clone(), &receipt)
+            .add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt)
             .unwrap();
 
         assert_eq!(
@@ -308,35 +387,72 @@ mod tests {
         );
 
         // If we try to update without increasing both the end_time and the slots, this will fail
-        let receipt_same_slots = RegistrationReceipt::new(
+        let mut receipt_same_slots = RegistrationReceipt::new(
             receipt.user_id(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry() + 1,
         );
-        let receipt_same_expiry = RegistrationReceipt::new(
+        receipt_same_slots.sign(&tower_sk);
+        let mut receipt_same_expiry = RegistrationReceipt::new(
             receipt.user_id(),
             receipt.available_slots() + 1,
             receipt.subscription_start(),
             receipt.subscription_expiry(),
         );
+        receipt_same_expiry.sign(&tower_sk);
 
         assert!(matches!(
-            wt_client.add_update_tower(tower_id, updated_tower_info.net_addr.clone(), &receipt),
+            wt_client.add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt),
             Err(SubscriptionError::Expiry)
+        ));
+        assert!(matches!(
+            wt_client.add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt_same_slots),
+            Err(SubscriptionError::Slots)
         ));
         assert!(matches!(
             wt_client.add_update_tower(
                 tower_id,
-                updated_tower_info.net_addr.clone(),
-                &receipt_same_slots
+                &updated_tower_info.net_addr,
+                &receipt_same_expiry
             ),
-            Err(SubscriptionError::Slots)
-        ));
-        assert!(matches!(
-            wt_client.add_update_tower(tower_id, updated_tower_info.net_addr, &receipt_same_expiry),
             Err(SubscriptionError::Expiry)
         ));
+
+        // Decrease the slots count (simulate exhaustion) and update with more than the current count it should work
+        let locator = generate_random_appointment(None).locator;
+        wt_client.add_appointment_receipt(
+            tower_id,
+            locator,
+            0,
+            &get_random_appointment_receipt(tower_sk),
+        );
+        wt_client
+            .add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt_same_slots)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_tower_status() {
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+
+        // If the tower is unknown, get_tower_status returns None
+        let tower_id = get_random_user_id();
+        assert!(wt_client.get_tower_status(&tower_id).is_none());
+
+        // Add a tower
+        let receipt = get_random_registration_receipt();
+        wt_client
+            .add_update_tower(tower_id, "talaia.watch", &receipt)
+            .unwrap();
+
+        // If the tower is known, get_tower_status matches getting the same data from the towers collection
+        assert_eq!(
+            wt_client.towers.get(&tower_id).unwrap().status,
+            wt_client.get_tower_status(&tower_id).unwrap()
+        )
     }
 
     #[tokio::test]
@@ -354,7 +470,7 @@ mod tests {
         let receipt = get_random_registration_receipt();
         let tower_id = get_random_user_id();
         wt_client
-            .add_update_tower(tower_id, "talaia.watch".into(), &receipt)
+            .add_update_tower(tower_id, "talaia.watch", &receipt)
             .unwrap();
 
         for status in [
@@ -365,7 +481,7 @@ mod tests {
             TowerStatus::Misbehaving,
         ] {
             wt_client.set_tower_status(tower_id, status);
-            assert_eq!(status, wt_client.towers.get(&tower_id).unwrap().status);
+            assert_eq!(status, wt_client.get_tower_status(&tower_id).unwrap());
         }
     }
 
@@ -377,7 +493,6 @@ mod tests {
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tower_net_addr = "talaia.watch";
 
         let locator = generate_random_appointment(None).locator;
         let registration_receipt = get_random_registration_receipt();
@@ -394,7 +509,7 @@ mod tests {
 
         // Add the tower to the state and try again
         let tower_info = TowerInfo::new(
-            tower_net_addr.into(),
+            "talaia.watch".to_owned(),
             registration_receipt.available_slots(),
             registration_receipt.subscription_start(),
             registration_receipt.subscription_expiry(),
@@ -403,7 +518,7 @@ mod tests {
             Vec::new(),
         );
         wt_client
-            .add_update_tower(tower_id, tower_net_addr.into(), &registration_receipt)
+            .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
             .unwrap();
         wt_client.add_appointment_receipt(
             tower_id,
@@ -427,7 +542,6 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
-        let tower_net_addr = "talaia.watch";
 
         let registration_receipt = get_random_registration_receipt();
         let appointment = generate_random_appointment(None);
@@ -438,7 +552,7 @@ mod tests {
 
         // Add the tower to the state and try again
         let tower_info = TowerInfo::new(
-            tower_net_addr.into(),
+            "talaia.watch".to_owned(),
             registration_receipt.available_slots(),
             registration_receipt.subscription_start(),
             registration_receipt.subscription_expiry(),
@@ -448,7 +562,7 @@ mod tests {
         );
 
         wt_client
-            .add_update_tower(tower_id, tower_net_addr.into(), &registration_receipt)
+            .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
             .unwrap();
         wt_client.add_pending_appointment(tower_id, &appointment);
 
@@ -471,7 +585,6 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
-        let tower_net_addr = "talaia.watch";
 
         let registration_receipt = get_random_registration_receipt();
         let appointment = generate_random_appointment(None);
@@ -481,7 +594,7 @@ mod tests {
 
         // Add the tower to the state and try again
         wt_client
-            .add_update_tower(tower_id, tower_net_addr.into(), &registration_receipt)
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
             .unwrap();
         wt_client.add_pending_appointment(tower_id, &appointment);
 
@@ -503,7 +616,6 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
-        let tower_net_addr = "talaia.watch";
 
         let registration_receipt = get_random_registration_receipt();
         let appointment = generate_random_appointment(None);
@@ -514,7 +626,7 @@ mod tests {
 
         // Add the tower to the state and try again
         let tower_info = TowerInfo::new(
-            tower_net_addr.into(),
+            "talaia.watch".to_owned(),
             registration_receipt.available_slots(),
             registration_receipt.subscription_start(),
             registration_receipt.subscription_expiry(),
@@ -524,7 +636,7 @@ mod tests {
         );
 
         wt_client
-            .add_update_tower(tower_id, tower_net_addr.into(), &registration_receipt)
+            .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
             .unwrap();
         wt_client.add_invalid_appointment(tower_id, &appointment);
 
@@ -543,13 +655,12 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
-        let tower_net_addr = "talaia.watch";
 
         let registration_receipt = get_random_registration_receipt();
         let appointment = generate_random_appointment(None);
 
         wt_client
-            .add_update_tower(tower_id, tower_net_addr.into(), &registration_receipt)
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
             .unwrap();
         wt_client.add_pending_appointment(tower_id, &appointment);
 
@@ -595,14 +706,10 @@ mod tests {
         let appointment = generate_random_appointment(None);
 
         wt_client
-            .add_update_tower(tower_id, tower_net_addr.into(), &registration_receipt)
+            .add_update_tower(tower_id, tower_net_addr, &registration_receipt)
             .unwrap();
         wt_client
-            .add_update_tower(
-                another_tower_id,
-                tower_net_addr.into(),
-                &registration_receipt,
-            )
+            .add_update_tower(another_tower_id, tower_net_addr, &registration_receipt)
             .unwrap();
         wt_client.add_pending_appointment(tower_id, &appointment);
         wt_client.add_pending_appointment(another_tower_id, &appointment);
@@ -667,7 +774,6 @@ mod tests {
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tower_net_addr = "talaia.watch";
 
         // If we call this on an unknown tower it will simply do nothing
         let appointment = generate_random_appointment(None);
@@ -679,7 +785,7 @@ mod tests {
         // // Add the tower to the state and try again
         let registration_receipt = get_random_registration_receipt();
         wt_client
-            .add_update_tower(tower_id, tower_net_addr.into(), &registration_receipt)
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
             .unwrap();
         wt_client.flag_misbehaving_tower(tower_id, proof.clone());
 
@@ -705,7 +811,7 @@ mod tests {
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let tower_info = TowerInfo::empty(
-            "talaia.watch".into(),
+            "talaia.watch".to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -713,7 +819,7 @@ mod tests {
 
         // Add the tower and check it is there
         wt_client
-            .add_update_tower(tower_id, tower_info.net_addr.clone(), &receipt)
+            .add_update_tower(tower_id, &tower_info.net_addr, &receipt)
             .unwrap();
         assert_eq!(
             wt_client.towers.get(&tower_id),
@@ -731,7 +837,7 @@ mod tests {
 
         // Try again but this time with an associated appointment to check that it also gets removed
         wt_client
-            .add_update_tower(tower_id, tower_info.net_addr, &receipt)
+            .add_update_tower(tower_id, &tower_info.net_addr, &receipt)
             .unwrap();
 
         let locator = generate_random_appointment(None).locator;
@@ -772,17 +878,11 @@ mod tests {
         let (tower2_sk, tower2_pk) = cryptography::get_random_keypair();
         let tower2_id = TowerId(tower2_pk);
 
-        let tower_info = TowerInfo::empty(
-            "talaia.watch".into(),
-            receipt.available_slots(),
-            receipt.subscription_start(),
-            receipt.subscription_expiry(),
-        );
         wt_client
-            .add_update_tower(tower1_id, tower_info.net_addr.clone(), &receipt)
+            .add_update_tower(tower1_id, "talaia.watch", &receipt)
             .unwrap();
         wt_client
-            .add_update_tower(tower2_id, tower_info.net_addr, &receipt)
+            .add_update_tower(tower2_id, "talaia.watch", &receipt)
             .unwrap();
 
         let locator = generate_random_appointment(None).locator;

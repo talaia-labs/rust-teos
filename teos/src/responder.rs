@@ -4,9 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::sync::{Arc, Mutex};
 
-use bitcoin::consensus;
+use bitcoin::{consensus, BlockHash};
 use bitcoin::{BlockHeader, Transaction, Txid};
 use lightning::chain;
+use lightning_block_sync::poll::ValidatedBlock;
 
 use teos_common::constants;
 use teos_common::protos as common_msgs;
@@ -16,6 +17,7 @@ use crate::carrier::Carrier;
 use crate::dbm::DBM;
 use crate::extended_appointment::UUID;
 use crate::gatekeeper::{Gatekeeper, UserInfo};
+use crate::tx_index::TxIndex;
 use crate::watcher::Breach;
 
 /// Number of missed confirmations to wait before rebroadcasting a transaction.
@@ -26,6 +28,7 @@ const CONFIRMATIONS_BEFORE_RETRY: u8 = 6;
 pub enum ConfirmationStatus {
     ConfirmedIn(u32),
     InMempoolSince(u32),
+    IrrevocablyResolved,
     Rejected(i32),
     ReorgedOut,
 }
@@ -58,6 +61,14 @@ impl ConfirmationStatus {
         } else {
             None
         }
+    }
+
+    /// Whether the transaction was accepted by the underlying node.
+    pub fn accepted(&self) -> bool {
+        matches!(
+            self,
+            ConfirmationStatus::ConfirmedIn(_) | &ConfirmationStatus::InMempoolSince(_)
+        )
     }
 }
 
@@ -130,6 +141,8 @@ pub struct Responder {
     trackers: Mutex<HashMap<UUID, TrackerSummary>>,
     /// A map between [Txid]s and [UUID]s.
     tx_tracker_map: Mutex<HashMap<Txid, HashSet<UUID>>>,
+    /// A local, pruned, [TxIndex] used to avoid the need of `txindex=1`.
+    tx_index: Mutex<TxIndex<Txid, BlockHash>>,
     /// A [Carrier] instance. Data is sent to the `bitcoind` through it.
     carrier: Mutex<Carrier>,
     /// A [Gatekeeper] instance. Data regarding users is requested to it.
@@ -140,7 +153,13 @@ pub struct Responder {
 
 impl Responder {
     /// Creates a new [Responder] instance.
-    pub fn new(carrier: Carrier, gatekeeper: Arc<Gatekeeper>, dbm: Arc<Mutex<DBM>>) -> Self {
+    pub fn new(
+        last_n_blocs: &[ValidatedBlock],
+        last_known_block_height: u32,
+        carrier: Carrier,
+        gatekeeper: Arc<Gatekeeper>,
+        dbm: Arc<Mutex<DBM>>,
+    ) -> Self {
         let mut trackers = HashMap::new();
         let mut tx_tracker_map: HashMap<Txid, HashSet<UUID>> = HashMap::new();
 
@@ -158,6 +177,7 @@ impl Responder {
             carrier: Mutex::new(carrier),
             trackers: Mutex::new(trackers),
             tx_tracker_map: Mutex::new(tx_tracker_map),
+            tx_index: Mutex::new(TxIndex::new(last_n_blocs, last_known_block_height)),
             dbm,
             gatekeeper,
         }
@@ -189,12 +209,20 @@ impl Responder {
             return tracker.status;
         }
 
-        let status = self
-            .carrier
-            .lock()
-            .unwrap()
-            .send_transaction(&breach.penalty_tx);
-        if !matches!(status, ConfirmationStatus::Rejected { .. }) {
+        let mut carrier = self.carrier.lock().unwrap();
+        let tx_index = self.tx_index.lock().unwrap();
+
+        // Check whether the transaction is in mempool or part of our internal txindex. Send it to our node otherwise.
+        let status = if carrier.in_mempool(&breach.penalty_tx.txid()) {
+            // If it's in mempool we assume it was just included
+            ConfirmationStatus::InMempoolSince(carrier.block_height())
+        } else if let Some(block_hash) = tx_index.get(&breach.penalty_tx.txid()) {
+            ConfirmationStatus::ConfirmedIn(tx_index.get_height(block_hash).unwrap() as u32)
+        } else {
+            carrier.send_transaction(&breach.penalty_tx)
+        };
+
+        if status.accepted() {
             self.add_tracker(uuid, breach, user_id, status);
         }
 
@@ -377,12 +405,15 @@ impl Responder {
 
         let mut trackers = self.trackers.lock().unwrap();
         let mut carrier = self.carrier.lock().unwrap();
+        let tx_index = self.tx_index.lock().unwrap();
 
         for (uuid, (penalty_tx, dispute_tx)) in txs.into_iter() {
             let status = if let Some(dispute_tx) = dispute_tx {
-                // The tracker was reorged out, and the dispute may potentially not be in the chain anymore.
-                if carrier.get_block_hash_for_tx(&dispute_tx.txid()).is_some() {
-                    // Dispute tx is on chain, so we only need to care about the penalty
+                // The tracker was reorged out, and the dispute may potentially not be in the chain (or mempool) anymore.
+                if tx_index.contains_key(&dispute_tx.txid())
+                    | carrier.in_mempool(&dispute_tx.txid())
+                {
+                    // Dispute tx is on chain (or mempool), so we only need to care about the penalty
                     carrier.send_transaction(&penalty_tx)
                 } else {
                     // Dispute tx has also been reorged out, meaning that both transactions need to be broadcast.
@@ -503,7 +534,13 @@ impl chain::Listen for Responder {
         log::info!("New block received: {}", header.block_hash());
         self.carrier.lock().unwrap().update_height(height);
 
-        if self.trackers.lock().unwrap().len() > 0 {
+        let txs = txdata
+            .iter()
+            .map(|(_, tx)| (tx.txid(), header.block_hash()))
+            .collect();
+        self.tx_index.lock().unwrap().update(*header, &txs);
+
+        if !self.trackers.lock().unwrap().is_empty() {
             // Complete those appointments that are due at this height
             let completed_trackers = self.check_confirmations(
                 &txdata.iter().map(|(_, tx)| tx.txid()).collect::<Vec<_>>(),
@@ -555,6 +592,10 @@ impl chain::Listen for Responder {
     fn block_disconnected(&self, header: &BlockHeader, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
         self.carrier.lock().unwrap().update_height(height);
+        self.tx_index
+            .lock()
+            .unwrap()
+            .remove_disconnected_block(&header.block_hash());
 
         for tracker in self.trackers.lock().unwrap().values_mut() {
             // The transaction has been unconfirmed. Flag it as reorged out so we can rebroadcast it.
@@ -570,19 +611,19 @@ mod tests {
     use super::*;
     use lightning::chain::Listen;
 
-    use std::ops::Deref;
     use std::sync::{Arc, Mutex};
 
     use crate::dbm::DBM;
     use crate::gatekeeper::UserInfo;
     use crate::rpc_errors;
     use crate::test_utils::{
-        create_carrier, generate_dummy_appointment_with_user, generate_uuid, get_random_breach,
-        get_random_tracker, get_random_tx, store_appointment_and_fks_to_db, BitcoindStopper,
-        Blockchain, MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA, SLOTS,
-        START_HEIGHT, SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
+        create_carrier, generate_dummy_appointment_with_user, generate_uuid, get_last_n_blocks,
+        get_random_breach, get_random_tracker, get_random_tx, store_appointment_and_fks_to_db,
+        BitcoindStopper, Blockchain, MockedServerQuery, AVAILABLE_SLOTS, DURATION, EXPIRY_DELTA,
+        SLOTS, START_HEIGHT, SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
     };
 
+    use teos_common::constants::IRREVOCABLY_RESOLVED;
     use teos_common::dbm::Error as DBError;
     use teos_common::test_utils::get_random_user_id;
 
@@ -640,20 +681,30 @@ mod tests {
         }
     }
 
-    fn create_responder(
-        chain: &Blockchain,
+    async fn create_responder(
+        chain: &mut Blockchain,
         gatekeeper: Arc<Gatekeeper>,
         dbm: Arc<Mutex<DBM>>,
         query: MockedServerQuery,
     ) -> (Responder, BitcoindStopper) {
-        let tip = chain.tip();
-        let (carrier, bitcoind_stopper) = create_carrier(query, tip.deref().height);
-        (Responder::new(carrier, gatekeeper, dbm), bitcoind_stopper)
+        let height = if chain.tip().height < IRREVOCABLY_RESOLVED {
+            chain.tip().height
+        } else {
+            IRREVOCABLY_RESOLVED
+        };
+
+        let last_n_blocks = get_last_n_blocks(chain, height as usize).await;
+
+        let (carrier, bitcoind_stopper) = create_carrier(query, chain.tip().height);
+        (
+            Responder::new(&last_n_blocks, chain.tip().height, carrier, gatekeeper, dbm),
+            bitcoind_stopper,
+        )
     }
 
-    fn init_responder_with_chain_and_dbm(
+    async fn init_responder_with_chain_and_dbm(
         mocked_query: MockedServerQuery,
-        chain: &Blockchain,
+        chain: &mut Blockchain,
         dbm: Arc<Mutex<DBM>>,
     ) -> (Responder, BitcoindStopper) {
         let gk = Gatekeeper::new(
@@ -663,13 +714,13 @@ mod tests {
             EXPIRY_DELTA,
             dbm.clone(),
         );
-        create_responder(chain, Arc::new(gk), dbm, mocked_query)
+        create_responder(chain, Arc::new(gk), dbm, mocked_query).await
     }
 
-    fn init_responder(mocked_query: MockedServerQuery) -> (Responder, BitcoindStopper) {
+    async fn init_responder(mocked_query: MockedServerQuery) -> (Responder, BitcoindStopper) {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
-        init_responder_with_chain_and_dbm(mocked_query, &chain, dbm)
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
+        init_responder_with_chain_and_dbm(mocked_query, &mut chain, dbm).await
     }
 
     #[test]
@@ -712,13 +763,14 @@ mod tests {
         assert_eq!(ConfirmationStatus::ReorgedOut.to_db_data(), None);
     }
 
-    #[test]
-    fn test_responder_new() {
+    #[tokio::test]
+    async fn test_responder_new() {
         // A fresh responder has no associated data
-        let chain = Blockchain::default().with_height(START_HEIGHT);
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let (responder, _s) =
-            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm.clone());
+            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm.clone())
+                .await;
         assert!(responder.is_fresh());
 
         // If we add some trackers to the system and create a new Responder reusing the same db
@@ -740,15 +792,15 @@ mod tests {
 
         // Create a new Responder reusing the same DB and check that the data is loaded
         let (another_r, _) =
-            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm);
+            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm).await;
         assert!(!responder.is_fresh());
         assert_eq!(responder, another_r);
     }
 
-    #[test]
-    fn test_handle_breach_delivered() {
+    #[tokio::test]
+    async fn test_handle_breach_accepted() {
         let start_height = START_HEIGHT as u32;
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
 
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
@@ -792,11 +844,82 @@ mod tests {
             .contains_key(&another_breach.penalty_tx.txid()));
     }
 
-    #[test]
-    fn test_handle_breach_rejected() {
+    #[tokio::test]
+    async fn test_handle_breach_accepted_in_mempool() {
+        let start_height = START_HEIGHT as u32;
+        let (responder, _s) = init_responder(MockedServerQuery::InMempoool).await;
+
+        let user_id = get_random_user_id();
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
+
+        let breach = get_random_breach();
+        let penalty_txid = breach.penalty_tx.txid();
+
+        assert_eq!(
+            responder.handle_breach(uuid, breach, user_id),
+            ConfirmationStatus::InMempoolSince(start_height)
+        );
+        assert!(responder.trackers.lock().unwrap().contains_key(&uuid));
+        assert_eq!(
+            responder.trackers.lock().unwrap()[&uuid].status,
+            ConfirmationStatus::InMempoolSince(start_height)
+        );
+        assert!(responder
+            .tx_tracker_map
+            .lock()
+            .unwrap()
+            .contains_key(&penalty_txid));
+    }
+
+    #[tokio::test]
+    async fn test_handle_breach_accepted_in_txindex() {
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
+
+        let user_id = get_random_user_id();
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
+
+        let breach = get_random_breach();
+        let penalty_txid = breach.penalty_tx.txid();
+
+        // Add the tx to our txindex
+        let target_block_hash = *responder.tx_index.lock().unwrap().blocks().get(2).unwrap();
+        responder
+            .tx_index
+            .lock()
+            .unwrap()
+            .index_mut()
+            .insert(penalty_txid, target_block_hash);
+        let target_height = responder
+            .tx_index
+            .lock()
+            .unwrap()
+            .get_height(&target_block_hash)
+            .unwrap() as u32;
+
+        assert_eq!(
+            responder.handle_breach(uuid, breach, user_id),
+            ConfirmationStatus::ConfirmedIn(target_height)
+        );
+        assert!(responder.trackers.lock().unwrap().contains_key(&uuid));
+        assert_eq!(
+            responder.trackers.lock().unwrap()[&uuid].status,
+            ConfirmationStatus::ConfirmedIn(target_height)
+        );
+        assert!(responder
+            .tx_tracker_map
+            .lock()
+            .unwrap()
+            .contains_key(&penalty_txid));
+    }
+
+    #[tokio::test]
+    async fn test_handle_breach_rejected() {
         let (responder, _s) = init_responder(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
-        ));
+        ))
+        .await;
 
         let user_id = get_random_user_id();
         let uuid = generate_uuid();
@@ -815,9 +938,9 @@ mod tests {
             .contains_key(&penalty_txid));
     }
 
-    #[test]
-    fn test_add_tracker() {
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+    #[tokio::test]
+    async fn test_add_tracker() {
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
         let start_height = START_HEIGHT as u32;
 
         // Add the necessary FKs in the database
@@ -937,12 +1060,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_has_tracker() {
+    #[tokio::test]
+    async fn test_has_tracker() {
         // Has tracker should return true as long as the given tracker is held by the Responder.
         // As long as the tracker is in Responder.trackers and Responder.tx_tracker_map, the return
         // must be true.
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
 
         // Add a new tracker
         let user_id = get_random_user_id();
@@ -968,11 +1091,11 @@ mod tests {
         assert!(!responder.has_tracker(uuid));
     }
 
-    #[test]
-    fn test_get_tracker() {
+    #[tokio::test]
+    async fn test_get_tracker() {
         // Should return a tracker as long as it exists
         let start_height = START_HEIGHT as u32;
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
 
         // Store the user and the appointment in the database so we can add the tracker later on (due to FK restrictions)
         let user_id = get_random_user_id();
@@ -1008,9 +1131,9 @@ mod tests {
         assert_eq!(responder.get_tracker(uuid), None);
     }
 
-    #[test]
-    fn test_check_confirmations() {
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+    #[tokio::test]
+    async fn test_check_confirmations() {
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
         let target_height = (START_HEIGHT * 2) as u32;
 
         // Unconfirmed transactions that miss a confirmation will be added to missed_confirmations (if not there) or their missed confirmation count till be increased
@@ -1114,9 +1237,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_get_txs_to_rebroadcast() {
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+    #[tokio::test]
+    async fn test_get_txs_to_rebroadcast() {
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
         let current_height = 100;
 
         let user_id = get_random_user_id();
@@ -1161,10 +1284,10 @@ mod tests {
         assert_eq!(responder.get_txs_to_rebroadcast(current_height), txs);
     }
 
-    #[test]
-    fn test_get_txs_to_rebroadcast_reorged() {
+    #[tokio::test]
+    async fn test_get_txs_to_rebroadcast_reorged() {
         // For reorged transactions this works a bit different, the dispute transaction will also be returned here
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
         let current_height = 100;
 
         let user_id = get_random_user_id();
@@ -1202,7 +1325,7 @@ mod tests {
 
             // Since we are adding trackers using add_trackers we'll need to manually change the state of the transaction
             // (reorged transactions are not passed to add_tracker, they are detected after they are already there).
-            // Not doing should will trigger an error in the dbm since reorged transactions are not stored in the db.
+            // Not doing so will trigger an error in the dbm since reorged transactions are not stored in the db.
             if i % 2 == 0 {
                 responder
                     .trackers
@@ -1223,9 +1346,9 @@ mod tests {
         assert_eq!(responder.get_txs_to_rebroadcast(current_height), txs);
     }
 
-    #[test]
-    fn test_get_outdated_trackers() {
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+    #[tokio::test]
+    async fn test_get_outdated_trackers() {
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
 
         // Outdated trackers are those whose associated subscription is outdated and have not been confirmed yet (they don't have
         // a single confirmation).
@@ -1271,11 +1394,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_rebroadcast_accepted() {
+    #[tokio::test]
+    async fn test_rebroadcast_accepted() {
         // This test positive rebroadcast cases, including reorgs. However, complex reorg logic is not tested here, it will need a
         // dedicated test (against bitcoind, not mocked).
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
         let current_height = 100;
 
         // Add user to the database
@@ -1339,13 +1462,14 @@ mod tests {
         assert!(rejected.is_empty());
     }
 
-    #[test]
-    fn test_rebroadcast_rejected() {
+    #[tokio::test]
+    async fn test_rebroadcast_rejected() {
         // This test negative rebroadcast cases, including reorgs. However, complex reorg logic is not tested here, it will need a
         // dedicated test (against bitcoind, not mocked).
         let (responder, _s) = init_responder(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
-        ));
+        ))
+        .await;
         let current_height = 100;
 
         // Add user to the database
@@ -1408,9 +1532,9 @@ mod tests {
         assert!(accepted.is_empty());
     }
 
-    #[test]
-    fn test_delete_trackers_from_memory() {
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+    #[tokio::test]
+    async fn test_delete_trackers_from_memory() {
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
 
         // Add user to the database
         let user_id = get_random_user_id();
@@ -1465,9 +1589,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_delete_trackers() {
-        let (responder, _s) = init_responder(MockedServerQuery::Regular);
+    #[tokio::test]
+    async fn test_delete_trackers() {
+        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
 
         // Add user to the database
         let user_id = get_random_user_id();
@@ -1601,13 +1725,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_filtered_block_connected() {
+    #[tokio::test]
+    async fn test_filtered_block_connected() {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let start_height = START_HEIGHT * 2;
         let mut chain = Blockchain::default().with_height(start_height);
         let (responder, _s) =
-            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm);
+            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm).await;
 
         // block_connected is used to keep track of the confirmation received (or missed) by the trackers the Responder
         // is keeping track of.
@@ -1846,12 +1970,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_block_disconnected() {
+    #[tokio::test]
+    async fn test_block_disconnected() {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
         let (responder, _s) =
-            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &chain, dbm);
+            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm).await;
 
         // Add user to the database
         let user_id = get_random_user_id();

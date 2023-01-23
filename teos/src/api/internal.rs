@@ -21,6 +21,8 @@ use teos_common::UserId;
 pub struct InternalAPI {
     /// A [Watcher] instance.
     watcher: Arc<Watcher>,
+    /// A list of public API endpoints.
+    addresses: Vec<msgs::NetworkAddress>,
     /// A flag that indicates wether bitcoind is reachable or not.
     bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
     /// A signal indicating the tower is shuting down.
@@ -31,14 +33,20 @@ impl InternalAPI {
     /// Creates a new [InternalAPI] instance.
     pub fn new(
         watcher: Arc<Watcher>,
+        addresses: Vec<msgs::NetworkAddress>,
         bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
         shutdown_trigger: Trigger,
     ) -> Self {
         Self {
             watcher,
+            addresses,
             bitcoind_reachable,
             shutdown_trigger,
         }
+    }
+
+    pub fn get_addresses(&self) -> &Vec<msgs::NetworkAddress> {
+        &self.addresses
     }
 
     /// Checks whether bitcoind is reachable.
@@ -305,6 +313,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
     ) -> Result<Response<msgs::GetTowerInfoResponse>, Status> {
         Ok(Response::new(msgs::GetTowerInfoResponse {
             tower_id: self.watcher.tower_id.to_vec(),
+            addresses: self.get_addresses().clone(),
             n_registered_users: self.watcher.get_registered_users_count() as u32,
             n_watcher_appointments: self.watcher.get_appointments_count() as u32,
             n_responder_trackers: self.watcher.get_trackers_count() as u32,
@@ -342,11 +351,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             Some(info) => Ok(Response::new(msgs::GetUserResponse {
                 available_slots: info.available_slots,
                 subscription_expiry: info.subscription_expiry,
-                appointments: info
-                    .appointments
-                    .iter()
-                    .map(|(uuid, _)| uuid.to_vec())
-                    .collect(),
+                appointments: info.appointments.keys().map(|uuid| uuid.to_vec()).collect(),
             })),
             None => Err(Status::new(Code::NotFound, "User not found")),
         }

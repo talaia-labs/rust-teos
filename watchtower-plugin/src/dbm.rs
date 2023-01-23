@@ -220,7 +220,7 @@ impl DBM {
         let mut stmt = self
             .connection
             .prepare(
-                "SELECT * 
+                "SELECT available_slots, subscription_start, subscription_expiry, signature
                     FROM registration_receipts 
                     WHERE tower_id = ?1 AND subscription_expiry = (SELECT MAX(subscription_expiry) 
                         FROM registration_receipts 
@@ -230,10 +230,10 @@ impl DBM {
 
         let receipt = stmt
             .query_row([tower_id.to_vec()], |row| {
-                let slots: u32 = row.get(1).unwrap();
-                let start: u32 = row.get(2).unwrap();
-                let expiry: u32 = row.get(3).unwrap();
-                let signature: String = row.get(4).unwrap();
+                let slots: u32 = row.get(0).unwrap();
+                let start: u32 = row.get(1).unwrap();
+                let expiry: u32 = row.get(2).unwrap();
+                let signature: String = row.get(3).unwrap();
 
                 Ok(RegistrationReceipt::with_signature(
                     user_id, slots, start, expiry, signature,
@@ -289,6 +289,9 @@ impl DBM {
             if self.exists_misbehaving_proof(tower_id) {
                 tower.status = TowerStatus::Misbehaving;
             } else if !tower.pending_appointments.is_empty() {
+                // TODO: We could set the status to SubscriptionError here if we checked the state of the subscription
+                // (using available_slots and expiry). This will be possible once we implement cln rpc queries (which are
+                // already viable since cln-plugin = "0.1.1").
                 tower.status = TowerStatus::TemporaryUnreachable;
             }
 
@@ -333,13 +336,13 @@ impl DBM {
     ) -> Result<AppointmentReceipt, Error> {
         let mut stmt = self
             .connection
-            .prepare("SELECT * FROM appointment_receipts WHERE tower_id = ?1 and locator = ?2")
+            .prepare("SELECT start_block, user_signature, tower_signature FROM appointment_receipts WHERE tower_id = ?1 and locator = ?2")
             .unwrap();
 
         stmt.query_row(params![tower_id.to_vec(), locator.to_vec()], |row| {
-            let start_block = row.get::<_, u32>(2).unwrap();
-            let user_sig = row.get::<_, String>(3).unwrap();
-            let tower_sig = row.get::<_, String>(4).unwrap();
+            let start_block = row.get::<_, u32>(0).unwrap();
+            let user_sig = row.get::<_, String>(1).unwrap();
+            let tower_sig = row.get::<_, String>(2).unwrap();
 
             Ok(AppointmentReceipt::with_signature(
                 user_sig,
@@ -549,7 +552,7 @@ impl DBM {
         let mut appointments = Vec::new();
         let mut stmt = self
             .connection
-            .prepare(&format!("SELECT * FROM appointments as a, {} as t WHERE a.locator = t.locator AND t.tower_id = ?", table))
+            .prepare(&format!("SELECT a.locator, a.encrypted_blob, a.to_self_delay FROM appointments as a, {} as t WHERE a.locator = t.locator AND t.tower_id = ?", table))
             .unwrap();
         let mut rows = stmt.query([tower_id.to_vec()]).unwrap();
 
@@ -705,7 +708,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let tower_info = TowerInfo::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -821,7 +824,7 @@ mod tests {
             towers.insert(
                 tower_id,
                 TowerSummary::new(
-                    net_addr.into(),
+                    net_addr.to_owned(),
                     receipt.available_slots(),
                     receipt.subscription_start(),
                     receipt.subscription_expiry(),
@@ -872,7 +875,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let mut tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -886,9 +889,9 @@ mod tests {
             let appointment = generate_random_appointment(None);
             let user_signature = "user_signature";
             let appointment_receipt = AppointmentReceipt::with_signature(
-                user_signature.into(),
+                user_signature.to_owned(),
                 42,
-                "tower_signature".into(),
+                "tower_signature".to_owned(),
             );
 
             tower_summary.available_slots -= 1;
@@ -935,15 +938,15 @@ mod tests {
 
         // Add both
         let tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
         );
         let appointment_receipt = AppointmentReceipt::with_signature(
-            "user_signature".into(),
+            "user_signature".to_owned(),
             42,
-            "tower_signature".into(),
+            "tower_signature".to_owned(),
         );
         dbm.store_appointment_receipt(
             tower_id,
@@ -971,7 +974,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -987,9 +990,9 @@ mod tests {
         for _ in 0..5 {
             let appointment = generate_random_appointment(None);
             let appointment_receipt = AppointmentReceipt::with_signature(
-                user_signature.into(),
+                user_signature.to_owned(),
                 42,
-                "tower_signature".into(),
+                "tower_signature".to_owned(),
             );
             let pending_appointment = generate_random_appointment(None);
             let invalid_appointment = generate_random_appointment(None);
@@ -1058,7 +1061,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let mut tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -1188,7 +1191,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let mut tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -1251,7 +1254,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -1266,9 +1269,9 @@ mod tests {
         // Store a misbehaving proof and load it back
         let appointment = generate_random_appointment(None);
         let appointment_receipt = AppointmentReceipt::with_signature(
-            "user_signature".into(),
+            "user_signature".to_owned(),
             42,
-            "tower_signature".into(),
+            "tower_signature".to_owned(),
         );
 
         let proof = MisbehaviorProof::new(
@@ -1300,7 +1303,7 @@ mod tests {
 
         let receipt = get_random_registration_receipt();
         let tower_summary = TowerSummary::new(
-            net_addr.into(),
+            net_addr.to_owned(),
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
@@ -1315,9 +1318,9 @@ mod tests {
         // // Store a misbehaving proof check
         let appointment = generate_random_appointment(None);
         let appointment_receipt = AppointmentReceipt::with_signature(
-            "user_signature".into(),
+            "user_signature".to_owned(),
             42,
-            "tower_signature".into(),
+            "tower_signature".to_owned(),
         );
 
         let proof = MisbehaviorProof::new(

@@ -8,6 +8,7 @@ use triggered::{Listener, Trigger};
 use warp::{http::StatusCode, reject, reply, Filter, Rejection, Reply};
 
 use teos_common::appointment::LOCATOR_LEN;
+use teos_common::net::http::Endpoint;
 use teos_common::protos as common_msgs;
 use teos_common::{errors, USER_ID_LEN};
 
@@ -219,30 +220,30 @@ async fn get_subscription_info(
 
 fn router(
     grpc_conn: PublicTowerServicesClient<Channel>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let register = warp::post()
-        .and(warp::path("register"))
+        .and(warp::path(Endpoint::Register.to_string()))
         .and(warp::body::content_length_limit(REGISTER_BODY_LEN).and(warp::body::json()))
         .and(warp::addr::remote())
         .and(with_grpc(grpc_conn.clone()))
         .and_then(register);
 
     let add_appointment = warp::post()
-        .and(warp::path("add_appointment"))
+        .and(warp::path(Endpoint::AddAppointment.to_string()))
         .and(warp::body::content_length_limit(ADD_APPOINTMENT_BODY_LEN).and(warp::body::json()))
         .and(warp::addr::remote())
         .and(with_grpc(grpc_conn.clone()))
         .and_then(add_appointment);
 
     let get_appointment = warp::post()
-        .and(warp::path("get_appointment"))
+        .and(warp::path(Endpoint::GetAppointment.to_string()))
         .and(warp::body::content_length_limit(GET_APPOINTMENT_BODY_LEN).and(warp::body::json()))
         .and(warp::addr::remote())
         .and(with_grpc(grpc_conn.clone()))
         .and_then(get_appointment);
 
     let get_subscription_info = warp::post()
-        .and(warp::path("get_subscription_info"))
+        .and(warp::path(Endpoint::GetSubscriptionInfo.to_string()))
         .and(
             warp::body::content_length_limit(GET_SUBSCRIPTION_INFO_BODY_LEN)
                 .and(warp::body::json()),
@@ -357,9 +358,9 @@ mod test_helpers {
         (sock_addr, bitcoind_stopper)
     }
 
-    pub(crate) async fn check_api_error<'a>(
-        endpoint: &str,
-        body: RequestBody<'a>,
+    pub(crate) async fn check_api_error(
+        endpoint: Endpoint,
+        body: RequestBody<'_>,
         server_addr: SocketAddr,
     ) -> (ApiError, StatusCode) {
         let grpc_conn = PublicTowerServicesClient::connect(format!(
@@ -371,15 +372,22 @@ mod test_helpers {
         .unwrap();
 
         let req = match body {
-            RequestBody::Json(j) => warp::test::request().method("POST").path(endpoint).json(&j),
-            RequestBody::DoNotJsonify(j) => {
-                warp::test::request().method("POST").path(endpoint).json(&j)
-            }
+            RequestBody::Json(j) => warp::test::request()
+                .method("POST")
+                .path(&endpoint.path())
+                .json(&j),
+            RequestBody::DoNotJsonify(j) => warp::test::request()
+                .method("POST")
+                .path(&endpoint.path())
+                .json(&j),
             RequestBody::Jsonify(j) => warp::test::request()
                 .method("POST")
-                .path(endpoint)
+                .path(&endpoint.path())
                 .json(&serde_json::from_str::<Value>(j).unwrap()),
-            RequestBody::Body(b) => warp::test::request().method("POST").path(endpoint).body(b),
+            RequestBody::Body(b) => warp::test::request()
+                .method("POST")
+                .path(&endpoint.path())
+                .body(b),
         };
 
         let res = req.reply(&router(grpc_conn)).await;
@@ -390,7 +398,7 @@ mod test_helpers {
     }
 
     pub(crate) async fn request_to_api<B, T>(
-        endpoint: &str,
+        endpoint: Endpoint,
         body: B,
         server_addr: SocketAddr,
     ) -> Result<T, serde_json::Error>
@@ -408,7 +416,7 @@ mod test_helpers {
 
         let res = warp::test::request()
             .method("POST")
-            .path(endpoint)
+            .path(&endpoint.path())
             .json(&serde_json::json!(body))
             .reply(&router(grpc_conn))
             .await;
@@ -428,7 +436,7 @@ mod tests_failures {
     async fn test_no_json_request_body() {
         let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) =
-            check_api_error("/register", RequestBody::Body(""), server_addr).await;
+            check_api_error(Endpoint::Register, RequestBody::Body(""), server_addr).await;
         assert!(api_error.error.contains("EOF while parsing"));
         assert_eq!(api_error.error_code, errors::INVALID_REQUEST_FORMAT);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -437,8 +445,12 @@ mod tests_failures {
     #[tokio::test]
     async fn test_wrong_json_request_body() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let (api_error, status) =
-            check_api_error("/register", RequestBody::DoNotJsonify(""), server_addr).await;
+        let (api_error, status) = check_api_error(
+            Endpoint::Register,
+            RequestBody::DoNotJsonify(""),
+            server_addr,
+        )
+        .await;
         assert!(api_error.error.contains("expected struct"));
         assert_eq!(api_error.error_code, errors::WRONG_FIELD_TYPE);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -447,8 +459,12 @@ mod tests_failures {
     #[tokio::test]
     async fn test_empty_json_request_body() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let (api_error, status) =
-            check_api_error("/register", RequestBody::Jsonify(r#"{}"#), server_addr).await;
+        let (api_error, status) = check_api_error(
+            Endpoint::Register,
+            RequestBody::Jsonify(r#"{}"#),
+            server_addr,
+        )
+        .await;
         assert!(api_error.error.contains("missing field"));
         assert_eq!(api_error.error_code, errors::MISSING_FIELD);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -458,7 +474,7 @@ mod tests_failures {
     async fn test_empty_field() {
         let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
-            "/register",
+            Endpoint::Register,
             RequestBody::Jsonify(r#"{"user_id": ""}"#),
             server_addr,
         )
@@ -472,7 +488,7 @@ mod tests_failures {
     async fn test_wrong_field_hex_encoding_odd() {
         let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
-            "/register",
+            Endpoint::Register,
             RequestBody::Jsonify(r#"{"user_id": "a"}"#),
             server_addr,
         )
@@ -486,7 +502,7 @@ mod tests_failures {
     async fn test_wrong_hex_encoding_character() {
         let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) =
-        check_api_error("/register",  
+        check_api_error(Endpoint::Register,
         RequestBody::Jsonify(r#"{"user_id": "022fa2900ed7fc07b4e8ca3ea081e846245b0497944644aa78ea0b994ac22074dZ"}"#),
         server_addr
     ).await;
@@ -500,7 +516,7 @@ mod tests_failures {
     async fn test_wrong_field_size() {
         let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
-            "/register",
+            Endpoint::Register,
             RequestBody::Jsonify(r#"{"user_id": "aa"}"#),
             server_addr,
         )
@@ -515,7 +531,7 @@ mod tests_failures {
     async fn test_wrong_field_type() {
         let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
-            "/register",
+            Endpoint::Register,
             RequestBody::DoNotJsonify(r#"{"user_id": 1}"#),
             server_addr,
         )
@@ -530,7 +546,7 @@ mod tests_failures {
         // We'll use a different endpoint here since we need a json object with more than one field
         let (server_addr, _s) = run_tower_in_background().await;
         let (api_error, status) = check_api_error(
-            "/add_appointment",
+            Endpoint::AddAppointment,
             RequestBody::Jsonify(r#"{"signature": "aa"}"#),
             server_addr,
         )
@@ -555,7 +571,7 @@ mod tests_failures {
 
         let res = warp::test::request()
             .method("POST")
-            .path("/register")
+            .path(&Endpoint::Register.path())
             .reply(&router(grpc_conn))
             .await;
 
@@ -575,7 +591,7 @@ mod tests_failures {
 
         let res = warp::test::request()
             .method("POST")
-            .path("/register")
+            .path(&Endpoint::Register.path())
             .json(&format!("{}{}", get_random_user_id(), get_random_user_id()))
             .reply(&router(grpc_conn))
             .await;
@@ -596,7 +612,6 @@ mod tests_failures {
 
         let res = warp::test::request()
             .method("POST")
-            .path("/")
             .json(&"")
             .reply(&router(grpc_conn))
             .await;
@@ -616,7 +631,6 @@ mod tests_failures {
         .unwrap();
 
         let res = warp::test::request()
-            .path("/")
             .json(&"")
             .reply(&router(grpc_conn))
             .await;
@@ -644,7 +658,7 @@ mod tests_methods {
         let (server_addr, _s) = run_tower_in_background().await;
         let response =
             request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
-                "/register",
+                Endpoint::Register,
                 common_msgs::RegisterRequest {
                     user_id: get_random_user_id().to_vec(),
                 },
@@ -662,7 +676,7 @@ mod tests_methods {
 
         // Register once, this should go trough and set slots to the limit
         request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
-            "/register",
+            Endpoint::Register,
             common_msgs::RegisterRequest {
                 user_id: user_id.to_vec(),
             },
@@ -674,7 +688,7 @@ mod tests_methods {
         // Register again to get additional slots, this should fail
         assert_eq!(
             check_api_error(
-                "/register",
+                Endpoint::Register,
                 RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
                     user_id: user_id.to_vec(),
                 })),
@@ -702,7 +716,7 @@ mod tests_methods {
         // Register with bitcoind down
         assert_eq!(
             check_api_error(
-                "/register",
+                Endpoint::Register,
                 RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
                     user_id: user_id.to_vec(),
                 })),
@@ -726,7 +740,7 @@ mod tests_methods {
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
         request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
-            "/register",
+            Endpoint::Register,
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
@@ -743,7 +757,7 @@ mod tests_methods {
             common_msgs::AddAppointmentRequest,
             common_msgs::AddAppointmentResponse,
         >(
-            "/add_appointment",
+            Endpoint::AddAppointment,
             common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.into()),
                 signature,
@@ -767,7 +781,7 @@ mod tests_methods {
 
         assert_eq!(
             check_api_error(
-                "/add_appointment",
+                Endpoint::AddAppointment,
                 RequestBody::Json(serde_json::json!(common_msgs::AddAppointmentRequest {
                     appointment: Some(appointment.into()),
                     signature,
@@ -794,7 +808,7 @@ mod tests_methods {
         // Register
         let (user_sk, user_pk) = cryptography::get_random_keypair();
         request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
-            "/register",
+            Endpoint::Register,
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
@@ -813,7 +827,7 @@ mod tests_methods {
         // Try to add it via the http API
         assert_eq!(
             check_api_error(
-                "/add_appointment",
+                Endpoint::AddAppointment,
                 RequestBody::Json(serde_json::json!(common_msgs::AddAppointmentRequest {
                     appointment: Some(appointment.into()),
                     signature,
@@ -843,7 +857,7 @@ mod tests_methods {
 
         assert_eq!(
             check_api_error(
-                "/add_appointment",
+                Endpoint::AddAppointment,
                 RequestBody::Json(serde_json::json!(common_msgs::AddAppointmentRequest {
                     appointment: Some(appointment.into()),
                     signature,
@@ -868,7 +882,7 @@ mod tests_methods {
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
         request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
-            "/register",
+            Endpoint::Register,
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
@@ -882,7 +896,7 @@ mod tests_methods {
         let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         request_to_api::<common_msgs::AddAppointmentRequest, common_msgs::AddAppointmentResponse>(
-            "/add_appointment",
+            Endpoint::AddAppointment,
             common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
                 signature,
@@ -897,7 +911,7 @@ mod tests_methods {
             common_msgs::GetAppointmentRequest,
             common_msgs::GetAppointmentResponse,
         >(
-            "/get_appointment",
+            Endpoint::GetAppointment,
             common_msgs::GetAppointmentRequest {
                 locator: appointment.locator.to_vec(),
                 signature: cryptography::sign(
@@ -927,7 +941,7 @@ mod tests_methods {
 
         assert_eq!(
             check_api_error(
-                "/get_appointment",
+                Endpoint::GetAppointment,
                 RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
                     locator: appointment.locator.to_vec(),
                     signature: cryptography::sign(
@@ -956,7 +970,7 @@ mod tests_methods {
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
         request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
-            "/register",
+            Endpoint::Register,
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
@@ -970,7 +984,7 @@ mod tests_methods {
 
         assert_eq!(
             check_api_error(
-                "/get_appointment",
+                Endpoint::GetAppointment,
                 RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
                     locator: appointment.locator.to_vec(),
                     signature: cryptography::sign(
@@ -1005,7 +1019,7 @@ mod tests_methods {
 
         assert_eq!(
             check_api_error(
-                "/get_appointment",
+                Endpoint::GetAppointment,
                 RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
                     locator: appointment.locator.to_vec(),
                     signature: cryptography::sign(
@@ -1034,7 +1048,7 @@ mod tests_methods {
         // Register first
         let (user_sk, user_pk) = cryptography::get_random_keypair();
         request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
-            "/register",
+            Endpoint::Register,
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
@@ -1048,7 +1062,7 @@ mod tests_methods {
             common_msgs::GetSubscriptionInfoRequest,
             common_msgs::GetSubscriptionInfoResponse,
         >(
-            "/get_subscription_info",
+            Endpoint::GetSubscriptionInfo,
             common_msgs::GetSubscriptionInfoRequest {
                 signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
                     .unwrap(),
@@ -1072,7 +1086,7 @@ mod tests_methods {
 
         assert_eq!(
             check_api_error(
-                "/get_subscription_info",
+                Endpoint::GetSubscriptionInfo,
                 RequestBody::Json(serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
                     signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
                         .unwrap(),
@@ -1100,7 +1114,7 @@ mod tests_methods {
 
         assert_eq!(
             check_api_error(
-                "/get_subscription_info",
+                Endpoint::GetSubscriptionInfo,
                 RequestBody::Json(serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
                     signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
                         .unwrap(),
