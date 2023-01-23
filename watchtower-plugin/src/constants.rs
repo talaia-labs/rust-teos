@@ -8,17 +8,15 @@ pub const WT_PORT: &str = "watchtower-port";
 pub const DEFAULT_WT_PORT: i64 = 9814;
 pub const WT_PORT_DESC: &str = "tower API port";
 pub const WT_MAX_RETRY_TIME: &str = "watchtower-max-retry-time";
-pub const DEFAULT_WT_MAX_RETRY_TIME: i64 = 900;
-pub const WT_MAX_RETRY_TIME_DESC: &str = "the time (in seconds) after when a retrier will give up trying to send data to a temporary unreachable tower";
-pub const WT_PROXY: &str = "watchtower-proxy";
-pub const WT_PROXY_DESC: &str = "Socks v5 proxy IP address and port for the watchtower client";
+pub const DEFAULT_WT_MAX_RETRY_TIME: i64 = 3600;
+pub const WT_MAX_RETRY_TIME_DESC: &str = "for how long (in seconds) a retry strategy will try to reach a temporary unreachable tower before giving up. Defaults to 1 hour";
 pub const WT_AUTO_RETRY_DELAY: &str = "watchtower-auto-retry-delay";
-pub const DEFAULT_WT_AUTO_RETRY_DELAY: i64 = 86400;
-pub const WT_AUTO_RETRY_DELAY_DESC: &str = "the time (in seconds) that a retrier will wait before auto-retrying a failed tower. Defaults to once a day";
+pub const DEFAULT_WT_AUTO_RETRY_DELAY: i64 = 28800;
+pub const WT_AUTO_RETRY_DELAY_DESC: &str = "how long (in seconds) a retrier will wait before auto-retrying a failed tower. Defaults to once every 8 hours";
 pub const DEV_WT_MAX_RETRY_INTERVAL: &str = "dev-watchtower-max-retry-interval";
-pub const DEFAULT_DEV_WT_MAX_RETRY_INTERVAL: i64 = 60;
+pub const DEFAULT_DEV_WT_MAX_RETRY_INTERVAL: i64 = 900;
 pub const DEV_WT_MAX_RETRY_INTERVAL_DESC: &str =
-    "the maximum time (in seconds) for a retrier wait interval";
+    "maximum length (in seconds) for a retry interval. Defaults to 15 min";
 
 /// Collections of rpc method names and descriptions
 
