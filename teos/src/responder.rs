@@ -297,7 +297,7 @@ impl Responder {
     /// The [TransactionTracker] is queried to the [DBM].
     pub(crate) fn get_tracker(&self, uuid: UUID) -> Option<TransactionTracker> {
         if self.trackers.lock().unwrap().contains_key(&uuid) {
-            self.dbm.lock().unwrap().load_tracker(uuid).ok()
+            self.dbm.lock().unwrap().load_tracker(uuid)
         } else {
             None
         }
@@ -623,7 +623,6 @@ mod tests {
     };
 
     use teos_common::constants::IRREVOCABLY_RESOLVED;
-    use teos_common::dbm::Error as DBError;
     use teos_common::test_utils::get_random_user_id;
 
     impl PartialEq for Responder {
@@ -1581,10 +1580,7 @@ mod tests {
             assert!(!responder.tx_tracker_map.lock().unwrap().contains_key(&txid));
 
             // But it can be found in the database
-            assert!(matches!(
-                responder.dbm.lock().unwrap().load_tracker(uuid),
-                Ok(TransactionTracker { .. })
-            ));
+            assert!(responder.dbm.lock().unwrap().load_tracker(uuid).is_some());
         }
     }
 
@@ -1669,10 +1665,7 @@ mod tests {
         for uuid in all_trackers {
             if target_trackers.contains(&uuid) {
                 assert!(!responder.trackers.lock().unwrap().contains_key(&uuid));
-                assert!(matches!(
-                    responder.dbm.lock().unwrap().load_tracker(uuid),
-                    Err(DBError::NotFound)
-                ));
+                assert!(responder.dbm.lock().unwrap().load_tracker(uuid).is_none());
                 let penalty_txid = &uuid_txid_map[&uuid];
                 // If the penalty had more than one associated uuid, only one has been deleted
                 // (because that's how the test has been designed)
@@ -1702,10 +1695,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .contains_key(&uuid_txid_map[&uuid]));
-                assert!(matches!(
-                    responder.dbm.lock().unwrap().load_tracker(uuid),
-                    Ok(TransactionTracker { .. })
-                ));
+                assert!(responder.dbm.lock().unwrap().load_tracker(uuid).is_some());
             }
         }
 
