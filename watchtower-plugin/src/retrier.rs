@@ -16,6 +16,8 @@ use crate::net::http::{self, AddAppointmentError};
 use crate::wt_client::{RevocationData, WTClient};
 use crate::{MisbehaviorProof, TowerStatus};
 
+const POOLING_TIME: f64 = 1.0;
+
 #[derive(Eq, PartialEq, Debug)]
 enum RetryError {
     // bool marks whether the Subscription error is permanent or not
@@ -167,7 +169,7 @@ impl RetryManager {
                         }
                     }
                     // Sleep to not waste a lot of CPU cycles.
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    tokio::time::sleep(Duration::from_secs_f64(POOLING_TIME)).await;
                 }
                 Err(TryRecvError::Disconnected) => break,
             }
@@ -599,8 +601,10 @@ mod tests {
     const LONG_AUTO_RETRY_DELAY: u32 = 60;
     const SHORT_AUTO_RETRY_DELAY: u32 = 3;
     const API_DELAY: f64 = 0.5;
+    const HALF_API_DELAY: f64 = API_DELAY / 2.0;
     const MAX_ELAPSED_TIME: u16 = 2;
     const MAX_INTERVAL_TIME: u16 = 1;
+    const MAX_RUN_TIME: f64 = 0.5;
 
     impl Retrier {
         fn empty(wt_client: Arc<Mutex<WTClient>>, tower_id: TowerId) -> Self {
@@ -673,15 +677,16 @@ mod tests {
         tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
             .unwrap();
 
-        // Wait for the elapsed time and check how the tower status changed
-        tokio::time::sleep(Duration::from_secs((API_DELAY / 2.0) as u64)).await;
+        // Wait for a fraction of the time the API lasts to respond and check again
+        tokio::time::sleep(Duration::from_secs_f64(HALF_API_DELAY)).await;
         assert!(wt_client
             .lock()
             .unwrap()
             .get_retrier_status(&tower_id)
             .unwrap()
             .is_running());
-        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
+        // Wait for the rest of time (to make sure a retry round has finished) and check the tower status
+        tokio::time::sleep(Duration::from_secs_f64(HALF_API_DELAY + MAX_RUN_TIME)).await;
 
         let state = wt_client.lock().unwrap();
         assert_eq!(
@@ -740,11 +745,8 @@ mod tests {
         tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
             .unwrap();
 
-        // Wait for the elapsed time and check how the tower status changed
-        tokio::time::sleep(Duration::from_secs_f64(
-            (MAX_ELAPSED_TIME as f64 + 1.0) / 2.0,
-        ))
-        .await;
+        // Wait for a round to finish and check the state
+        tokio::time::sleep(Duration::from_secs_f64(MAX_RUN_TIME)).await;
         assert!(wt_client
             .lock()
             .unwrap()
@@ -759,8 +761,11 @@ mod tests {
             .is_running());
 
         // Wait until the task gives up and check again (this gives up due to accumulation of transient errors,
-        // so the retiers will be idle).
-        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
+        // so the retriers will be idle). Since the retrier fails here we need to wait for POOLING_TIME too
+        tokio::time::sleep(Duration::from_secs_f64(
+            MAX_ELAPSED_TIME as f64 + POOLING_TIME,
+        ))
+        .await;
         assert!(wt_client
             .lock()
             .unwrap()
@@ -881,8 +886,8 @@ mod tests {
         });
         tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
             .unwrap();
-        // Wait for the elapsed time and check how the tower status changed
-        tokio::time::sleep(Duration::from_secs((API_DELAY / 2.0) as u64)).await;
+        // Wait for a fraction of the time the API lasts to respond and check again
+        tokio::time::sleep(Duration::from_secs_f64(HALF_API_DELAY)).await;
         assert!(wt_client
             .lock()
             .unwrap()
@@ -890,7 +895,8 @@ mod tests {
             .unwrap()
             .is_running());
 
-        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
+        // Wait for the rest of time (to make sure a retry round has finished) and check the tower status
+        tokio::time::sleep(Duration::from_secs_f64(HALF_API_DELAY + MAX_RUN_TIME)).await;
         assert_eq!(
             wt_client
                 .lock()
@@ -980,8 +986,8 @@ mod tests {
         tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
             .unwrap();
 
-        // Wait for the elapsed time and check how the tower status changed
-        tokio::time::sleep(Duration::from_secs_f64(API_DELAY / 2.0)).await;
+        // Wait for a fraction of the time the API lasts to respond and check again
+        tokio::time::sleep(Duration::from_secs_f64(HALF_API_DELAY)).await;
         assert!(wt_client
             .lock()
             .unwrap()
@@ -989,7 +995,12 @@ mod tests {
             .unwrap()
             .is_running());
 
-        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
+        // Wait for the rest of time (to make sure a retry round has finished) and check the tower status
+        // We wait for POOLING_TIME here too given data is checked to be wiped every polling interval
+        tokio::time::sleep(Duration::from_secs_f64(
+            HALF_API_DELAY + MAX_RUN_TIME + POOLING_TIME,
+        ))
+        .await;
         assert!(wt_client
             .lock()
             .unwrap()
@@ -1040,7 +1051,7 @@ mod tests {
 
         // Send a retry request and check how the tower is removed
         tx.send((tower_id, RevocationData::None)).unwrap();
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs_f64(POOLING_TIME)).await;
         assert!(!wt_client.lock().unwrap().towers.contains_key(&tower_id));
 
         task.abort();
@@ -1124,7 +1135,8 @@ mod tests {
         tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
             .unwrap();
 
-        tokio::time::sleep(Duration::from_secs_f64(API_DELAY / 2.0)).await;
+        // Wait for a fraction of the time the API lasts to respond and check again
+        tokio::time::sleep(Duration::from_secs_f64(HALF_API_DELAY)).await;
         assert!(wt_client
             .lock()
             .unwrap()
@@ -1132,8 +1144,11 @@ mod tests {
             .unwrap()
             .is_running());
 
-        // Wait for the elapsed time and check how the tower status changed
-        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
+        // Wait for the rest of time (to make sure a retry round has finished) and check the tower
+        tokio::time::sleep(Duration::from_secs_f64(
+            HALF_API_DELAY + MAX_RUN_TIME + POOLING_TIME,
+        ))
+        .await;
         let state = wt_client.lock().unwrap();
         assert!(!state.retriers.contains_key(&tower_id));
 
@@ -1192,7 +1207,10 @@ mod tests {
 
         {
             // After the retriers gives up, it should go idling and flag the tower as unreachable
-            tokio::time::sleep(Duration::from_secs((MAX_ELAPSED_TIME) as u64)).await;
+            tokio::time::sleep(Duration::from_secs_f64(
+                MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME,
+            ))
+            .await;
             let state = wt_client.lock().unwrap();
             assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
 
@@ -1212,7 +1230,7 @@ mod tests {
             .unwrap();
 
         {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(Duration::from_secs_f64(POOLING_TIME)).await;
             let state = wt_client.lock().unwrap();
             assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
             let tower = state.towers.get(&tower_id).unwrap();
@@ -1261,7 +1279,7 @@ mod tests {
         // Send a retry flag to the retrier to force a retry.
         tx.send((tower_id, RevocationData::None)).unwrap();
 
-        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
+        tokio::time::sleep(Duration::from_secs_f64(POOLING_TIME + MAX_RUN_TIME)).await;
         // FIXME: Here we should be able to check this, however, due to httpmock limitations, we cannot return a response based on the request.
         // Therefore, both requests will be responded with the same data. Given pending_appointments is a HashSet, we cannot even know which request
         // will be sent first (sets are initialized with a random state, which decided the order or iteration).
