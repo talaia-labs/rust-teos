@@ -158,7 +158,7 @@ async fn main() {
                 _ => e.to_string(),
             };
             log::error!("Failed to connect to bitcoind. Error: {}", e_msg);
-            return;
+            std::process::exit(1);
         }
     };
 
