@@ -96,11 +96,11 @@ impl Carrier {
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                 // Since we're pushing a raw transaction to the network we can face several rejections
                 rpc_errors::RPC_VERIFY_REJECTED => {
-                    log::error!("Transaction couldn't be broadcast. {:?}", rpcerr);
+                    log::error!("Transaction couldn't be broadcast. {rpcerr:?}");
                     ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED)
                 }
                 rpc_errors::RPC_VERIFY_ERROR => {
-                    log::error!("Transaction couldn't be broadcast. {:?}", rpcerr);
+                    log::error!("Transaction couldn't be broadcast. {rpcerr:?}");
                     ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
                 }
                 rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {
@@ -122,10 +122,7 @@ impl Carrier {
                 }
                 _ => {
                     // If something else happens (unlikely but possible) log it so we can treat it in future releases.
-                    log::error!(
-                        "Unexpected rpc error when calling sendrawtransaction: {:?}",
-                        rpcerr
-                    );
+                    log::error!("Unexpected rpc error when calling sendrawtransaction: {rpcerr:?}");
                     ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION)
                 }
             },
@@ -137,7 +134,7 @@ impl Carrier {
             }
             Err(e) => {
                 // TODO: This may need finer catching.
-                log::error!("Unexpected error when calling sendrawtransaction: {:?}", e);
+                log::error!("Unexpected error when calling sendrawtransaction: {e:?}");
                 ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION)
             }
         };
@@ -159,15 +156,12 @@ impl Carrier {
             Ok(tx) => tx.blockhash.is_none(),
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
                 rpc_errors::RPC_INVALID_ADDRESS_OR_KEY => {
-                    log::info!("Transaction not found in mempool: {}", txid);
+                    log::info!("Transaction not found in mempool: {txid}");
                     false
                 }
                 e => {
                     // DISCUSS: This could result in a silent error with unknown consequences
-                    log::error!(
-                        "Unexpected error code when calling getrawtransaction: {}",
-                        e
-                    );
+                    log::error!("Unexpected error code when calling getrawtransaction: {e}");
                     false
                 }
             },
@@ -180,10 +174,7 @@ impl Carrier {
             // TODO: This may need finer catching.
             Err(e) => {
                 // DISCUSS: This could result in a silent error with unknown consequences
-                log::error!(
-                    "Unexpected JSONRPCError when calling getrawtransaction: {}",
-                    e
-                );
+                log::error!("Unexpected JSONRPCError when calling getrawtransaction: {e}");
                 false
             }
         }

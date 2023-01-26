@@ -217,7 +217,7 @@ impl Watcher {
         let uuid = UUID::new(extended_appointment.locator(), user_id);
 
         if self.responder.has_tracker(uuid) {
-            log::info!("Tracker for {} already found in Responder", uuid);
+            log::info!("Tracker for {uuid} already found in Responder");
             return Err(AddAppointmentFailure::AlreadyTriggered);
         }
 
@@ -286,9 +286,8 @@ impl Watcher {
                 .insert(uuid)
             {
                 log::debug!(
-                    "Adding an additional appointment to locator {}: {}",
-                    appointment.locator(),
-                    uuid
+                    "Adding an additional appointment to locator {}: {uuid}",
+                    appointment.locator()
                 );
                 self.dbm
                     .lock()
@@ -297,7 +296,7 @@ impl Watcher {
                     .unwrap();
                 StoredAppointment::Collision
             } else {
-                log::debug!("Update received for {}, locator map not modified", uuid);
+                log::debug!("Update received for {uuid}, locator map not modified");
                 self.dbm
                     .lock()
                     .unwrap()
@@ -339,7 +338,7 @@ impl Watcher {
                 ) {
                     // DISCUSS: We could either free the slots or keep it occupied as if this was misbehavior.
                     // Keeping it for now.
-                    log::warn!("Appointment bounced in the Responder. Reason: {:?}", reason);
+                    log::warn!("Appointment bounced in the Responder. Reason: {reason:?}");
 
                     self.dbm.lock().unwrap().remove_appointment(uuid);
                     TriggeredAppointment::Rejected
@@ -375,7 +374,7 @@ impl Watcher {
         locator: Locator,
         user_signature: &str,
     ) -> Result<AppointmentInfo, GetAppointmentFailure> {
-        let message = format!("get appointment {}", locator);
+        let message = format!("get appointment {locator}");
 
         let user_id = self
             .gatekeeper
@@ -405,7 +404,7 @@ impl Watcher {
                 .get_tracker(uuid)
                 .map(AppointmentInfo::Tracker)
                 .ok_or_else(|| {
-                    log::info!("Cannot find {}", locator);
+                    log::info!("Cannot find {locator}");
                     GetAppointmentFailure::NotFound
                 })
         }
@@ -511,16 +510,14 @@ impl Watcher {
 
         for uuid in uuids {
             match reason {
-                DeletionReason::Outdated => log::info!(
-                    "End time reached by {} without breach. Deleting appointment",
-                    uuid
-                ),
+                DeletionReason::Outdated => {
+                    log::info!("End time reached by {uuid} without breach. Deleting appointment")
+                }
                 DeletionReason::Invalid => log::info!(
-                    "{} cannot be completed, it contains invalid data. Deleting appointment",
-                    uuid
+                    "{uuid} cannot be completed, it contains invalid data. Deleting appointment"
                 ),
                 DeletionReason::Accepted => {
-                    log::info!("{} accepted by the Responder. Deleting appointment", uuid)
+                    log::info!("{uuid} accepted by the Responder. Deleting appointment")
                 }
             };
             match appointments.remove(uuid) {
@@ -537,7 +534,7 @@ impl Watcher {
                 }
                 None => {
                     // This should never happen. Logging just in case so we can fix it if so
-                    log::error!("Appointment not found when cleaning: {}", uuid);
+                    log::error!("Appointment not found when cleaning: {uuid}");
                 }
             }
         }
@@ -642,12 +639,11 @@ impl Watcher {
                         match dbm.load_locator(*uuid) {
                             Ok(locator) => locators.push(locator),
                             Err(_) => log::error!(
-                                "Tracker found in Responder but not in DB (uuid = {})",
-                                uuid
+                                "Tracker found in Responder but not in DB (uuid = {uuid})"
                             ),
                         }
                     } else {
-                        log::error!("Appointment found in the Gatekeeper but not in the Watcher nor the Responder (uuid = {})", uuid)
+                        log::error!("Appointment found in the Gatekeeper but not in the Watcher nor the Responder (uuid = {uuid})")
                     }
                 }
             }
@@ -703,10 +699,7 @@ impl chain::Listen for Watcher {
             let mut appointments_to_delete = HashSet::from_iter(invalid_breaches.into_keys());
             let mut delivered_appointments = HashSet::new();
             for (uuid, breach) in valid_breaches {
-                log::info!(
-                    "Notifying Responder and deleting appointment (uuid: {})",
-                    uuid
-                );
+                log::info!("Notifying Responder and deleting appointment (uuid: {uuid})");
 
                 if let ConfirmationStatus::Rejected(_) = self.responder.handle_breach(
                     uuid,

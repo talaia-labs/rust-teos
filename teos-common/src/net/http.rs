@@ -22,6 +22,6 @@ impl std::fmt::Display for Endpoint {
 
 impl Endpoint {
     pub fn path(&self) -> String {
-        format!("/{}", self)
+        format!("/{self}")
     }
 }

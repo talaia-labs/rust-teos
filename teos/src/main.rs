@@ -72,7 +72,7 @@ async fn main() {
 
     // Create data dir if it does not exist
     fs::create_dir_all(&path).unwrap_or_else(|e| {
-        eprintln!("Cannot create data dir: {:?}", e);
+        eprintln!("Cannot create data dir: {e:?}");
         std::process::exit(1);
     });
 
@@ -81,7 +81,7 @@ async fn main() {
     let is_default = conf.is_default();
     conf.patch_with_options(opt);
     conf.verify().unwrap_or_else(|e| {
-        eprintln!("{}", e);
+        eprintln!("{e}");
         std::process::exit(1);
     });
 
@@ -112,7 +112,7 @@ async fn main() {
     // Create network dir
     let path_network = path.join(conf.btc_network.clone());
     fs::create_dir_all(&path_network).unwrap_or_else(|e| {
-        eprintln!("Cannot create network dir: {:?}", e);
+        eprintln!("Cannot create network dir: {e:?}");
         std::process::exit(1);
     });
     let dbm = Arc::new(Mutex::new(
@@ -136,7 +136,7 @@ async fn main() {
             }
         }
     };
-    log::info!("tower_id: {}", tower_pk);
+    log::info!("tower_id: {tower_pk}");
 
     // Initialize our bitcoind client
     let (bitcoin_cli, bitcoind_reachable) = match BitcoindClient::new(
@@ -157,7 +157,7 @@ async fn main() {
                 ErrorKind::InvalidData => "invalid btcrpcuser or btcrpcpassword".into(),
                 _ => e.to_string(),
             };
-            log::error!("Failed to connect to bitcoind. Error: {}", e_msg);
+            log::error!("Failed to connect to bitcoind. Error: {e_msg}");
             std::process::exit(1);
         }
     };
@@ -171,7 +171,7 @@ async fn main() {
     };
     let rpc = Arc::new(
         Client::new(
-            &format!("{}{}:{}", schema, conf.btc_rpc_connect, conf.btc_rpc_port),
+            &format!("{schema}{}:{}", conf.btc_rpc_connect, conf.btc_rpc_port),
             Auth::UserPass(conf.btc_rpc_user.clone(), conf.btc_rpc_password.clone()),
         )
         .unwrap(),
@@ -196,8 +196,7 @@ async fn main() {
     // could pull from the backend. Adding this functionality just for regtest seemed unnecessary though, hence the check.
     if tip.height < IRREVOCABLY_RESOLVED {
         log::error!(
-            "Not enough blocks to start teosd (required: {}). Mine at least {} more",
-            IRREVOCABLY_RESOLVED,
+            "Not enough blocks to start teosd (required: {IRREVOCABLY_RESOLVED}). Mine at least {} more",
             IRREVOCABLY_RESOLVED - tip.height
         );
         std::process::exit(1);
@@ -323,7 +322,7 @@ async fn main() {
     // Generate mtls certificates to data directory so the admin can securely connect
     // to the server to perform administrative tasks.
     let (identity, ca_cert) = tls_init(&path).unwrap_or_else(|e| {
-        eprintln!("Couldn't generate tls certificates: {:?}", e);
+        eprintln!("Couldn't generate tls certificates: {e:?}");
         std::process::exit(1);
     });
 
@@ -370,7 +369,7 @@ async fn main() {
                 .expose_onion_service(tor_service_ready, shutdown_signal_tor)
                 .await
             {
-                eprintln!("Cannot connect to the Tor backend: {}", e);
+                eprintln!("Cannot connect to the Tor backend: {e}");
                 std::process::exit(1);
             }
         }));

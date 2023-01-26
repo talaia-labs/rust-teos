@@ -75,8 +75,7 @@ impl TryFrom<serde_json::Value> for UserId {
                     UserId::try_from(a.pop().unwrap())
                 } else {
                     Err(format!(
-                        "Unexpected json format. Expected a single parameter. Received: {}",
-                        param_count
+                        "Unexpected json format. Expected a single parameter. Received: {param_count}"
                     ))
                 }
             }
@@ -84,8 +83,7 @@ impl TryFrom<serde_json::Value> for UserId {
                 let param_count = m.len();
                 if param_count > 1 {
                     Err(format!(
-                        "Unexpected json format. Expected a single parameter. Received: {}",
-                        param_count
+                        "Unexpected json format. Expected a single parameter. Received: {param_count}"
                     ))
                 } else {
                     UserId::try_from(json!(m
@@ -95,8 +93,7 @@ impl TryFrom<serde_json::Value> for UserId {
                 }
             }
             _ => Err(format!(
-                "Unexpected request format. Expected: user_id/tower_id. Received: '{}'",
-                value
+                "Unexpected request format. Expected: user_id/tower_id. Received: '{value}'"
             )),
         }
     }

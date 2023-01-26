@@ -79,7 +79,7 @@ impl<'a> BitcoindClient<'a> {
         teos_network: &'a str,
     ) -> std::io::Result<BitcoindClient<'a>> {
         let http_endpoint = HttpEndpoint::for_host(host.to_owned()).with_port(port);
-        let rpc_credentials = base64::encode(&format!("{}:{}", rpc_user, rpc_password));
+        let rpc_credentials = base64::encode(&format!("{rpc_user}:{rpc_password}"));
         let bitcoind_rpc_client = RpcClient::new(&rpc_credentials, http_endpoint)?;
 
         let client = Self {
@@ -97,10 +97,7 @@ impl<'a> BitcoindClient<'a> {
         if btc_network != teos_network {
             Err(Error::new(
                 ErrorKind::InvalidInput,
-                format!(
-                    "bitcoind is running on {} but teosd is set to run on {}",
-                    btc_network, teos_network
-                ),
+                format!("bitcoind is running on {btc_network} but teosd is set to run on {teos_network}"),
             ))
         } else {
             Ok(client)

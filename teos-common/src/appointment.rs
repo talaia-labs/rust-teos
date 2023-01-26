@@ -95,7 +95,7 @@ impl std::str::FromStr for AppointmentStatus {
             "being_watched" => Ok(AppointmentStatus::BeingWatched),
             "dispute_responded" => Ok(AppointmentStatus::DisputeResponded),
             "not_found" => Ok(AppointmentStatus::NotFound),
-            _ => Err(format!("Unknown status: {}", s)),
+            _ => Err(format!("Unknown status: {s}")),
         }
     }
 }
@@ -107,7 +107,7 @@ impl fmt::Display for AppointmentStatus {
             AppointmentStatus::DisputeResponded => "dispute_responded",
             AppointmentStatus::NotFound => "not_found",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

@@ -100,7 +100,7 @@ where
             Err(e) => match e.kind() {
                 BlockSourceErrorKind::Persistent => {
                     // FIXME: This may need finer catching
-                    log::error!("Unexpected persistent error: {:?}", e);
+                    log::error!("Unexpected persistent error: {e:?}");
                 }
                 BlockSourceErrorKind::Transient => {
                     // Treating all transient as connection errors at least for now.

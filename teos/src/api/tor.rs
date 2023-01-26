@@ -49,7 +49,7 @@ impl TorAPI {
         log::info!("Loading Tor secret key from disk");
         let key = fs::read(path.join("onion_v3_sk"))
             .await
-            .map_err(|e| log::warn!("Tor secret key cannot be loaded. {}", e))
+            .map_err(|e| log::warn!("Tor secret key cannot be loaded. {e}"))
             .ok()?;
         let key: [u8; 64] = key
             .try_into()
@@ -62,7 +62,7 @@ impl TorAPI {
     /// Stores a Tor key to disk.
     async fn store_sk(key: &TorSecretKeyV3, path: PathBuf) {
         if let Err(e) = fs::write(path.join("onion_v3_sk"), key.as_bytes()).await {
-            log::error!("Cannot store Tor secret key. {}", e);
+            log::error!("Cannot store Tor secret key. {e}");
         }
     }
 
@@ -125,7 +125,7 @@ impl TorAPI {
             .map_err(|e| {
                 Error::new(
                     ErrorKind::Other,
-                    format!("failed to create onion hidden service: {}", e),
+                    format!("failed to create onion hidden service: {e}"),
                 )
             })?;
 

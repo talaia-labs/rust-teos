@@ -20,7 +20,7 @@ pub fn from_file<T: Default + serde::de::DeserializeOwned>(path: PathBuf) -> T {
     match std::fs::read(path) {
         Ok(file_content) => toml::from_slice::<T>(&file_content).map_or_else(
             |e| {
-                eprintln!("Couldn't parse config file: {}", e);
+                eprintln!("Couldn't parse config file: {e}");
                 T::default()
             },
             |config| config,
