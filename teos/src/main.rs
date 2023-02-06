@@ -293,7 +293,7 @@ async fn main() {
         .await;
         addresses.push(msgs::NetworkAddress::from_torv3(
             tor_api.get_onion_address(),
-            conf.api_port,
+            conf.onion_hidden_service_port,
         ));
 
         Some(tor_api)
