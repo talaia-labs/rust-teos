@@ -27,7 +27,7 @@ impl std::str::FromStr for AddressType {
         match s {
             "ipv4" => Ok(AddressType::IpV4),
             "torv3" => Ok(AddressType::TorV3),
-            _ => Err(format!("Unknown type: {}", s)),
+            _ => Err(format!("Unknown type: {s}")),
         }
     }
 }
@@ -38,7 +38,7 @@ impl fmt::Display for AddressType {
             AddressType::IpV4 => "ipv4",
             AddressType::TorV3 => "torv3",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

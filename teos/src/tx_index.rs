@@ -189,7 +189,7 @@ where
             // Blocks should be disconnected from last backwards. Log if that's not the case so we can revisit this and fix it.
             if let Some(ref h) = self.blocks.pop_back() {
                 if h != block_hash {
-                    log::error!("Disconnected block does not match the oldest block stored in the TxIndex ({} != {})", block_hash, h);
+                    log::error!("Disconnected block does not match the oldest block stored in the TxIndex ({block_hash} != {h})");
                 }
             }
         } else {
@@ -204,7 +204,7 @@ where
         let ks = self.tx_in_block.remove(&h).unwrap();
         self.index.retain(|k, _| !ks.contains(k));
 
-        log::info!("Oldest block removed from index: {}", h);
+        log::info!("Oldest block removed from index: {h}");
     }
 }
 

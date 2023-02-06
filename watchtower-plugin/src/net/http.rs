@@ -62,7 +62,7 @@ pub async fn register(
     tower_net_addr: &NetAddr,
     proxy: &Option<ProxyInfo>,
 ) -> Result<RegistrationReceipt, RequestError> {
-    log::info!("Registering in the Eye of Satoshi (tower_id={})", tower_id);
+    log::info!("Registering in the Eye of Satoshi (tower_id={tower_id})");
     process_post_response(
         post_request(
             tower_net_addr,
@@ -95,13 +95,12 @@ pub async fn add_appointment(
     signature: &str,
 ) -> Result<(u32, AppointmentReceipt), AddAppointmentError> {
     log::debug!(
-        "Sending appointment {} to tower {}",
-        appointment.locator,
-        tower_id
+        "Sending appointment {} to tower {tower_id}",
+        appointment.locator
     );
     let (response, receipt) =
         send_appointment(tower_id, tower_net_addr, proxy, appointment, signature).await?;
-    log::debug!("Appointment accepted and signed by {}", tower_id);
+    log::debug!("Appointment accepted and signed by {tower_id}");
     log::debug!("Remaining slots: {}", response.available_slots);
     log::debug!("Start block: {}", response.start_block);
 
@@ -167,10 +166,10 @@ pub async fn post_request<S: Serialize>(
             reqwest::Client::builder()
                 .proxy(
                     reqwest::Proxy::http(proxy.get_socks_addr())
-                        .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?,
+                        .map_err(|e| RequestError::ConnectionError(format!("{e}")))?,
                 )
                 .build()
-                .map_err(|e| RequestError::ConnectionError(format!("{}", e)))?
+                .map_err(|e| RequestError::ConnectionError(format!("{e}")))?
         } else {
             reqwest::Client::new()
         }
@@ -190,7 +189,7 @@ pub async fn post_request<S: Serialize>(
         .send()
         .await
         .map_err(|e| {
-            log::debug!("An error ocurred when sending data to the tower: {}", e);
+            log::debug!("An error ocurred when sending data to the tower: {e}");
             if e.is_connect() | e.is_timeout() {
                 RequestError::ConnectionError(
                     "Cannot connect to the tower. Connection refused".to_owned(),
@@ -210,7 +209,7 @@ pub async fn process_post_response<T: DeserializeOwned>(
     // TODO: Check if this can be switched for a map. Not sure how to handle async with maps
     match post_request {
         Ok(r) => r.json().await.map_err(|e| {
-            RequestError::DeserializeError(format!("Unexpected response body. Error: {}", e))
+            RequestError::DeserializeError(format!("Unexpected response body. Error: {e}"))
         }),
         Err(e) => Err(e),
     }

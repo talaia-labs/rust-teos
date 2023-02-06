@@ -107,11 +107,11 @@ impl DBM {
             ],
         ) {
             Ok(x) => {
-                log::debug!("User successfully stored: {}", user_id);
+                log::debug!("User successfully stored: {user_id}");
                 Ok(x)
             }
             Err(e) => {
-                log::error!("Couldn't store user: {}. Error: {:?}", user_id, e);
+                log::error!("Couldn't store user: {user_id}. Error: {e:?}");
                 Err(e)
             }
         }
@@ -131,10 +131,10 @@ impl DBM {
             ],
         ) {
             Ok(_) => {
-                log::debug!("User's info successfully updated: {}", user_id);
+                log::debug!("User's info successfully updated: {user_id}");
             }
             Err(_) => {
-                log::error!("User not found, data cannot be updated: {}", user_id);
+                log::error!("User not found, data cannot be updated: {user_id}");
             }
         }
     }
@@ -205,18 +205,15 @@ impl DBM {
             let query = "DELETE FROM users WHERE user_id IN ".to_owned();
             let placeholders = format!("(?{})", (", ?").repeat(chunk.len() - 1));
 
-            match tx.execute(
-                &format!("{}{}", query, placeholders),
-                params_from_iter(chunk),
-            ) {
+            match tx.execute(&format!("{query}{placeholders}"), params_from_iter(chunk)) {
                 Ok(_) => log::debug!("Users deletion added to db transaction"),
-                Err(e) => log::error!("Couldn't add deletion query to transaction. Error: {:?}", e),
+                Err(e) => log::error!("Couldn't add deletion query to transaction. Error: {e:?}"),
             }
         }
 
         match tx.commit() {
             Ok(_) => log::debug!("Users successfully deleted"),
-            Err(e) => log::error!("Couldn't delete users. Error: {:?}", e),
+            Err(e) => log::error!("Couldn't delete users. Error: {e:?}"),
         }
 
         (users.len() as f64 / limit as f64).ceil() as usize
@@ -242,11 +239,11 @@ impl DBM {
             ],
         ) {
             Ok(x) => {
-                log::debug!("Appointment successfully stored: {}", uuid);
+                log::debug!("Appointment successfully stored: {uuid}");
                 Ok(x)
             }
             Err(e) => {
-                log::error!("Couldn't store appointment: {}. Error: {:?}", uuid, e);
+                log::error!("Couldn't store appointment: {uuid}. Error: {e:?}");
                 Err(e)
             }
         }
@@ -268,10 +265,10 @@ impl DBM {
             ],
         ) {
             Ok(_) => {
-                log::debug!("Appointment successfully updated: {}", uuid);
+                log::debug!("Appointment successfully updated: {uuid}");
             }
             Err(_) => {
-                log::error!("Appointment not found, data cannot be updated: {}", uuid);
+                log::error!("Appointment not found, data cannot be updated: {uuid}");
             }
         }
     }
@@ -360,10 +357,10 @@ impl DBM {
         let query = "DELETE FROM appointments WHERE UUID=(?)";
         match self.remove_data(query, params![uuid.to_vec()]) {
             Ok(_) => {
-                log::debug!("Appointment successfully removed: {}", uuid);
+                log::debug!("Appointment successfully removed: {uuid}");
             }
             Err(_) => {
-                log::error!("Appointment not found, data cannot be removed: {}", uuid);
+                log::error!("Appointment not found, data cannot be removed: {uuid}");
             }
         }
     }
@@ -386,12 +383,9 @@ impl DBM {
             let query = "DELETE FROM appointments WHERE UUID IN ".to_owned();
             let placeholders = format!("(?{})", (", ?").repeat(chunk.len() - 1));
 
-            match tx.execute(
-                &format!("{}{}", query, placeholders),
-                params_from_iter(chunk),
-            ) {
+            match tx.execute(&format!("{query}{placeholders}"), params_from_iter(chunk)) {
                 Ok(_) => log::debug!("Appointments deletion added to db transaction"),
-                Err(e) => log::error!("Couldn't add deletion query to transaction. Error: {:?}", e),
+                Err(e) => log::error!("Couldn't add deletion query to transaction. Error: {e:?}"),
             }
         }
 
@@ -399,13 +393,13 @@ impl DBM {
             let query = "UPDATE users SET available_slots=(?1) WHERE user_id=(?2)";
             match tx.execute(query, params![info.available_slots, id.to_vec(),]) {
                 Ok(_) => log::debug!("User update added to db transaction"),
-                Err(e) => log::error!("Couldn't add update query to transaction. Error: {:?}", e),
+                Err(e) => log::error!("Couldn't add update query to transaction. Error: {e:?}"),
             };
         }
 
         match tx.commit() {
             Ok(_) => log::debug!("Appointments successfully deleted"),
-            Err(e) => log::error!("Couldn't delete appointments. Error: {:?}", e),
+            Err(e) => log::error!("Couldn't delete appointments. Error: {e:?}"),
         }
 
         (appointments.len() as f64 / limit as f64).ceil() as usize
@@ -446,11 +440,11 @@ impl DBM {
             ],
         ) {
             Ok(x) => {
-                log::debug!("Tracker successfully stored: {}", uuid);
+                log::debug!("Tracker successfully stored: {uuid}");
                 Ok(x)
             }
             Err(e) => {
-                log::error!("Couldn't store tracker: {}. Error: {:?}", uuid, e);
+                log::error!("Couldn't store tracker: {uuid}. Error: {e:?}");
                 Err(e)
             }
         }

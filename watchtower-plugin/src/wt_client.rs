@@ -46,7 +46,7 @@ impl std::fmt::Debug for RevocationData {
             f,
             "{}",
             match self {
-                RevocationData::Fresh(l) => format!("Fresh: {}", l),
+                RevocationData::Fresh(l) => format!("Fresh: {l}"),
                 RevocationData::Stale(hs) => format!(
                     "Stale: {:?}",
                     hs.iter().map(|l| l.to_string()).collect::<Vec<_>>()
@@ -90,7 +90,7 @@ impl WTClient {
     ) -> Self {
         // Create data dir if it does not exist
         fs::create_dir_all(&data_dir).await.unwrap_or_else(|e| {
-            log::error!("Cannot create data dir: {:?}", e);
+            log::error!("Cannot create data dir: {e:?}");
             std::process::exit(1);
         });
 
@@ -120,10 +120,7 @@ impl WTClient {
             }
         }
 
-        log::info!(
-            "Plugin watchtower client initialized. User id = {}",
-            user_id
-        );
+        log::info!("Plugin watchtower client initialized. User id = {user_id}");
 
         WTClient {
             towers,
@@ -206,14 +203,10 @@ impl WTClient {
             if tower.status != status {
                 tower.status = status
             } else {
-                log::debug!("{} status is already {}", tower_id, status)
+                log::debug!("{tower_id} status is already {status}")
             }
         } else {
-            log::error!(
-                "Cannot change tower status to {}. Unknown tower_id: {}",
-                status,
-                tower_id
-            );
+            log::error!("Cannot change tower status to {status}. Unknown tower_id: {tower_id}");
         }
     }
 
@@ -238,10 +231,7 @@ impl WTClient {
                 .store_appointment_receipt(tower_id, locator, available_slots, receipt)
                 .unwrap();
         } else {
-            log::error!(
-                "Cannot add appointment receipt to tower. Unknown tower_id: {}",
-                tower_id
-            );
+            log::error!("Cannot add appointment receipt to tower. Unknown tower_id: {tower_id}");
         }
     }
 
@@ -263,10 +253,7 @@ impl WTClient {
                 .store_pending_appointment(tower_id, appointment)
                 .unwrap();
         } else {
-            log::error!(
-                "Cannot add pending appointment to tower. Unknown tower_id: {}",
-                tower_id
-            );
+            log::error!("Cannot add pending appointment to tower. Unknown tower_id: {tower_id}");
         }
     }
 
@@ -279,10 +266,7 @@ impl WTClient {
                 .delete_pending_appointment(tower_id, locator)
                 .unwrap();
         } else {
-            log::error!(
-                "Cannot remove pending appointment to tower. Unknown tower_id: {}",
-                tower_id
-            );
+            log::error!("Cannot remove pending appointment to tower. Unknown tower_id: {tower_id}");
         }
     }
 
@@ -295,10 +279,7 @@ impl WTClient {
                 .store_invalid_appointment(tower_id, appointment)
                 .unwrap();
         } else {
-            log::error!(
-                "Cannot add invalid appointment to tower. Unknown tower_id: {}",
-                tower_id
-            );
+            log::error!("Cannot add invalid appointment to tower. Unknown tower_id: {tower_id}");
         }
     }
 
@@ -308,7 +289,7 @@ impl WTClient {
             self.dbm.store_misbehaving_proof(tower_id, &proof).unwrap();
             tower.status = TowerStatus::Misbehaving;
         } else {
-            log::error!("Cannot flag tower. Unknown tower_id: {}", tower_id);
+            log::error!("Cannot flag tower. Unknown tower_id: {tower_id}");
         }
     }
 

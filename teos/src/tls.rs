@@ -67,21 +67,14 @@ fn generate_or_load_identity(
     parent: Option<&Identity>,
 ) -> Result<Identity, GenCertificateFailure> {
     // Just our naming convention here.
-    let cert_path = directory.join(format!("{}.pem", filename));
-    let key_path = directory.join(format!("{}-key.pem", filename));
+    let cert_path = directory.join(format!("{filename}.pem"));
+    let key_path = directory.join(format!("{filename}-key.pem"));
     // Did we have to generate a new key? In that case we also need to regenerate the certificate.
     if !key_path.exists() || !cert_path.exists() {
-        log::debug!(
-            "Generating a new keypair in {:?}, it didn't exist",
-            &key_path
-        );
+        log::debug!("Generating a new keypair in {key_path:?}, it didn't exist",);
         let keypair = KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
         std::fs::write(&key_path, keypair.serialize_pem())?;
-        log::debug!(
-            "Generating a new certificate for key {:?} at {:?}",
-            &key_path,
-            &cert_path
-        );
+        log::debug!("Generating a new certificate for key {key_path:?} at {cert_path:?}",);
 
         // Configure the certificate we want.
         let subject_alt_names = vec!["cln".to_string(), "localhost".to_string()];

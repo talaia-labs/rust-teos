@@ -33,7 +33,7 @@ fn to_cln_error(e: RequestError) -> Error {
         RequestError::DeserializeError(e) => anyhow!(e),
         RequestError::Unexpected(e) => anyhow!(e),
     };
-    log::info!("{}", e);
+    log::info!("{e}");
     e
 }
 
@@ -50,11 +50,7 @@ fn send_to_retrier(state: &MutexGuard<WTClient>, tower_id: TowerId, locator: Loc
             .send((tower_id, RevocationData::Fresh(locator)))
             .unwrap();
     } else {
-        log::debug!(
-            "Not sending data to idle retrier ({}, {})",
-            tower_id,
-            locator
-        )
+        log::debug!("Not sending data to idle retrier ({tower_id}, {locator})")
     }
 }
 
@@ -85,9 +81,9 @@ async fn register(
 
     let tower_net_addr = {
         if !host.starts_with("http://") {
-            host = format!("http://{}", host)
+            host = format!("http://{host}")
         }
-        NetAddr::new(format!("{}:{}", host, port))
+        NetAddr::new(format!("{host}:{port}"))
     };
 
     let proxy = plugin.state().lock().unwrap().proxy.clone();
@@ -141,10 +137,7 @@ async fn get_registration_receipt(
     let state = plugin.state().lock().unwrap();
 
     let response = state.get_registration_receipt(tower_id).map_err(|_| {
-        anyhow!(
-            "Cannot find {} within the known towers. Have you registered?",
-            tower_id
-        )
+        anyhow!("Cannot find {tower_id} within the known towers. Have you registered?")
     })?;
 
     Ok(json!(response))
@@ -162,7 +155,7 @@ async fn get_subscription_info(
         if let Some(info) = state.towers.get(&tower_id) {
             Ok((state.user_sk, info.net_addr.clone(), state.proxy.clone()))
         } else {
-            Err(anyhow!("Unknown tower id: {}", tower_id))
+            Err(anyhow!("Unknown tower id: {tower_id}"))
         }
     }?;
 
@@ -291,10 +284,7 @@ async fn get_tower_info(
     let state = plugin.state().lock().unwrap();
     let tower_id = TowerId::try_from(v).map_err(|e| anyhow!(e))?;
     let tower_info = state.load_tower_info(tower_id).map_err(|_| {
-        anyhow!(
-            "Cannot find {} within the known towers. Have you registered?",
-            tower_id
-        )
+        anyhow!("Cannot find {tower_id} within the known towers. Have you registered?")
     })?;
 
     // Notice we need to check the status in memory since we cannot distinguish between unreachable and temporary unreachable
@@ -323,7 +313,7 @@ async fn retry_tower(
                     .map_err(|e| anyhow!(e))?;
             } else {
                 // Status can only be running or idle for data in the retriers map.
-                return Err(anyhow!("{} is already being retried", tower_id));
+                return Err(anyhow!("{tower_id} is already being retried"));
             }
         } else if tower_status.is_retryable() {
             // We do send associated data here given there is no retrier associated to this tower.
@@ -349,9 +339,9 @@ async fn retry_tower(
             ));
         }
     } else {
-        return Err(anyhow!("Unknown tower {}", tower_id));
+        return Err(anyhow!("Unknown tower {tower_id}"));
     }
-    Ok(json!(format!("Retrying {}", tower_id)))
+    Ok(json!(format!("Retrying {tower_id}")))
 }
 
 /// Forgets about a tower wiping out all local data associated to it.
@@ -363,9 +353,9 @@ async fn abandon_tower(
     let mut state = plugin.state().lock().unwrap();
     if state.towers.get(&tower_id).is_some() {
         state.remove_tower(tower_id).unwrap();
-        Ok(json!(format!("{} successfully abandoned", tower_id)))
+        Ok(json!(format!("{tower_id} successfully abandoned")))
     } else {
-        Err(anyhow!("Unknown tower {}", tower_id))
+        Err(anyhow!("Unknown tower {tower_id}"))
     }
 }
 
@@ -377,7 +367,7 @@ async fn on_commitment_revocation(
     v: serde_json::Value,
 ) -> Result<serde_json::Value, Error> {
     let commitment_revocation = serde_json::from_value::<CommitmentRevocation>(v)
-        .map_err(|e| anyhow!("Cannot decode commitment_revocation data. Error: {}", e))?;
+        .map_err(|e| anyhow!("Cannot decode commitment_revocation data. Error: {e}"))?;
     log::debug!(
         "New commitment revocation received for channel {}. Commit number {}",
         commitment_revocation.channel_id,
@@ -430,8 +420,7 @@ async fn on_commitment_revocation(
                     AddAppointmentError::RequestError(e) => {
                         if e.is_connection() {
                             log::warn!(
-                                "{} cannot be reached. Adding {} to pending appointments",
-                                tower_id,
+                                "{tower_id} cannot be reached. Adding {} to pending appointments",
                                 appointment.locator
                             );
                             let mut state = plugin.state().lock().unwrap();
@@ -443,8 +432,7 @@ async fn on_commitment_revocation(
                     AddAppointmentError::ApiError(e) => match e.error_code {
                         errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR => {
                             log::warn!(
-                                "There is a subscription issue with {}. Adding {} to pending",
-                                tower_id,
+                                "There is a subscription issue with {tower_id}. Adding {} to pending",
                                 appointment.locator
                             );
                             let mut state = plugin.state().lock().unwrap();
@@ -455,8 +443,7 @@ async fn on_commitment_revocation(
 
                         _ => {
                             log::warn!(
-                                "{} rejected the appointment. Error: {}, error_code: {}",
-                                tower_id,
+                                "{tower_id} rejected the appointment. Error: {}, error_code: {}",
                                 e.error,
                                 e.error_code
                             );
@@ -478,22 +465,16 @@ async fn on_commitment_revocation(
                 },
             };
         } else if status.is_misbehaving() {
-            log::warn!(
-                "{} is misbehaving. Not sending any further appointments",
-                tower_id
-            );
+            log::warn!("{tower_id} is misbehaving. Not sending any further appointments",);
         } else {
             if status.is_subscription_error() {
                 log::warn!(
-                    "There is a subscription issue with {}. Adding {} to pending",
-                    tower_id,
+                    "There is a subscription issue with {tower_id}. Adding {} to pending",
                     appointment.locator
                 );
             } else {
                 log::warn!(
-                    "{} is {}. Adding {} to pending",
-                    tower_id,
-                    status,
+                    "{tower_id} is {status}. Adding {} to pending",
                     appointment.locator,
                 );
             }

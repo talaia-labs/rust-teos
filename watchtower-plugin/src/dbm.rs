@@ -393,10 +393,7 @@ impl DBM {
         // TODO: Can this be prepared instead of formatted (using ?1 seems to fail)?
         let mut stmt = self
             .connection
-            .prepare(&format!(
-                "SELECT locator FROM {} WHERE tower_id = ?",
-                status
-            ))
+            .prepare(&format!("SELECT locator FROM {status} WHERE tower_id = ?"))
             .unwrap();
 
         let mut rows = stmt.query(params![tower_id.to_vec()]).unwrap();
@@ -552,7 +549,7 @@ impl DBM {
         let mut appointments = Vec::new();
         let mut stmt = self
             .connection
-            .prepare(&format!("SELECT a.locator, a.encrypted_blob, a.to_self_delay FROM appointments as a, {} as t WHERE a.locator = t.locator AND t.tower_id = ?", table))
+            .prepare(&format!("SELECT a.locator, a.encrypted_blob, a.to_self_delay FROM appointments as a, {table} as t WHERE a.locator = t.locator AND t.tower_id = ?"))
             .unwrap();
         let mut rows = stmt.query([tower_id.to_vec()]).unwrap();
 

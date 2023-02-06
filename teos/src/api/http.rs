@@ -36,14 +36,14 @@ impl ApiError {
 
     fn missing_field(field_name: &str) -> Rejection {
         reject::custom(Self::new(
-            format!("missing field `{}`", field_name),
+            format!("missing field `{field_name}`"),
             errors::MISSING_FIELD,
         ))
     }
 
     fn empty_field(field_name: &str) -> Rejection {
         reject::custom(Self::new(
-            format!("`{}` field is empty", field_name),
+            format!("`{field_name}` field is empty"),
             errors::EMPTY_FIELD,
         ))
     }
@@ -51,8 +51,7 @@ impl ApiError {
     fn wrong_field_length(field_name: &str, field_size: usize, expected_size: usize) -> Rejection {
         reject::custom(Self::new(
             format!(
-                "Wrong `{}` field size. Expected {}, received {}",
-                field_name, expected_size, field_size
+                "Wrong `{field_name}` field size. Expected {expected_size}, received {field_size}"
             ),
             errors::WRONG_FIELD_SIZE,
         ))
@@ -104,7 +103,7 @@ fn parse_grpc_response<T: serde::Serialize>(
         }
         Err(s) => {
             let (status_code, error_code) = match_status(&s);
-            log::debug!("Request failed, error_code={}", error_code);
+            log::debug!("Request failed, error_code={error_code}");
             log::debug!("Response: {}", serde_json::json!(s.message()));
             (
                 reply::json(&ApiError::new(s.message().into(), error_code)),

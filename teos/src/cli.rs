@@ -20,7 +20,7 @@ async fn main() {
 
     // Create data dir if it does not exist
     fs::create_dir_all(&path).await.unwrap_or_else(|e| {
-        eprintln!("Cannot create data dir: {:?}", e);
+        eprintln!("Cannot create data dir: {e:?}");
         std::process::exit(1);
     });
 
@@ -51,13 +51,13 @@ async fn main() {
         .expect("Cannot create channel from endpoint")
         .tls_config(tls)
         .unwrap_or_else(|e| {
-            eprintln!("Could not configure tls: {:?}", e);
+            eprintln!("Could not configure tls: {e:?}");
             std::process::exit(1);
         })
         .connect()
         .await
         .unwrap_or_else(|e| {
-            eprintln!("Could not connect to tower: {:?}", e);
+            eprintln!("Could not connect to tower: {e:?}");
             std::process::exit(1);
         });
 
@@ -83,7 +83,7 @@ async fn main() {
                         Err(status) => println!("{}", status.message()),
                     }
                 }
-                Err(e) => println!("{}", e),
+                Err(e) => println!("{e}"),
             };
         }
         Command::GetTowerInfo => {
@@ -109,7 +109,7 @@ async fn main() {
                         Err(status) => println!("{}", status.message()),
                     }
                 }
-                Err(e) => println!("{}", e),
+                Err(e) => println!("{e}"),
             };
         }
         Command::Stop => {

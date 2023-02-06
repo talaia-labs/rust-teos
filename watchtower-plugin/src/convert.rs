@@ -22,10 +22,10 @@ pub enum RegisterError {
 impl std::fmt::Display for RegisterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RegisterError::InvalidId(x) => write!(f, "{}", x),
-            RegisterError::InvalidHost(x) => write!(f, "{}", x),
-            RegisterError::InvalidPort(x) => write!(f, "{}", x),
-            RegisterError::InvalidFormat(x) => write!(f, "{}", x),
+            RegisterError::InvalidId(x) => write!(f, "{x}"),
+            RegisterError::InvalidHost(x) => write!(f, "{x}"),
+            RegisterError::InvalidPort(x) => write!(f, "{x}"),
+            RegisterError::InvalidFormat(x) => write!(f, "{x}"),
         }
     }
 }
@@ -80,8 +80,7 @@ impl RegisterParams {
     fn with_port(self, port: u64) -> Result<Self, RegisterError> {
         if port > u16::MAX as u64 {
             Err(RegisterError::InvalidPort(format!(
-                "port must be a 16-byte integer. Received: {}",
-                port
+                "port must be a 16-byte integer. Received: {port}"
             )))
         } else {
             Ok(Self {
@@ -109,7 +108,7 @@ impl TryFrom<serde_json::Value> for RegisterParams {
                         let port = if let Some(p) = v.next() {
                             p.parse()
                                 .map(Some)
-                                .map_err(|_| RegisterError::InvalidPort(format!("Port is not a number: {}", p)))?
+                                .map_err(|_| RegisterError::InvalidPort(format!("Port is not a number: {p}")))?
                         } else {
                             None
                         };
@@ -128,14 +127,14 @@ impl TryFrom<serde_json::Value> for RegisterParams {
                         let tower_id = a.get(0).unwrap().as_str().ok_or_else(|| RegisterError::InvalidId("tower_id must be a string".to_string()))?;
                         let host = Some(a.get(1).unwrap().as_str().ok_or_else(|| RegisterError::InvalidHost("host must be a string".to_string()))?);
                         let port = if let Some(p) = a.get(2) {
-                            Some(p.as_u64().ok_or_else(|| RegisterError::InvalidPort(format!("port must be a number. Received: {}", p)))?)
+                            Some(p.as_u64().ok_or_else(|| RegisterError::InvalidPort(format!("port must be a number. Received: {p}")))?)
                         } else {
                             None
                         };
 
                         RegisterParams::new(tower_id, host, port)
                     }
-                    _ => Err(RegisterError::InvalidFormat(format!("Unexpected request format. The request needs 1-3 parameters. Received: {}", param_count))),
+                    _ => Err(RegisterError::InvalidFormat(format!("Unexpected request format. The request needs 1-3 parameters. Received: {param_count}"))),
                 }
             },
             serde_json::Value::Object(mut m) => {
@@ -143,7 +142,7 @@ impl TryFrom<serde_json::Value> for RegisterParams {
                 let param_count = m.len();
 
                  if m.is_empty() || param_count > allowed_keys.len() {
-                    Err(RegisterError::InvalidFormat(format!("Unexpected request format. The request needs 1-3 parameters. Received: {}", param_count)))
+                    Err(RegisterError::InvalidFormat(format!("Unexpected request format. The request needs 1-3 parameters. Received: {param_count}")))
                  } else if !m.contains_key(allowed_keys[0]){
                     Err(RegisterError::InvalidId(format!("{} is mandatory", allowed_keys[0])))
                  } else if !m.iter().all(|(k, _)| allowed_keys.contains(&k.as_str())) {
@@ -160,7 +159,7 @@ impl TryFrom<serde_json::Value> for RegisterParams {
                 }
             },
             _ => Err(RegisterError::InvalidFormat(
-                format!("Unexpected request format. Expected: 'tower_id[@host][:port]' or 'tower_id [host] [port]'. Received: '{}'", value),
+                format!("Unexpected request format. Expected: 'tower_id[@host][:port]' or 'tower_id [host] [port]'. Received: '{value}'"),
             )),
         }
     }
@@ -177,9 +176,9 @@ pub enum GetAppointmentError {
 impl std::fmt::Display for GetAppointmentError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            GetAppointmentError::InvalidId(x) => write!(f, "{}", x),
-            GetAppointmentError::InvalidLocator(x) => write!(f, "{}", x),
-            GetAppointmentError::InvalidFormat(x) => write!(f, "{}", x),
+            GetAppointmentError::InvalidId(x) => write!(f, "{x}"),
+            GetAppointmentError::InvalidLocator(x) => write!(f, "{x}"),
+            GetAppointmentError::InvalidFormat(x) => write!(f, "{x}"),
         }
     }
 }
@@ -200,8 +199,7 @@ impl TryFrom<serde_json::Value> for GetAppointmentParams {
                 let param_count = a.len();
                 if param_count != 2 {
                     Err(GetAppointmentError::InvalidFormat(format!(
-                        "Unexpected request format. The request needs 2 parameter. Received: {}",
-                        param_count
+                        "Unexpected request format. The request needs 2 parameter. Received: {param_count}"
                     )))
                 } else {
                     let tower_id = if let Some(s) = a.get(0).unwrap().as_str() {
@@ -240,8 +238,7 @@ impl TryFrom<serde_json::Value> for GetAppointmentParams {
                 for k in allowed_keys.iter() {
                     if !m.contains_key(*k) {
                         return Err(GetAppointmentError::InvalidFormat(format!(
-                            "{} is mandatory",
-                            k
+                            "{k} is mandatory"
                         )));
                     }
                 }
@@ -255,8 +252,7 @@ impl TryFrom<serde_json::Value> for GetAppointmentParams {
                 GetAppointmentParams::try_from(json!(params))
             }
             _ => Err(GetAppointmentError::InvalidFormat(format!(
-                "Unexpected request format. Expected: tower_id locator. Received: '{}'",
-                value
+                "Unexpected request format. Expected: tower_id locator. Received: '{value}'"
             ))),
         }
     }
@@ -338,21 +334,18 @@ mod tests {
         #[test]
         fn test_try_from_json_string() {
             let ok = [
-                format!("{}@host:80", VALID_ID),
-                format!("{}@host", VALID_ID),
+                format!("{VALID_ID}@host:80"),
+                format!("{VALID_ID}@host"),
                 VALID_ID.to_string(),
             ];
             let wrong_id = ["", "id@host:80", "@host:80", "@:80"];
             let wrong_host = [
-                format!("{}@", VALID_ID),
-                format!("{}@ ", VALID_ID),
-                format!("{}@ host", VALID_ID),
-                format!("{}@:80", VALID_ID),
+                format!("{VALID_ID}@"),
+                format!("{VALID_ID}@ "),
+                format!("{VALID_ID}@ host"),
+                format!("{VALID_ID}@:80"),
             ];
-            let wrong_port = [
-                format!("{}@host:", VALID_ID),
-                format!("{}@host:port", VALID_ID),
-            ];
+            let wrong_port = [format!("{VALID_ID}@host:"), format!("{VALID_ID}@host:port")];
 
             for s in ok {
                 let v = serde_json::Value::Array(vec![serde_json::Value::String(s.to_string())]);

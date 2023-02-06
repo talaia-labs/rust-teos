@@ -263,7 +263,7 @@ impl Responder {
             .unwrap()
             .store_tracker(uuid, &tracker)
             .unwrap();
-        log::info!("New tracker added (uuid={}).", uuid);
+        log::info!("New tracker added (uuid={uuid})");
     }
 
     /// Checks whether a given tracker can be found in the [Responder].
@@ -318,7 +318,7 @@ impl Responder {
                     // Tracker is deep enough in the chain, it can be deleted
                     completed_trackers.insert(*uuid);
                 } else {
-                    log::info!("{} received a confirmation (count={})", uuid, confirmations);
+                    log::info!("{uuid} received a confirmation (count={confirmations})");
                 }
             } else if txids.contains(&tracker.penalty_txid) {
                 // First confirmation was received
@@ -423,9 +423,8 @@ impl Responder {
                     let status = carrier.send_transaction(&dispute_tx);
                     if let ConfirmationStatus::Rejected(e) = status {
                         log::error!(
-                        "Reorged dispute transaction rejected during rebroadcast: {} (reason: {:?})",
-                        dispute_tx.txid(),
-                        e
+                        "Reorged dispute transaction rejected during rebroadcast: {} (reason: {e})",
+                        dispute_tx.txid()
                     );
                         status
                     } else {
@@ -466,9 +465,9 @@ impl Responder {
         let mut tx_tracker_map = self.tx_tracker_map.lock().unwrap();
         for uuid in uuids.iter() {
             match reason {
-                DeletionReason::Completed => log::info!("Appointment completed. Penalty transaction was irrevocably confirmed: {}", uuid),
-                DeletionReason::Outdated => log::info!("Appointment couldn't be completed. Expiry reached but penalty didn't make it to the chain: {}", uuid),
-                DeletionReason::Rejected => log::info!("Appointment couldn't be completed. Either the dispute or the penalty txs where rejected during rebroadcast: {}", uuid),
+                DeletionReason::Completed => log::info!("Appointment completed. Penalty transaction was irrevocably confirmed: {uuid}"),
+                DeletionReason::Outdated => log::info!("Appointment couldn't be completed. Expiry reached but penalty didn't make it to the chain: {uuid}"),
+                DeletionReason::Rejected => log::info!("Appointment couldn't be completed. Either the dispute or the penalty txs where rejected during rebroadcast: {uuid}"),
             }
 
             match trackers.remove(uuid) {
@@ -488,7 +487,7 @@ impl Responder {
                 }
                 None => {
                     // This should never happen. Logging just in case so we can fix it if so
-                    log::error!("Completed tracker not found when cleaning: {}", uuid);
+                    log::error!("Completed tracker not found when cleaning: {uuid}");
                 }
             }
         }

@@ -30,7 +30,7 @@ enum RetryError {
 impl Display for RetryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RetryError::Subscription(r, _) => write!(f, "{}", r),
+            RetryError::Subscription(r, _) => write!(f, "{r}"),
             RetryError::Unreachable => write!(f, "Tower cannot be reached"),
             RetryError::Misbehaving(_) => write!(f, "Tower misbehaved"),
             RetryError::Abandoned => write!(f, "Tower was abandoned. Skipping retry"),
@@ -99,11 +99,11 @@ impl RetryManager {
                         .towers
                         .contains_key(&tower_id)
                     {
-                        log::info!("Skipping retrying abandoned tower {}", tower_id);
+                        log::info!("Skipping retrying abandoned tower {tower_id}");
                     } else if let Some(retrier) = self.retriers.get(&tower_id) {
                         if retrier.is_idle() {
                             if !data.is_none() {
-                                log::error!("Data was send to an idle retier. This should have never happened. Please report! ({:?})", data);
+                                log::error!("Data was send to an idle retier. This should have never happened. Please report! ({data:?})");
                                 continue;
                             }
                             log::info!(
@@ -181,7 +181,7 @@ impl RetryManager {
     /// If the tower is not currently being retried, a new entry for it is created, otherwise, the data is appended to the existing entry.
     fn add_pending_appointments(&mut self, tower_id: TowerId, locators: HashSet<Locator>) {
         if let std::collections::hash_map::Entry::Vacant(e) = self.retriers.entry(tower_id) {
-            log::debug!("Creating a new entry for tower {} ", tower_id);
+            log::debug!("Creating a new entry for tower {tower_id}");
             e.insert(Arc::new(Retrier::new(
                 self.wt_client.clone(),
                 tower_id,
@@ -196,11 +196,7 @@ impl RetryManager {
                 .lock()
                 .unwrap();
             for locator in locators {
-                log::debug!(
-                    "Adding pending appointment {} to existing tower {}",
-                    locator,
-                    tower_id
-                );
+                log::debug!("Adding pending appointment {locator} to existing tower {tower_id}",);
                 pending_appointments.insert(locator);
             }
         }
@@ -373,7 +369,7 @@ impl Retrier {
                 },
                 || async { self.run().await },
                 |err, _| {
-                    log::warn!("Retry error happened with {}. {}", self.tower_id, err);
+                    log::warn!("Retry error happened with {}. {err}", self.tower_id);
                 },
             )
             .await;
@@ -392,7 +388,7 @@ impl Retrier {
                 Err(e) => {
                     // Notice we'll end up here after a permanent error. That is, either after finishing the backoff strategy
                     // unsuccessfully or by manually raising such an error (like when facing a tower misbehavior).
-                    log::warn!("Retry strategy gave up for {}. {}", self.tower_id, e);
+                    log::warn!("Retry strategy gave up for {}. {e}", self.tower_id);
                     if e.is_permanent() {
                         self.set_status(RetrierStatus::Failed);
                     }
@@ -456,7 +452,7 @@ impl Retrier {
             let receipt = http::register(tower_id, user_id, &net_addr, &proxy)
                 .await
                 .map_err(|e| {
-                    log::debug!("Cannot renew registration with tower. Error: {:?}", e);
+                    log::debug!("Cannot renew registration with tower. Error: {e:?}");
                     Error::transient(RetryError::Subscription(
                         "Cannot renew registration with tower".to_owned(),
                         false,
@@ -516,15 +512,14 @@ impl Retrier {
                             AddAppointmentError::RequestError(e) => {
                                 if e.is_connection() {
                                     log::warn!(
-                                        "{} cannot be reached. Tower will be retried later",
-                                        tower_id,
+                                        "{tower_id} cannot be reached. Tower will be retried later"
                                     );
                                     return Err(Error::transient(RetryError::Unreachable));
                                 }
                             }
                             AddAppointmentError::ApiError(e) => match e.error_code {
                                 errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR => {
-                                    log::warn!("There is a subscription issue with {}", tower_id);
+                                    log::warn!("There is a subscription issue with {tower_id}");
                                     self.wt_client
                                         .lock()
                                         .unwrap()
@@ -536,8 +531,7 @@ impl Retrier {
                                 }
                                 _ => {
                                     log::warn!(
-                                        "{} rejected the appointment. Error: {}, error_code: {}",
-                                        tower_id,
+                                        "{tower_id} rejected the appointment. Error: {}, error_code: {}",
                                         e.error,
                                         e.error_code
                                     );

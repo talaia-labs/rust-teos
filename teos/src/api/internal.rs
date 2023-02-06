@@ -133,7 +133,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
                 )),
                 AddAppointmentFailure::SubscriptionExpired(x) => Err(Status::new(
                     Code::Unauthenticated,
-                    format!("Your subscription expired at {}", x),
+                    format!("Your subscription expired at {x}"),
                 )),
                 AddAppointmentFailure::AlreadyTriggered => Err(Status::new(
                     Code::AlreadyExists,
@@ -191,7 +191,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
                 )),
                 GetAppointmentFailure::SubscriptionExpired(x) => Err(Status::new(
                     Code::Unauthenticated,
-                    format!("Your subscription expired at {}", x),
+                    format!("Your subscription expired at {x}"),
                 )),
             },
         }
@@ -213,7 +213,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
                 ),
                 GetSubscriptionInfoFailure::SubscriptionExpired(x) => Status::new(
                     Code::Unauthenticated,
-                    format!("Your subscription expired at {}", x),
+                    format!("Your subscription expired at {x}"),
                 ),
             })?;
 
