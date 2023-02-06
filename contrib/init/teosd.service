@@ -1,8 +1,9 @@
 [Unit]
 Description=The Eye of Satoshi daemon
-After=bitcoind.service network.target
 Requires=bitcoind.service
-Wants=network.target
+After=bitcoind.service 
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 ExecStart=/home/teos/.cargo/bin/teosd
