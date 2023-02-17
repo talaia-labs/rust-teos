@@ -72,6 +72,12 @@ pub(crate) struct AppointmentSummary {
     pub user_id: UserId,
 }
 
+impl AppointmentSummary {
+    pub fn new(locator: Locator, user_id: UserId) -> Self {
+        Self { locator, user_id }
+    }
+}
+
 impl ExtendedAppointment {
     /// Create a new [ExtendedAppointment].
     pub fn new(

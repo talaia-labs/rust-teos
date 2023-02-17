@@ -83,6 +83,16 @@ pub(crate) struct TrackerSummary {
     status: ConfirmationStatus,
 }
 
+impl TrackerSummary {
+    pub fn new(user_id: UserId, penalty_txid: Txid, status: ConfirmationStatus) -> Self {
+        Self {
+            user_id,
+            penalty_txid,
+            status,
+        }
+    }
+}
+
 /// Structure to keep track of triggered appointments.
 ///
 /// It is analogous to [ExtendedAppointment](crate::extended_appointment::ExtendedAppointment) for the [`Watcher`](crate::watcher::Watcher).
@@ -163,14 +173,13 @@ impl Responder {
         let mut trackers = HashMap::new();
         let mut tx_tracker_map: HashMap<Txid, HashSet<UUID>> = HashMap::new();
 
-        for (uuid, tracker) in dbm.lock().unwrap().load_trackers(None) {
-            trackers.insert(uuid, tracker.get_summary());
-
-            if let Some(map) = tx_tracker_map.get_mut(&tracker.penalty_tx.txid()) {
+        for (uuid, summary) in dbm.lock().unwrap().load_tracker_summaries() {
+            if let Some(map) = tx_tracker_map.get_mut(&summary.penalty_txid) {
                 map.insert(uuid);
             } else {
-                tx_tracker_map.insert(tracker.penalty_tx.txid(), HashSet::from_iter(vec![uuid]));
+                tx_tracker_map.insert(summary.penalty_txid, HashSet::from_iter(vec![uuid]));
             }
+            trackers.insert(uuid, summary);
         }
 
         Responder {

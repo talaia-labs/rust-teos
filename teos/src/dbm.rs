@@ -19,9 +19,9 @@ use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
 use teos_common::dbm::{DatabaseConnection, DatabaseManager, Error};
 use teos_common::UserId;
 
-use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::extended_appointment::{AppointmentSummary, ExtendedAppointment, UUID};
 use crate::gatekeeper::UserInfo;
-use crate::responder::{ConfirmationStatus, TransactionTracker};
+use crate::responder::{ConfirmationStatus, TrackerSummary, TransactionTracker};
 
 const TABLES: [&str; 5] = [
     "CREATE TABLE IF NOT EXISTS users (
@@ -305,6 +305,34 @@ impl DBM {
         .ok()
     }
 
+    /// Loads all [AppointmentSummary]s from that database.
+    pub(crate) fn load_appointment_summaries(&self) -> HashMap<UUID, AppointmentSummary> {
+        let mut summaries = HashMap::new();
+
+        let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT a.UUID, a.locator, a.user_id 
+                    FROM appointments as a LEFT JOIN trackers as t ON a.UUID=t.UUID WHERE t.UUID IS NULL",
+            )
+            .unwrap();
+        let mut rows = stmt.query([]).unwrap();
+
+        while let Ok(Some(row)) = rows.next() {
+            let raw_uuid: Vec<u8> = row.get(0).unwrap();
+            let raw_locator: Vec<u8> = row.get(1).unwrap();
+            let raw_userid: Vec<u8> = row.get(2).unwrap();
+            summaries.insert(
+                UUID::from_slice(&raw_uuid).unwrap(),
+                AppointmentSummary::new(
+                    Locator::from_slice(&raw_locator).unwrap(),
+                    UserId::from_slice(&raw_userid).unwrap(),
+                ),
+            );
+        }
+        summaries
+    }
+
     /// Loads appointments from the database. If a locator is given, this method loads only the appointments
     /// matching this locator. If no locator is given, all the appointments in the database would be returned.
     pub(crate) fn load_appointments(
@@ -479,6 +507,39 @@ impl DBM {
             })
         })
         .ok()
+    }
+
+    /// Loads all [TrackerSummary]s from that database.
+    pub(crate) fn load_tracker_summaries(&self) -> HashMap<UUID, TrackerSummary> {
+        let mut summaries = HashMap::new();
+
+        let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT t.UUID, t.penalty_tx, t.height, t.confirmed, a.user_id
+                    FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID",
+            )
+            .unwrap();
+        let mut rows = stmt.query([]).unwrap();
+
+        while let Ok(Some(row)) = rows.next() {
+            let raw_uuid: Vec<u8> = row.get(0).unwrap();
+            let raw_penalty_tx: Vec<u8> = row.get(1).unwrap();
+            let height: u32 = row.get(2).unwrap();
+            let confirmed: bool = row.get(3).unwrap();
+            let raw_userid: Vec<u8> = row.get(4).unwrap();
+            summaries.insert(
+                UUID::from_slice(&raw_uuid).unwrap(),
+                TrackerSummary::new(
+                    UserId::from_slice(&raw_userid).unwrap(),
+                    consensus::deserialize::<bitcoin::Transaction>(&raw_penalty_tx)
+                        .unwrap()
+                        .txid(),
+                    ConfirmationStatus::from_db_data(height, confirmed),
+                ),
+            );
+        }
+        summaries
     }
 
     /// Loads trackers from the database. If a locator is given, this method loads only the trackers
