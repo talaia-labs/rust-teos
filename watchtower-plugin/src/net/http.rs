@@ -218,7 +218,6 @@ pub async fn process_post_response<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use httpmock::prelude::*;
     use serde_json::json;
 
     use crate::test_utils::get_dummy_add_appointment_response;
@@ -253,24 +252,25 @@ mod tests {
         let mut registration_receipt = get_random_registration_receipt();
         registration_receipt.sign(&tower_sk);
 
-        let server = MockServer::start();
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::Register.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!(registration_receipt));
-        });
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("POST", Endpoint::Register.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(registration_receipt).to_string())
+            .create_async()
+            .await;
 
         let receipt = register(
             TowerId(tower_pk),
             registration_receipt.user_id(),
-            &NetAddr::new(server.base_url()),
+            &NetAddr::new(server.url()),
             &None,
         )
         .await
         .unwrap();
 
-        api_mock.assert();
+        api_mock.assert_async().await;
         assert_eq!(receipt, registration_receipt);
     }
 
@@ -290,24 +290,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_deserialize_error() {
-        let server = MockServer::start();
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::Register.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!([]));
-        });
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("POST", Endpoint::Register.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string())
+            .create_async()
+            .await;
 
         let error = register(
             get_random_user_id(),
             get_random_user_id(),
-            &NetAddr::new(server.base_url()),
+            &NetAddr::new(server.url()),
             &None,
         )
         .await
         .unwrap_err();
 
-        api_mock.assert();
+        api_mock.assert_async().await;
         assert!(matches!(error, RequestError::DeserializeError { .. }))
     }
 
@@ -322,17 +323,18 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &appointment_receipt);
 
-        let server = MockServer::start();
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(add_appointment_response).to_string())
+            .create_async()
+            .await;
 
         let (response, receipt) = add_appointment(
             TowerId(tower_pk),
-            &NetAddr::new(server.base_url()),
+            &NetAddr::new(server.url()),
             &None,
             &appointment,
             appointment_receipt.user_signature(),
@@ -340,7 +342,7 @@ mod tests {
         .await
         .unwrap();
 
-        api_mock.assert();
+        api_mock.assert_async().await;
         assert_eq!(response, add_appointment_response.available_slots);
         assert_eq!(receipt, appointment_receipt);
     }
@@ -354,17 +356,18 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &appointment_receipt);
 
-        let server = MockServer::start();
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(add_appointment_response).to_string())
+            .create_async()
+            .await;
 
         let (response, receipt) = send_appointment(
             TowerId(tower_pk),
-            &NetAddr::new(server.base_url()),
+            &NetAddr::new(server.url()),
             &None,
             &appointment,
             appointment_receipt.user_signature(),
@@ -372,7 +375,7 @@ mod tests {
         .await
         .unwrap();
 
-        api_mock.assert();
+        api_mock.assert_async().await;
         assert_eq!(response, add_appointment_response);
         assert_eq!(receipt, appointment_receipt);
     }
@@ -386,18 +389,19 @@ mod tests {
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &appointment_receipt);
 
-        let server = MockServer::start();
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(add_appointment_response).to_string())
+            .create_async()
+            .await;
 
         let tower_id = get_random_user_id();
         let error = send_appointment(
             tower_id,
-            &NetAddr::new(server.base_url()),
+            &NetAddr::new(server.url()),
             &None,
             &appointment,
             appointment_receipt.user_signature(),
@@ -405,7 +409,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        api_mock.assert();
+        api_mock.assert_async().await;
         if let AddAppointmentError::SignatureError(proof) = error {
             assert_eq!(
                 MisbehaviorProof::new(
@@ -441,17 +445,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_appointment_deserialize_error() {
-        let server = MockServer::start();
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!([]));
-        });
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string())
+            .create_async()
+            .await;
 
         let error = send_appointment(
             get_random_user_id(),
-            &NetAddr::new(server.base_url()),
+            &NetAddr::new(server.url()),
             &None,
             &generate_random_appointment(None),
             "user_sig",
@@ -459,7 +464,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        api_mock.assert();
+        api_mock.assert_async().await;
         if let AddAppointmentError::RequestError(e) = error {
             assert!(matches!(e, RequestError::DeserializeError { .. }))
         } else {
@@ -474,17 +479,18 @@ mod tests {
             error_code: 1,
         };
 
-        let server = MockServer::start();
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(400)
-                .header("content-type", "application/json")
-                .json_body(json!(api_error));
-        });
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(400)
+            .with_header("content-type", "application/json")
+            .with_body(json!(api_error).to_string())
+            .create_async()
+            .await;
 
         let error = send_appointment(
             get_random_user_id(),
-            &NetAddr::new(server.base_url()),
+            &NetAddr::new(server.url()),
             &None,
             &generate_random_appointment(None),
             "user_sig",
@@ -492,20 +498,22 @@ mod tests {
         .await
         .unwrap_err();
 
-        api_mock.assert();
+        api_mock.assert_async().await;
         assert!(matches!(error, AddAppointmentError::ApiError { .. }));
     }
 
     #[tokio::test]
     async fn test_post_request() {
-        let server = MockServer::start();
-        let api_mock = server.mock(|when, then| {
-            when.method(POST);
-            then.status(200).header("content-type", "application/json");
-        });
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("POST", Endpoint::Register.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .create_async()
+            .await;
 
         let response = post_request(
-            &NetAddr::new(server.base_url()),
+            &NetAddr::new(server.url()),
             Endpoint::Register,
             json!(""),
             &None,
@@ -513,7 +521,7 @@ mod tests {
         .await
         .unwrap();
 
-        api_mock.assert();
+        api_mock.assert_async().await;
         assert!(matches!(response, Response { .. }));
     }
 
@@ -536,16 +544,19 @@ mod tests {
     async fn test_process_post_response_json_error() {
         // `process_post_response` is a pass-trough function that maps json deserialization errors from `post_request`.
         // So just testing that specific case should be enough.
-        let server = MockServer::start();
-        let api_mock = server.mock(|when, then| {
-            when.method(POST);
-            then.status(200).header("content-type", "application/json");
-        });
+
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("POST", Endpoint::GetAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .create_async()
+            .await;
 
         // Any expected response work here as long as it cannot be properly deserialized
         let error = process_post_response::<ApiResponse<common_msgs::GetAppointmentResponse>>(
             post_request(
-                &NetAddr::new(server.base_url()),
+                &NetAddr::new(server.url()),
                 Endpoint::GetAppointment,
                 json!(""),
                 &None,
@@ -555,7 +566,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        api_mock.assert();
+        api_mock.assert_async().await;
         assert!(matches!(error, RequestError::DeserializeError { .. }));
     }
 }
