@@ -1,8 +1,11 @@
-**THIS IS CURRENTLY WIP**
-
 # The Eye of Satoshi (rust-teos)
 
 The Eye of Satoshi is a Lightning watchtower compliant with [BOLT13](https://github.com/sr-gi/bolt13), written in Rust.
+
+[![discord](https://img.shields.io/discord/991334710611550208?logo=discord&style=plastic)](https://discord.gg/EyVbrNMDUP)
+[![build](https://img.shields.io/github/actions/workflow/status/talaia-labs/rust-teos/build.yaml?logo=github&style=plastic)](https://github.com/talaia-labs/rust-teos/actions/workflows/build.yaml)
+[![release](https://img.shields.io/github/v/release/talaia-labs/rust-teos?style=plastic)](https://github.com/talaia-labs/rust-teos/releases/latest)
+
 
 `rust-teos` consists of two main crates:
 
