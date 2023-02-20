@@ -95,17 +95,17 @@ impl WTClient {
         });
 
         let dbm = DBM::new(&data_dir.join("watchtowers_db.sql3")).unwrap();
-        let (user_sk, user_id) = match dbm.load_client_key() {
-            Ok(sk) => (
+
+        let (user_sk, user_id) = if let Some(sk) = dbm.load_client_key() {
+            (
                 sk,
                 UserId(PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
-            ),
-            Err(_) => {
-                log::info!("Watchtower client keys not found. Creating a fresh set");
-                let (sk, pk) = cryptography::get_random_keypair();
-                dbm.store_client_key(&sk).unwrap();
-                (sk, UserId(pk))
-            }
+            )
+        } else {
+            log::info!("Watchtower client keys not found. Creating a fresh set");
+            let (sk, pk) = cryptography::get_random_keypair();
+            dbm.store_client_key(&sk).unwrap();
+            (sk, UserId(pk))
         };
 
         let towers = dbm.load_towers();
@@ -180,15 +180,12 @@ impl WTClient {
     }
 
     /// Gets the latest registration receipt of a given tower.
-    pub fn get_registration_receipt(
-        &self,
-        tower_id: TowerId,
-    ) -> Result<RegistrationReceipt, DBError> {
+    pub fn get_registration_receipt(&self, tower_id: TowerId) -> Option<RegistrationReceipt> {
         self.dbm.load_registration_receipt(tower_id, self.user_id)
     }
 
     /// Loads a tower record from the database.
-    pub fn load_tower_info(&self, tower_id: TowerId) -> Result<TowerInfo, DBError> {
+    pub fn load_tower_info(&self, tower_id: TowerId) -> Option<TowerInfo> {
         self.dbm.load_tower_record(tower_id)
     }
 
@@ -240,7 +237,7 @@ impl WTClient {
         &self,
         tower_id: TowerId,
         locator: Locator,
-    ) -> Result<AppointmentReceipt, DBError> {
+    ) -> Option<AppointmentReceipt> {
         self.dbm.load_appointment_receipt(tower_id, locator)
     }
 
@@ -810,10 +807,7 @@ mod tests {
 
         // Remove the tower and check it is not there anymore
         wt_client.remove_tower(tower_id).unwrap();
-        assert!(matches!(
-            wt_client.load_tower_info(tower_id),
-            Err(DBError::NotFound)
-        ));
+        assert!(wt_client.load_tower_info(tower_id).is_none());
         assert!(!wt_client.towers.contains_key(&tower_id));
 
         // Try again but this time with an associated appointment to check that it also gets removed
@@ -836,10 +830,7 @@ mod tests {
 
         // Remove and check both the tower and the appointment
         wt_client.remove_tower(tower_id).unwrap();
-        assert!(matches!(
-            wt_client.load_tower_info(tower_id),
-            Err(DBError::NotFound)
-        ));
+        assert!(wt_client.load_tower_info(tower_id).is_none());
         assert!(!wt_client.towers.contains_key(&tower_id));
         assert!(!wt_client.dbm.appointment_receipt_exists(locator, tower_id));
     }
@@ -890,10 +881,7 @@ mod tests {
 
         // Remove tower1 and check that the appointment receipt can still be found for tower2
         wt_client.remove_tower(tower1_id).unwrap();
-        assert!(matches!(
-            wt_client.load_tower_info(tower1_id),
-            Err(DBError::NotFound)
-        ));
+        assert!(wt_client.load_tower_info(tower1_id).is_none());
 
         assert!(!wt_client.dbm.appointment_receipt_exists(locator, tower1_id));
         assert!(wt_client.dbm.appointment_receipt_exists(locator, tower2_id));

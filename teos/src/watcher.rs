@@ -636,11 +636,10 @@ impl Watcher {
                 Some(a) => locators.push(a.locator),
                 None => {
                     if self.responder.has_tracker(*uuid) {
-                        match dbm.load_locator(*uuid) {
-                            Ok(locator) => locators.push(locator),
-                            Err(_) => log::error!(
-                                "Tracker found in Responder but not in DB (uuid = {uuid})"
-                            ),
+                        if let Some(locator) = dbm.load_locator(*uuid) {
+                            locators.push(locator)
+                        } else {
+                            log::error!("Tracker found in Responder but not in DB (uuid = {uuid})")
                         }
                     } else {
                         log::error!("Appointment found in the Gatekeeper but not in the Watcher nor the Responder (uuid = {uuid})")
@@ -770,7 +769,6 @@ mod tests {
         SUBSCRIPTION_EXPIRY, SUBSCRIPTION_START,
     };
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
-    use teos_common::dbm::Error as DBError;
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
@@ -961,10 +959,12 @@ mod tests {
 
         // Check data was added to the database
         for uuid in watcher.appointments.lock().unwrap().keys() {
-            assert!(matches!(
-                watcher.dbm.lock().unwrap().load_appointment(*uuid),
-                Ok(ExtendedAppointment { .. })
-            ));
+            assert!(watcher
+                .dbm
+                .lock()
+                .unwrap()
+                .load_appointment(*uuid)
+                .is_some());
         }
 
         // If an appointment is already in the Responder, it should bounce
@@ -1010,14 +1010,8 @@ mod tests {
         assert!(watcher.responder.has_tracker(uuid));
 
         // Check data was added to the database
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Ok(ExtendedAppointment { .. })
-        ));
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_tracker(uuid),
-            Ok(TransactionTracker { .. })
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_some());
+        assert!(watcher.dbm.lock().unwrap().load_tracker(uuid).is_some());
 
         // If an appointment is rejected by the Responder, it is considered misbehavior and the slot count is kept
         // Wrong penalty
@@ -1034,14 +1028,8 @@ mod tests {
         assert_eq!(watcher.appointments.lock().unwrap().len(), 3);
 
         // Data should not be in the database
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Err(DBError::NotFound)
-        ));
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_tracker(uuid),
-            Err(DBError::NotFound)
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
+        assert!(watcher.dbm.lock().unwrap().load_tracker(uuid).is_none());
 
         // Transaction rejected
         // Update the Responder with a new Carrier
@@ -1062,10 +1050,7 @@ mod tests {
         assert_eq!(watcher.appointments.lock().unwrap().len(), 3);
 
         // Data should not be in the database
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Err(DBError::NotFound)
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
 
         // FAIL cases (non-registered, subscription expired and not enough slots)
 
@@ -1078,10 +1063,7 @@ mod tests {
             Err(AddAppointmentFailure::AuthenticationFailure)
         ));
         // Data should not be in the database
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Err(DBError::NotFound)
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
 
         // If the user has no enough slots, the appointment is rejected. We do not test all possible cases since updates are
         // already tested int he Gatekeeper. Testing that it is  rejected if the condition is met should suffice.
@@ -1103,10 +1085,7 @@ mod tests {
             Err(AddAppointmentFailure::NotEnoughSlots)
         ));
         // Data should not be in the database
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Err(DBError::NotFound)
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
 
         // If the user subscription has expired, the appointment should be rejected.
         watcher
@@ -1123,10 +1102,7 @@ mod tests {
             Err(AddAppointmentFailure::SubscriptionExpired { .. })
         ));
         // Data should not be in the database
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Err(DBError::NotFound)
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
     }
 
     #[tokio::test]
@@ -1211,10 +1187,7 @@ mod tests {
         );
         // In this case the appointment is kept in the Responder and, therefore, in the database
         assert!(watcher.responder.has_tracker(uuid));
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Ok(ExtendedAppointment { .. })
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_some());
 
         // A properly formatted but invalid transaction should be rejected by the Responder
         // Update the Responder with a new Carrier that will reject the transaction
@@ -1232,10 +1205,7 @@ mod tests {
         );
         // In this case the appointment is not kept in the Responder nor in the database
         assert!(!watcher.responder.has_tracker(uuid));
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Err { .. }
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
 
         // Invalid triggered appointments should not be passed to the Responder
         // Use a dispute_tx that does not match the appointment to replicate a decryption error
@@ -1247,10 +1217,7 @@ mod tests {
         );
         // The appointment is not kept anywhere
         assert!(!watcher.responder.has_tracker(uuid));
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Err { .. }
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
     }
 
     #[tokio::test]
@@ -1502,10 +1469,7 @@ mod tests {
                 .contains_key(&locator));
 
             // But it can be found in the database
-            assert!(matches!(
-                watcher.dbm.lock().unwrap().load_appointment(uuid),
-                Ok(ExtendedAppointment { .. })
-            ));
+            assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_some());
         }
     }
 
@@ -1586,10 +1550,7 @@ mod tests {
         for uuid in all_appointments {
             if target_appointments.contains(&uuid) {
                 assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
-                assert!(matches!(
-                    watcher.dbm.lock().unwrap().load_appointment(uuid),
-                    Err(DBError::NotFound)
-                ));
+                assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
 
                 let locator = &uuid_locator_map[&uuid];
                 // If the penalty had more than one associated uuid, only one has been deleted
@@ -1620,10 +1581,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .contains_key(&uuid_locator_map[&uuid]));
-                assert!(matches!(
-                    watcher.dbm.lock().unwrap().load_appointment(uuid),
-                    Ok(ExtendedAppointment { .. })
-                ));
+                assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_some());
             }
         }
 
@@ -1728,10 +1686,12 @@ mod tests {
                 .appointments
                 .contains_key(&uuid1)
         );
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid1),
-            Ok(ExtendedAppointment { .. })
-        ));
+        assert!(watcher
+            .dbm
+            .lock()
+            .unwrap()
+            .load_appointment(uuid1)
+            .is_some());
 
         assert!(watcher.appointments.lock().unwrap().contains_key(&uuid2));
         assert!(watcher.locator_uuid_map.lock().unwrap()[&appointment.locator()].contains(&uuid2));
@@ -1740,10 +1700,12 @@ mod tests {
                 .appointments
                 .contains_key(&uuid2)
         );
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid2),
-            Ok(ExtendedAppointment { .. })
-        ));
+        assert!(watcher
+            .dbm
+            .lock()
+            .unwrap()
+            .load_appointment(uuid2)
+            .is_some());
 
         // Check triggers. Add a new appointment and trigger it with valid data.
         let dispute_tx = get_random_tx();
@@ -1774,14 +1736,8 @@ mod tests {
         );
 
         // Data should have been kept in the database
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Ok(ExtendedAppointment { .. })
-        ));
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_tracker(uuid),
-            Ok(TransactionTracker { .. })
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_some());
+        assert!(watcher.dbm.lock().unwrap().load_tracker(uuid).is_some());
 
         // Check triggering with a valid formatted transaction but that is rejected by the Responder.
         let dispute_tx = get_random_tx();
@@ -1816,14 +1772,8 @@ mod tests {
                 .contains_key(&uuid)
         );
         // Data should also have been deleted from the database
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Err(DBError::NotFound)
-        ));
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_tracker(uuid),
-            Err(DBError::NotFound)
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
+        assert!(watcher.dbm.lock().unwrap().load_tracker(uuid).is_none());
 
         // Checks invalid triggers. Add a new appointment and trigger it with invalid data.
         let dispute_tx = get_random_tx();
@@ -1855,10 +1805,7 @@ mod tests {
                 .appointments
                 .contains_key(&uuid)
         );
-        assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
-            Err(DBError::NotFound)
-        ));
+        assert!(watcher.dbm.lock().unwrap().load_appointment(uuid).is_none());
     }
 
     #[tokio::test]

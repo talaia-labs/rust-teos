@@ -264,10 +264,7 @@ mod tests {
         // If a new (worse, just one) block gets mined, nothing gets connected nor disconnected
         cm.poll_best_tip().await;
         assert_eq!(cm.last_known_block_header, best_tip);
-        assert!(matches!(
-            cm.dbm.lock().unwrap().load_last_known_block(),
-            Err { .. }
-        ));
+        assert!(cm.dbm.lock().unwrap().load_last_known_block().is_none());
         assert!(listener.connected_blocks.borrow().is_empty());
         assert!(listener.disconnected_blocks.borrow().is_empty());
     }

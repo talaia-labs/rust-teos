@@ -274,7 +274,7 @@ impl DBM {
     }
 
     /// Loads an [Appointment] from the database.
-    pub(crate) fn load_appointment(&self, uuid: UUID) -> Result<ExtendedAppointment, Error> {
+    pub(crate) fn load_appointment(&self, uuid: UUID) -> Option<ExtendedAppointment> {
         let key = uuid.to_vec();
         let mut stmt = self
             .connection
@@ -302,7 +302,7 @@ impl DBM {
                 start_block,
             ))
         })
-        .map_err(|_| Error::NotFound)
+        .ok()
     }
 
     /// Loads appointments from the database. If a locator is given, this method loads only the appointments
@@ -406,7 +406,7 @@ impl DBM {
     }
 
     /// Loads the locator associated to a given UUID
-    pub(crate) fn load_locator(&self, uuid: UUID) -> Result<Locator, Error> {
+    pub(crate) fn load_locator(&self, uuid: UUID) -> Option<Locator> {
         let mut stmt = self
             .connection
             .prepare("SELECT locator FROM appointments WHERE UUID=(?)")
@@ -416,7 +416,7 @@ impl DBM {
             let raw_locator: Vec<u8> = row.get(0).unwrap();
             Ok(Locator::from_slice(&raw_locator).unwrap())
         })
-        .map_err(|_| Error::NotFound)
+        .ok()
     }
 
     /// Stores a [TransactionTracker] into the database.
@@ -451,7 +451,7 @@ impl DBM {
     }
 
     /// Loads a [TransactionTracker] from the database.
-    pub(crate) fn load_tracker(&self, uuid: UUID) -> Result<TransactionTracker, Error> {
+    pub(crate) fn load_tracker(&self, uuid: UUID) -> Option<TransactionTracker> {
         let key = uuid.to_vec();
         let mut stmt = self
             .connection.prepare(
@@ -478,7 +478,7 @@ impl DBM {
                 user_id,
             })
         })
-        .map_err(|_| Error::NotFound)
+        .ok()
     }
 
     /// Loads trackers from the database. If a locator is given, this method loads only the trackers
@@ -537,7 +537,7 @@ impl DBM {
     }
 
     /// Loads the last known block from the database.
-    pub fn load_last_known_block(&self) -> Result<BlockHash, Error> {
+    pub fn load_last_known_block(&self) -> Option<BlockHash> {
         let mut stmt = self
             .connection
             .prepare("SELECT block_hash FROM last_known_block WHERE id=0")
@@ -547,7 +547,7 @@ impl DBM {
             let raw_hash: Vec<u8> = row.get(0).unwrap();
             Ok(BlockHash::from_slice(&raw_hash).unwrap())
         })
-        .map_err(|_| Error::NotFound)
+        .ok()
     }
 
     /// Stores the tower secret key into the database.
@@ -562,7 +562,7 @@ impl DBM {
     ///
     /// Loads the key with higher id from the database. Old keys are not overwritten just in case a recovery is needed,
     /// but they are not accessible from the API either.
-    pub fn load_tower_key(&self) -> Result<SecretKey, Error> {
+    pub fn load_tower_key(&self) -> Option<SecretKey> {
         let mut stmt = self
             .connection
             .prepare(
@@ -574,7 +574,7 @@ impl DBM {
             let sk: String = row.get(0).unwrap();
             Ok(SecretKey::from_str(&sk).unwrap())
         })
-        .map_err(|_| Error::NotFound)
+        .ok()
     }
 }
 
@@ -602,7 +602,7 @@ mod tests {
             Ok(dbm)
         }
 
-        pub(crate) fn load_user(&self, user_id: UserId) -> Result<UserInfo, Error> {
+        pub(crate) fn load_user(&self, user_id: UserId) -> Option<UserInfo> {
             let key = user_id.to_vec();
             let mut stmt = self
                 .connection
@@ -611,21 +611,18 @@ mod tests {
                         FROM users WHERE user_id=(?)",
                 )
                 .unwrap();
-            let user = stmt
-                .query_row([&key], |row| {
-                    let slots = row.get(1).unwrap();
-                    let start = row.get(2).unwrap();
-                    let expiry = row.get(3).unwrap();
-                    Ok(UserInfo::with_appointments(
-                        slots,
-                        start,
-                        expiry,
-                        self.load_user_appointments(user_id),
-                    ))
-                })
-                .map_err(|_| Error::NotFound)?;
-
-            Ok(user)
+            stmt.query_row([&key], |row| {
+                let slots = row.get(1).unwrap();
+                let start = row.get(2).unwrap();
+                let expiry = row.get(3).unwrap();
+                Ok(UserInfo::with_appointments(
+                    slots,
+                    start,
+                    expiry,
+                    self.load_user_appointments(user_id),
+                ))
+            })
+            .ok()
         }
     }
 
@@ -680,7 +677,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let user_id = get_random_user_id();
-        assert!(matches!(dbm.load_user(user_id), Err(Error::NotFound)));
+        assert!(dbm.load_user(user_id).is_none());
     }
 
     #[test]
@@ -779,11 +776,8 @@ mod tests {
         ));
 
         dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id]));
-        assert!(matches!(
-            dbm.load_user(appointment.user_id),
-            Err(Error::NotFound)
-        ));
-        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+        assert!(dbm.load_user(appointment.user_id).is_none());
+        assert!(dbm.load_appointment(uuid).is_none());
 
         // Appointment + Tracker
         dbm.store_user(appointment.user_id, &info).unwrap();
@@ -794,12 +788,9 @@ mod tests {
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
         dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id]));
-        assert!(matches!(
-            dbm.load_user(appointment.user_id),
-            Err(Error::NotFound)
-        ));
-        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
-        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
+        assert!(dbm.load_user(appointment.user_id).is_none());
+        assert!(dbm.load_appointment(uuid).is_none());
+        assert!(dbm.load_tracker(uuid).is_none());
     }
 
     #[test]
@@ -846,7 +837,7 @@ mod tests {
             dbm.store_appointment(uuid, &appointment),
             Err(Error::MissingForeignKey)
         ));
-        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
+        assert!((dbm.load_tracker(uuid).is_none()));
     }
 
     #[test]
@@ -854,7 +845,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let uuid = generate_uuid();
-        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+        assert!(dbm.load_appointment(uuid).is_none());
     }
 
     #[test]
@@ -1053,7 +1044,7 @@ mod tests {
             &HashSet::from_iter(vec![uuid]),
             &HashMap::from_iter([(appointment.user_id, info.clone())]),
         );
-        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
+        assert!(dbm.load_appointment(uuid).is_none());
 
         // Appointment + Tracker
         assert!(matches!(
@@ -1066,8 +1057,8 @@ mod tests {
             &HashSet::from_iter(vec![uuid]),
             &HashMap::from_iter([(appointment.user_id, info)]),
         );
-        assert!(matches!(dbm.load_appointment(uuid), Err(Error::NotFound)));
-        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
+        assert!(dbm.load_appointment(uuid).is_none());
+        assert!(dbm.load_tracker(uuid).is_none());
     }
 
     #[test]
@@ -1103,7 +1094,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let (uuid, _) = generate_dummy_appointment_with_user(get_random_user_id(), None);
-        assert!(matches!(dbm.load_locator(uuid), Err(Error::NotFound)));
+        assert!(dbm.load_locator(uuid).is_none());
     }
 
     #[test]
@@ -1168,7 +1159,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         let uuid = generate_uuid();
-        assert!(matches!(dbm.load_tracker(uuid), Err(Error::NotFound)));
+        assert!(dbm.load_tracker(uuid).is_none());
     }
 
     #[test]
@@ -1251,14 +1242,14 @@ mod tests {
     fn test_store_load_nonexistent_last_known_block() {
         let dbm = DBM::in_memory().unwrap();
 
-        assert!(matches!(dbm.load_last_known_block(), Err(Error::NotFound)));
+        assert!(dbm.load_last_known_block().is_none());
     }
 
     #[test]
     fn test_store_load_tower_key() {
         let dbm = DBM::in_memory().unwrap();
 
-        assert!(matches!(dbm.load_tower_key(), Err(Error::NotFound)));
+        assert!(dbm.load_tower_key().is_none());
         for _ in 0..7 {
             let sk = get_random_keypair().0;
             dbm.store_tower_key(&sk).unwrap();

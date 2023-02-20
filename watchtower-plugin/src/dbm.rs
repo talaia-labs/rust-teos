@@ -125,7 +125,7 @@ impl DBM {
     ///
     /// Loads the key with higher id from the database. Old keys are not overwritten just in case a recovery is needed,
     /// but they are not accessible from the API either.
-    pub fn load_client_key(&self) -> Result<SecretKey, Error> {
+    pub fn load_client_key(&self) -> Option<SecretKey> {
         let mut stmt = self
             .connection
             .prepare(
@@ -137,7 +137,7 @@ impl DBM {
             let sk: String = row.get(0).unwrap();
             Ok(SecretKey::from_str(&sk).unwrap())
         })
-        .map_err(|_| Error::NotFound)
+        .ok()
     }
 
     /// Stores a tower record into the database alongside the corresponding registration receipt.
@@ -171,7 +171,7 @@ impl DBM {
     /// Tower records are composed from the tower information and the appointment data. The latter is split in:
     /// accepted appointments (represented by appointment receipts), pending appointments and invalid appointments.
     /// In the case that the tower has misbehaved, then a misbehaving proof is also attached to the record.
-    pub fn load_tower_record(&self, tower_id: TowerId) -> Result<TowerInfo, Error> {
+    pub fn load_tower_record(&self, tower_id: TowerId) -> Option<TowerInfo> {
         let mut stmt = self
         .connection
         .prepare("SELECT t.net_addr, t.available_slots, r.subscription_start, r.subscription_expiry 
@@ -197,16 +197,16 @@ impl DBM {
                     self.load_appointments(tower_id, AppointmentStatus::Invalid),
                 ))
             })
-            .map_err(|_| Error::NotFound)?;
+            .ok()?;
 
-        if let Ok(proof) = self.load_misbehaving_proof(tower_id) {
+        if let Some(proof) = self.load_misbehaving_proof(tower_id) {
             tower.status = TowerStatus::Misbehaving;
             tower.set_misbehaving_proof(proof);
         } else if !tower.pending_appointments.is_empty() {
             tower.status = TowerStatus::TemporaryUnreachable;
         }
 
-        Ok(tower)
+        Some(tower)
     }
 
     /// Loads the latest registration receipt for a given tower.
@@ -216,7 +216,7 @@ impl DBM {
         &self,
         tower_id: TowerId,
         user_id: UserId,
-    ) -> Result<RegistrationReceipt, Error> {
+    ) -> Option<RegistrationReceipt> {
         let mut stmt = self
             .connection
             .prepare(
@@ -228,20 +228,17 @@ impl DBM {
             )
             .unwrap();
 
-        let receipt = stmt
-            .query_row([tower_id.to_vec()], |row| {
-                let slots: u32 = row.get(0).unwrap();
-                let start: u32 = row.get(1).unwrap();
-                let expiry: u32 = row.get(2).unwrap();
-                let signature: String = row.get(3).unwrap();
+        stmt.query_row([tower_id.to_vec()], |row| {
+            let slots: u32 = row.get(0).unwrap();
+            let start: u32 = row.get(1).unwrap();
+            let expiry: u32 = row.get(2).unwrap();
+            let signature: String = row.get(3).unwrap();
 
-                Ok(RegistrationReceipt::with_signature(
-                    user_id, slots, start, expiry, signature,
-                ))
-            })
-            .map_err(|_| Error::NotFound)?;
-
-        Ok(receipt)
+            Ok(RegistrationReceipt::with_signature(
+                user_id, slots, start, expiry, signature,
+            ))
+        })
+        .ok()
     }
 
     /// Removes a tower record from the database.
@@ -333,7 +330,7 @@ impl DBM {
         &self,
         tower_id: TowerId,
         locator: Locator,
-    ) -> Result<AppointmentReceipt, Error> {
+    ) -> Option<AppointmentReceipt> {
         let mut stmt = self
             .connection
             .prepare("SELECT start_block, user_signature, tower_signature FROM appointment_receipts WHERE tower_id = ?1 and locator = ?2")
@@ -350,7 +347,7 @@ impl DBM {
                 tower_sig,
             ))
         })
-        .map_err(|_| Error::NotFound)
+        .ok()
     }
 
     /// Loads the appointment receipts associated to a given tower.
@@ -406,7 +403,7 @@ impl DBM {
     }
 
     /// Loads an appointment from the database.
-    pub fn load_appointment(&self, locator: Locator) -> Result<Appointment, Error> {
+    pub fn load_appointment(&self, locator: Locator) -> Option<Appointment> {
         let mut stmt = self
             .connection
             .prepare("SELECT encrypted_blob, to_self_delay FROM appointments WHERE locator = ?")
@@ -418,7 +415,7 @@ impl DBM {
 
             Ok(Appointment::new(locator, encrypted_blob, to_self_delay))
         })
-        .map_err(|_| Error::NotFound)
+        .ok()
     }
 
     /// Stores an appointment into the database.
@@ -598,7 +595,7 @@ impl DBM {
     }
 
     /// Loads the misbehaving proof for a given tower from the database (if found).
-    fn load_misbehaving_proof(&self, tower_id: TowerId) -> Result<MisbehaviorProof, Error> {
+    fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
         let mut misbehaving_stmt = self
             .connection
             .prepare("SELECT locator, recovered_id FROM misbehaving_proofs WHERE tower_id = ?")
@@ -633,7 +630,7 @@ impl DBM {
                     .unwrap();
                 MisbehaviorProof::new(locator, receipt, recovered_id)
             })
-            .map_err(|_| Error::NotFound)
+            .ok()
     }
 
     /// Checks whether a misbehaving proof exists for a given tower.
@@ -792,10 +789,7 @@ mod tests {
 
         // If the tower does not exists, `load_tower` will fail.
         let tower_id = get_random_user_id();
-        assert!(matches!(
-            dbm.load_tower_record(tower_id),
-            Err(Error::NotFound)
-        ));
+        assert!(dbm.load_tower_record(tower_id).is_none());
     }
 
     #[test]
@@ -917,10 +911,9 @@ mod tests {
 
         // If there is no appointment receipt for the given (locator, tower_id) pair, Error::NotFound is returned
         // Try first with both being unknown
-        assert!(matches!(
-            dbm.load_appointment_receipt(tower_id, appointment.locator),
-            Err(Error::NotFound)
-        ));
+        assert!(dbm
+            .load_appointment_receipt(tower_id, appointment.locator)
+            .is_none());
 
         // Add the tower but not the appointment and try again
         let net_addr = "talaia.watch";
@@ -928,10 +921,9 @@ mod tests {
         dbm.store_tower_record(tower_id, net_addr, &receipt)
             .unwrap();
 
-        assert!(matches!(
-            dbm.load_appointment_receipt(tower_id, appointment.locator),
-            Err(Error::NotFound)
-        ));
+        assert!(dbm
+            .load_appointment_receipt(tower_id, appointment.locator)
+            .is_none());
 
         // Add both
         let tower_summary = TowerSummary::new(
@@ -1045,7 +1037,7 @@ mod tests {
 
         let locator = generate_random_appointment(None).locator;
         let loaded_appointment = dbm.load_appointment(locator);
-        assert!(matches!(loaded_appointment, Err(Error::NotFound)));
+        assert!(loaded_appointment.is_none());
     }
 
     #[test]
@@ -1284,10 +1276,7 @@ mod tests {
     #[test]
     fn test_store_load_non_existing_misbehaving_proof() {
         let dbm = DBM::in_memory().unwrap();
-        assert!(matches!(
-            dbm.load_misbehaving_proof(get_random_user_id()),
-            Err(Error::NotFound)
-        ));
+        assert!(dbm.load_misbehaving_proof(get_random_user_id()).is_none());
     }
 
     #[test]
@@ -1340,7 +1329,7 @@ mod tests {
     fn test_store_load_client_key() {
         let dbm = DBM::in_memory().unwrap();
 
-        assert!(matches!(dbm.load_client_key(), Err(Error::NotFound)));
+        assert!(dbm.load_client_key().is_none());
         for _ in 0..7 {
             let sk = get_random_keypair().0;
             dbm.store_client_key(&sk).unwrap();

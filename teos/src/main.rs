@@ -126,14 +126,11 @@ async fn main() {
         if conf.overwrite_key {
             log::info!("Overwriting tower keys");
             create_new_tower_keypair(&locked_db)
+        } else if let Some(sk) = locked_db.load_tower_key() {
+            (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk))
         } else {
-            match locked_db.load_tower_key() {
-                Ok(sk) => (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
-                Err(_) => {
-                    log::info!("Tower keys not found. Creating a fresh set");
-                    create_new_tower_keypair(&locked_db)
-                }
-            }
+            log::info!("Tower keys not found. Creating a fresh set");
+            create_new_tower_keypair(&locked_db)
         }
     };
     log::info!("tower_id: {tower_pk}");
@@ -179,7 +176,7 @@ async fn main() {
     let mut derefed = bitcoin_cli.deref();
     // Load last known block from DB if found. Poll it from Bitcoind otherwise.
     let last_known_block = dbm.lock().unwrap().load_last_known_block();
-    let tip = if let Ok(block_hash) = last_known_block {
+    let tip = if let Some(block_hash) = last_known_block {
         derefed
             .get_header(&block_hash, None)
             .await

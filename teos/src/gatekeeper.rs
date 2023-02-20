@@ -356,7 +356,6 @@ mod tests {
     };
     use lightning::chain::Listen;
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
-    use teos_common::dbm::Error as DBError;
     use teos_common::test_utils::get_random_user_id;
 
     const SLOTS: u32 = 21;
@@ -849,10 +848,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .contains_key(user_id));
-            assert!(matches!(
-                gatekeeper.dbm.lock().unwrap().load_user(*user_id),
-                Err(DBError::NotFound)
-            ));
+            assert!(gatekeeper.dbm.lock().unwrap().load_user(*user_id).is_none());
         }
 
         // Check that the last_known_block_header has been properly updated

@@ -136,11 +136,13 @@ async fn get_registration_receipt(
     let tower_id = TowerId::try_from(v).map_err(|x| anyhow!(x))?;
     let state = plugin.state().lock().unwrap();
 
-    let response = state.get_registration_receipt(tower_id).map_err(|_| {
-        anyhow!("Cannot find {tower_id} within the known towers. Have you registered?")
-    })?;
-
-    Ok(json!(response))
+    if let Some(response) = state.get_registration_receipt(tower_id) {
+        Ok(json!(response))
+    } else {
+        Err(anyhow!(
+            "Cannot find {tower_id} within the known towers. Have you registered?"
+        ))
+    }
 }
 
 /// Gets the subscription information directly form the tower.
@@ -244,24 +246,20 @@ async fn get_appointment_receipt(
     let params = GetAppointmentParams::try_from(v).map_err(|x| anyhow!(x))?;
     let state = plugin.state().lock().unwrap();
 
-    let response = state
-        .get_appointment_receipt(params.tower_id, params.locator)
-        .map_err(|_| {
-            if state.towers.contains_key(&params.tower_id) {
-                anyhow!(
-                    "Cannot find {} within {}. Did you send that appointment?",
-                    params.locator,
-                    params.tower_id
-                )
-            } else {
-                anyhow!(
-                    "Cannot find {} within the known towers. Have you registered?",
-                    params.tower_id
-                )
-            }
-        })?;
-
-    Ok(json!(response))
+    if let Some(r) = state.get_appointment_receipt(params.tower_id, params.locator) {
+        Ok(json!(r))
+    } else if state.towers.contains_key(&params.tower_id) {
+        Err(anyhow!(
+            "Cannot find {} within {}. Did you send that appointment?",
+            params.locator,
+            params.tower_id
+        ))
+    } else {
+        Err(anyhow!(
+            "Cannot find {} within the known towers. Have you registered?",
+            params.tower_id
+        ))
+    }
 }
 
 /// Lists all the registered towers.
@@ -283,15 +281,18 @@ async fn get_tower_info(
 ) -> Result<serde_json::Value, Error> {
     let state = plugin.state().lock().unwrap();
     let tower_id = TowerId::try_from(v).map_err(|e| anyhow!(e))?;
-    let tower_info = state.load_tower_info(tower_id).map_err(|_| {
-        anyhow!("Cannot find {tower_id} within the known towers. Have you registered?")
-    })?;
 
-    // Notice we need to check the status in memory since we cannot distinguish between unreachable and temporary unreachable
-    // by just checking the data in the database.
-    Ok(json!(
-        tower_info.with_status(state.get_tower_status(&tower_id).unwrap())
-    ))
+    if let Some(tower_info) = state.load_tower_info(tower_id) {
+        // Notice we need to check the status in memory since we cannot distinguish between unreachable and temporary unreachable
+        // by just checking the data in the database.
+        Ok(json!(
+            tower_info.with_status(state.get_tower_status(&tower_id).unwrap())
+        ))
+    } else {
+        Err(anyhow!(
+            "Cannot find {tower_id} within the known towers. Have you registered?",
+        ))
+    }
 }
 
 /// Triggers a manual retry of a tower, tries to send all pending appointments to it.
