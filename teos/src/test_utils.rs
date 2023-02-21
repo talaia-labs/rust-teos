@@ -8,12 +8,15 @@
 */
 
 use rand::Rng;
+use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 use jsonrpc_http_server::jsonrpc_core::error::ErrorCode as JsonRpcErrorCode;
 use jsonrpc_http_server::jsonrpc_core::{Error as JsonRpcError, IoHandler, Params, Value};
 use jsonrpc_http_server::{CloseHandle, Server, ServerBuilder};
+
+use tonic::transport;
 
 use bitcoincore_rpc::{Auth, Client as BitcoindClient};
 
@@ -46,6 +49,8 @@ use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, UserInfo};
 use crate::protos as msgs;
+use crate::protos::public_tower_services_client::PublicTowerServicesClient;
+use crate::protos::public_tower_services_server::PublicTowerServicesServer;
 use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
 use crate::rpc_errors;
 use crate::watcher::{Breach, Watcher};
@@ -528,6 +533,45 @@ impl Drop for BitcoindStopper {
     fn drop(&mut self) {
         self.close_handle().close()
     }
+}
+
+pub(crate) async fn run_tower_in_background_with_config(
+    api_config: ApiConfig,
+) -> (SocketAddr, Arc<InternalAPI>, BitcoindStopper) {
+    let (internal_rpc_api, bitcoind_stopper) = create_api_with_config(api_config).await;
+    let cloned = internal_rpc_api.clone();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        transport::Server::builder()
+            .add_service(PublicTowerServicesServer::new(internal_rpc_api))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+
+    (addr, cloned, bitcoind_stopper)
+}
+
+pub(crate) async fn run_tower_in_background() -> (SocketAddr, BitcoindStopper) {
+    let (sock_addr, _, bitcoind_stopper) =
+        run_tower_in_background_with_config(ApiConfig::default()).await;
+
+    (sock_addr, bitcoind_stopper)
+}
+
+pub(crate) async fn get_public_grpc_conn(
+    server_addr: SocketAddr,
+) -> PublicTowerServicesClient<transport::Channel> {
+    PublicTowerServicesClient::connect(format!(
+        "http://{}:{}",
+        server_addr.ip(),
+        server_addr.port()
+    ))
+    .await
+    .unwrap()
 }
 
 pub(crate) struct BitcoindMock {
