@@ -290,12 +290,12 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
 
 pub async fn serve(
     http_bind: SocketAddr,
-    grpc_bind: String,
+    grpc_bind: SocketAddr,
     service_ready: Trigger,
     shutdown_signal: Listener,
 ) {
     let grpc_conn = loop {
-        match PublicTowerServicesClient::connect(grpc_bind.clone()).await {
+        match PublicTowerServicesClient::connect(format!("http://{grpc_bind}")).await {
             Ok(conn) => break conn,
             Err(_) => {
                 log::error!("Cannot connect to the gRPC server. Retrying shortly");
