@@ -17,7 +17,7 @@ COPY . /srv/rust-teos
 WORKDIR /srv/rust-teos
 
 #Getting [ error: 'rustfmt' is not installed for the toolchain '1.67.1-aarch64-unknown-linux-gnu'] so added a line:
-RUN rustup component add rustfmt --toolchain 1.67.1-aarch64-unknown-linux-gnu  
+RUN rustup component add rustfmt 
 
 RUN cargo build --release
 
