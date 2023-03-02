@@ -5,54 +5,60 @@ START_COMMAND="teosd"
 
 # Set the API bind address
 if [[ ! -z ${API_BIND} ]]; then
-    START_COMMAND="$START_COMMAND --api-bind $API_BIND"
+    START_COMMAND="$START_COMMAND --apibind $API_BIND"
 fi
 
 # Set the API port
 if [[ ! -z ${API_PORT} ]]; then
-    START_COMMAND="$START_COMMAND --api-port $API_PORT"
+    START_COMMAND="$START_COMMAND --apiport $API_PORT"
 fi
 
 # Set the RPC bind address
 if [[ ! -z ${RPC_BIND} ]]; then
-    START_COMMAND="$START_COMMAND --rpc-bind $RPC_BIND"
+    START_COMMAND="$START_COMMAND --rpcbind $RPC_BIND"
 fi
 
 # Set the RPC port
 if [[ ! -z ${RPC_PORT} ]]; then
-    START_COMMAND="$START_COMMAND --rpc-port $RPC_PORT"
+    START_COMMAND="$START_COMMAND --rpcport $RPC_PORT"
 fi
 
 # Set the Bitcoin network
 if [[ ! -z ${BTC_NETWORK} ]]; then
-    START_COMMAND="$START_COMMAND --btc-network $BTC_NETWORK"
+    START_COMMAND="$START_COMMAND --btcnetwork $BTC_NETWORK"
 fi
 
 # Set the Bitcoin RPC credentials
 if [[ ! -z ${BTC_RPC_USER} ]]; then
-    START_COMMAND="$START_COMMAND --btc-rpc-user $BTC_RPC_USER"
+    START_COMMAND="$START_COMMAND --btcrpcuser $BTC_RPC_USER"
 fi
 
 if [[ ! -z ${BTC_RPC_PASSWORD} ]]; then
-    START_COMMAND="$START_COMMAND --btc-rpc-password $BTC_RPC_PASSWORD"
+    START_COMMAND="$START_COMMAND --btcrpcpassword $BTC_RPC_PASSWORD"
 fi
 
 # Set the Bitcoin RPC connection details
 if [[ ! -z ${BTC_RPC_CONNECT} ]]; then
-    START_COMMAND="$START_COMMAND --btc-rpc-connect $BTC_RPC_CONNECT"
+    START_COMMAND="$START_COMMAND --btcrpcconnect $BTC_RPC_CONNECT"
 fi
 
 if [[ ! -z ${BTC_RPC_PORT} ]]; then
-    START_COMMAND="$START_COMMAND --btc-rpc-port $BTC_RPC_PORT"
+    START_COMMAND="$START_COMMAND --btcrpcport $BTC_RPC_PORT"
 fi
 
-# Set the Bitcoin feed connection details
-if [[ ! -z ${BTC_FEED_CONNECT} ]]; then
-    START_COMMAND="$START_COMMAND --btc-feed-connect $BTC_FEED_CONNECT"
+# Set the TEOS data directory
+if [[ ! -z ${TEOS_DATADIR} ]]; then
+    START_COMMAND="$START_COMMAND --datadir $TEOS_DATADIR"
 fi
 
-if [[ ! -z ${BTC_FEED_PORT} ]]; then
-    START_COMMAND="$START_COMMAND --btc-feed-port $BTC_FEED_PORT"
+# Set the onion hidden service port
+if [[ ! -z ${ONION_HIDDEN_SERVICE_PORT} ]]; then
+    START_COMMAND="$START_COMMAND --onionhiddenserviceport $ONION_HIDDEN_SERVICE_PORT"
+fi
+
+# Set the Tor control port
+if [[ ! -z ${TOR_CONTROL_PORT} ]]; then
+    START_COMMAND="$START_COMMAND --torcontrolport $TOR_CONTROL_PORT"
 fi
 
 # Start the TEOS daemon
