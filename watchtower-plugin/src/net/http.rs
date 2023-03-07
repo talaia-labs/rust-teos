@@ -1,4 +1,4 @@
-use reqwest::Response;
+use reqwest::{Method, Response};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use teos_common::appointment::Appointment;
@@ -154,12 +154,13 @@ pub async fn send_appointment(
     }
 }
 
-/// Generic function to post different types of requests to the tower.
-pub async fn post_request<S: Serialize>(
+/// A generic function to send a request to a tower.
+async fn request<S: Serialize>(
     tower_net_addr: &NetAddr,
     endpoint: Endpoint,
-    data: S,
     proxy: &Option<ProxyInfo>,
+    method: Method,
+    data: Option<S>,
 ) -> Result<Response, RequestError> {
     let client = if let Some(proxy) = proxy {
         if proxy.always_use || tower_net_addr.is_onion() {
@@ -183,23 +184,42 @@ pub async fn post_request<S: Serialize>(
         reqwest::Client::new()
     };
 
-    client
-        .post(format!("{}{}", tower_net_addr.net_addr(), endpoint.path()))
-        .json(&data)
-        .send()
-        .await
-        .map_err(|e| {
-            log::debug!("An error ocurred when sending data to the tower: {e}");
-            if e.is_connect() | e.is_timeout() {
-                RequestError::ConnectionError(
-                    "Cannot connect to the tower. Connection refused".to_owned(),
-                )
-            } else {
-                RequestError::Unexpected(
-                    "Unexpected error ocurred (see logs for more info)".to_owned(),
-                )
-            }
-        })
+    let mut request_builder = client.request(
+        method,
+        format!("{}{}", tower_net_addr.net_addr(), endpoint.path()),
+    );
+
+    if let Some(data) = data {
+        request_builder = request_builder.json(&data);
+    }
+
+    request_builder.send().await.map_err(|e| {
+        log::debug!("An error ocurred when sending data to the tower: {e}");
+        if e.is_connect() | e.is_timeout() {
+            RequestError::ConnectionError(
+                "Cannot connect to the tower. Connection refused".to_owned(),
+            )
+        } else {
+            RequestError::Unexpected("Unexpected error ocurred (see logs for more info)".to_owned())
+        }
+    })
+}
+
+pub async fn post_request<S: Serialize>(
+    tower_net_addr: &NetAddr,
+    endpoint: Endpoint,
+    data: S,
+    proxy: &Option<ProxyInfo>,
+) -> Result<Response, RequestError> {
+    request(tower_net_addr, endpoint, proxy, Method::POST, Some(data)).await
+}
+
+pub async fn get_request(
+    tower_net_addr: &NetAddr,
+    endpoint: Endpoint,
+    proxy: &Option<ProxyInfo>,
+) -> Result<Response, RequestError> {
+    request::<()>(tower_net_addr, endpoint, proxy, Method::GET, None).await
 }
 
 /// Generic function to process the response of a given post request.
@@ -503,6 +523,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_request() {
+        let mut server = mockito::Server::new_async().await;
+
+        // Test with POST
+        let api_mock_post = server
+            .mock("POST", Endpoint::Register.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .create_async()
+            .await;
+
+        let response_post = request(
+            &NetAddr::new(server.url()),
+            Endpoint::Register,
+            &None,
+            Method::POST,
+            Some(json!("")),
+        )
+        .await;
+
+        api_mock_post.assert_async().await;
+        assert!(matches!(response_post, Ok(Response { .. })));
+
+        // Test with GET
+        let api_mock_get = server
+            .mock("GET", Endpoint::Ping.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .create_async()
+            .await;
+
+        let response_get = request::<()>(
+            &NetAddr::new(server.url()),
+            Endpoint::Ping,
+            &None,
+            Method::GET,
+            None,
+        )
+        .await;
+
+        api_mock_get.assert_async().await;
+        assert!(matches!(response_get, Ok(Response { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_request_connection_error() {
+        assert!(request(
+            &NetAddr::new("http://unreachable_url".to_owned()),
+            Endpoint::Register,
+            &None,
+            Method::POST,
+            Some(json!("")),
+        )
+        .await
+        .unwrap_err()
+        .is_connection());
+
+        assert!(request(
+            &NetAddr::new("http://unreachable_url".to_owned()),
+            Endpoint::Ping,
+            &None,
+            Method::GET,
+            None::<&str>,
+        )
+        .await
+        .unwrap_err()
+        .is_connection());
+    }
+
+    #[tokio::test]
+    async fn test_get_request() {
+        let mut server = mockito::Server::new_async().await;
+        let api_mock = server
+            .mock("GET", Endpoint::Ping.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .create_async()
+            .await;
+        let response = get_request(&NetAddr::new(server.url()), Endpoint::Ping, &None).await;
+
+        api_mock.assert_async().await;
+
+        assert!(matches!(response, Ok(Response { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_get_request_connection_error() {
+        assert!(get_request(
+            &NetAddr::new("http://unreachable_url".to_owned()),
+            Endpoint::Ping,
+            &None,
+        )
+        .await
+        .unwrap_err()
+        .is_connection());
+    }
+
+    #[tokio::test]
     async fn test_post_request() {
         let mut server = mockito::Server::new_async().await;
         let api_mock = server
@@ -518,26 +636,23 @@ mod tests {
             json!(""),
             &None,
         )
-        .await
-        .unwrap();
+        .await;
 
         api_mock.assert_async().await;
-        assert!(matches!(response, Response { .. }));
+        assert!(matches!(response, Ok(Response { .. })));
     }
 
     #[tokio::test]
     async fn test_post_request_connection_error() {
-        assert!(matches!(
-            post_request(
-                &NetAddr::new("http://unreachable_url".to_owned()),
-                Endpoint::Register,
-                json!(""),
-                &None,
-            )
-            .await
-            .unwrap_err(),
-            RequestError::ConnectionError { .. }
-        ));
+        assert!(post_request(
+            &NetAddr::new("http://unreachable_url".to_owned()),
+            Endpoint::Register,
+            json!(""),
+            &None,
+        )
+        .await
+        .unwrap_err()
+        .is_connection());
     }
 
     #[tokio::test]

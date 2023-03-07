@@ -12,6 +12,7 @@ The plugin has the following methods:
 - `gettowerinfo <tower_id>`: gets all the locally stored data about a given tower.
 - `retrytower <tower_id>`: tries to send pending appointment to a (previously) unreachable tower.
 - `abandontower <tower_id>`: deletes all data associated with a given tower.
+- `pingtower <tower_id>`: Polls the tower to check if it is online.
 - `listtowers`: lists all registered towers.
 - `getappointment <tower_id> <locator>`: queries a given tower about an appointment.
 - `getsubscriptioninfo <tower_id>`: gets the subscription information by querying the tower.

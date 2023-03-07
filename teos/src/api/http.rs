@@ -217,6 +217,14 @@ async fn get_subscription_info(
     Ok(reply::with_status(body, status))
 }
 
+async fn ping(addr: Option<SocketAddr>) -> Result<impl Reply, Rejection> {
+    log::debug!(
+        "Received a ping request from {}",
+        addr.map_or("an unknown address".to_owned(), |a| a.to_string())
+    );
+    Ok(reply::reply())
+}
+
 fn router(
     grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -251,10 +259,16 @@ fn router(
         .and(with_grpc(grpc_conn))
         .and_then(get_subscription_info);
 
+    let ping = warp::get()
+        .and(warp::path(Endpoint::Ping.to_string()))
+        .and(warp::addr::remote())
+        .and_then(ping);
+
     register
         .or(add_appointment)
         .or(get_appointment)
         .or(get_subscription_info)
+        .or(ping)
         .recover(handle_rejection)
 }
 
@@ -615,7 +629,7 @@ mod tests_failures {
             .reply(&router(grpc_conn))
             .await;
 
-        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]
