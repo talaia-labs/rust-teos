@@ -4,46 +4,50 @@ on: [push, pull_request]
 
 jobs:
   build:
+    runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
         platform: [ ubuntu-latest, macos-latest, windows-latest ]
         toolchain: [ stable ]
-        include:
-           - platform: windows-latest
-             arguments: --workspace --exclude watchtower-plugin
+        exclude:
+          # The watchtower-plugin is not supported on Windows
+          - platform: windows-latest
+            toolchain: stable
+            arguments: --exclude watchtower-plugin
 
-    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v3
-      - name: Install Rust ${{ matrix.toolchain }} toolchain
+        uses: actions/checkout@v2
+
+      - name: Setup Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
+          profile: minimal
           toolchain: ${{ matrix.toolchain }}
           override: true
-          profile: minimal
-      - name: Build on Rust ${{ matrix.toolchain }}
-        run: |
-          cargo build ${{ matrix.arguments }} --verbose --color always
-      - name: Test on Rust ${{ matrix.toolchain }}
-        run: |
-          cargo test ${{ matrix.arguments }} --verbose --color always
+
+      - name: Build
+        run: cargo build ${{ matrix.arguments }} --verbose --color always
+
+      - name: Test
+        run: cargo test ${{ matrix.arguments }} --verbose --color always
 
   lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v3
-      - name: Install Rust stable toolchain
+        uses: actions/checkout@v2
+
+      - name: Setup Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
           profile: minimal
+          toolchain: stable
+          override: true
           components: rustfmt, clippy
+
       - name: Run rustfmt
-        run: |
-          cargo fmt --verbose --check -- --color always
+        run: cargo fmt --verbose --check -- --color always
+
       - name: Run clippy
-        run: |
-          cargo clippy --all-features --all-targets --color always -- --deny warnings
+        run: cargo clippy --all-features --all-targets --color always -- --deny warnings
