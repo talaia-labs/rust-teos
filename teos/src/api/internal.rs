@@ -2,6 +2,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use tonic::{Code, Request, Response, Status};
 use triggered::Trigger;
 
+use crate::extended_appointment::UUID;
 use crate::protos as msgs;
 use crate::protos::private_tower_services_server::PrivateTowerServices;
 use crate::protos::public_tower_services_server::PublicTowerServices;
@@ -386,10 +387,14 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         })?;
 
         match self.watcher.get_user_info(user_id) {
-            Some(info) => Ok(Response::new(msgs::GetUserResponse {
+            Some((info, locators)) => Ok(Response::new(msgs::GetUserResponse {
                 available_slots: info.available_slots,
                 subscription_expiry: info.subscription_expiry,
-                appointments: info.appointments.keys().map(|uuid| uuid.to_vec()).collect(),
+                // TODO: Should make it return locators and make `get_appointments` queryable using the (user_id, locator) pair for consistency.
+                appointments: locators
+                    .into_iter()
+                    .map(|locator| UUID::new(locator, user_id).to_vec())
+                    .collect(),
             })),
             None => Err(Status::new(Code::NotFound, "User not found")),
         }
@@ -429,11 +434,10 @@ mod tests_private_api {
     use bitcoin::hashes::Hash;
     use bitcoin::Txid;
 
-    use crate::extended_appointment::UUID;
     use crate::responder::{ConfirmationStatus, TransactionTracker};
     use crate::test_utils::{
-        create_api, generate_dummy_appointment, generate_uuid, get_random_tx, DURATION, SLOTS,
-        START_HEIGHT,
+        create_api, generate_dummy_appointment, generate_dummy_appointment_with_user,
+        get_random_tx, DURATION, SLOTS, START_HEIGHT,
     };
     use crate::watcher::Breach;
 
@@ -486,9 +490,7 @@ mod tests_private_api {
         let (internal_api, _s) = create_api().await;
 
         // Add data to the Responser so we can retrieve it later on
-        internal_api
-            .watcher
-            .add_random_tracker_to_responder(generate_uuid());
+        internal_api.watcher.add_random_tracker_to_responder();
 
         let response = internal_api
             .get_all_appointments(Request::new(()))
@@ -588,7 +590,7 @@ mod tests_private_api {
                 );
                 internal_api
                     .watcher
-                    .add_dummy_tracker_to_responder(generate_uuid(), &tracker);
+                    .add_dummy_tracker_to_responder(&tracker);
             }
 
             let locator = Locator::new(dispute_tx.txid());
@@ -655,9 +657,7 @@ mod tests_private_api {
 
         // And the Responder
         for _ in 0..3 {
-            internal_api
-                .watcher
-                .add_random_tracker_to_responder(generate_uuid());
+            internal_api.watcher.add_random_tracker_to_responder();
         }
 
         let response = internal_api
@@ -730,12 +730,11 @@ mod tests_private_api {
         assert!(response.appointments.is_empty());
 
         // Add an appointment and check back
-        let appointment = generate_dummy_appointment(None).inner;
-        let uuid = UUID::new(appointment.locator, user_id);
-        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        let user_signature = cryptography::sign(&appointment.inner.to_vec(), &user_sk).unwrap();
         internal_api
             .watcher
-            .add_appointment(appointment.clone(), user_signature)
+            .add_appointment(appointment.inner, user_signature)
             .unwrap();
 
         let response = internal_api
@@ -786,10 +785,12 @@ mod tests_private_api {
 mod tests_public_api {
     use super::*;
 
-    use crate::extended_appointment::UUID;
+    use crate::responder::{ConfirmationStatus, TransactionTracker};
     use crate::test_utils::{
-        create_api, create_api_with_config, generate_dummy_appointment, ApiConfig, DURATION, SLOTS,
+        create_api, create_api_with_config, generate_dummy_appointment, get_random_tx, ApiConfig,
+        DURATION, SLOTS,
     };
+    use crate::watcher::Breach;
     use teos_common::cryptography::{self, get_random_keypair};
 
     #[tokio::test]
@@ -900,12 +901,12 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         let response = internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
-                signature: user_signature.clone(),
+                signature,
             }))
             .await
             .unwrap()
@@ -925,12 +926,12 @@ mod tests_public_api {
         let (user_sk, _) = get_random_keypair();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
-                signature: user_signature.clone(),
+                signature,
             }))
             .await
         {
@@ -954,12 +955,12 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
-                signature: user_signature.clone(),
+                signature,
             }))
             .await
         {
@@ -983,12 +984,12 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
-                signature: user_signature.clone(),
+                signature,
             }))
             .await
         {
@@ -1008,16 +1009,24 @@ mod tests_public_api {
         let user_id = UserId(user_pk);
         internal_api.watcher.register(user_id).unwrap();
 
-        let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        // Add a tracker to the responder to simulate it being triggered.
+        let dispute_tx = get_random_tx();
+        let tracker = TransactionTracker::new(
+            Breach::new(dispute_tx.clone(), get_random_tx()),
+            user_id,
+            ConfirmationStatus::ConfirmedIn(100),
+        );
         internal_api
-            .watcher
-            .add_random_tracker_to_responder(UUID::new(appointment.locator, user_id));
+            .get_watcher()
+            .add_dummy_tracker_to_responder(&tracker);
 
+        // Try to add it again using the API.
+        let appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
-                appointment: Some(appointment.clone().into()),
-                signature: user_signature.clone(),
+                appointment: Some(appointment.into()),
+                signature,
             }))
             .await
         {
@@ -1038,12 +1047,12 @@ mod tests_public_api {
 
         let (user_sk, _) = get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
 
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.clone().into()),
-                signature: user_signature.clone(),
+                signature,
             }))
             .await
         {

@@ -46,8 +46,6 @@ impl std::fmt::Display for UUID {
 /// An extended version of the appointment hold by the tower.
 ///
 /// The [Appointment] is extended in terms of data, that is, it provides further information only relevant to the tower.
-/// Notice [ExtendedAppointment]s are not kept in memory but persisted on disk. The [Watcher](crate::watcher::Watcher)
-/// keeps [AppointmentSummary] instead.
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub(crate) struct ExtendedAppointment {
     /// The underlying appointment extended by [ExtendedAppointment].
@@ -58,24 +56,6 @@ pub(crate) struct ExtendedAppointment {
     pub user_signature: String,
     /// The block where the [Appointment] is started to be watched at by the [Watcher](crate::watcher::Watcher).
     pub start_block: u32,
-}
-
-/// A summary of an appointment.
-///
-/// Contains the minimal amount of data the [Watcher](crate::watcher::Watcher) needs to keep in memory in order to
-/// watch for breaches.
-#[derive(Debug, Eq, PartialEq, Clone)]
-pub(crate) struct AppointmentSummary {
-    /// The [Appointment] locator.
-    pub locator: Locator,
-    /// The user this [Appointment] belongs to.
-    pub user_id: UserId,
-}
-
-impl AppointmentSummary {
-    pub fn new(locator: Locator, user_id: UserId) -> Self {
-        Self { locator, user_id }
-    }
 }
 
 impl ExtendedAppointment {
@@ -109,12 +89,8 @@ impl ExtendedAppointment {
         self.inner.to_self_delay
     }
 
-    /// Computes the summary of the [ExtendedAppointment].
-    pub fn get_summary(&self) -> AppointmentSummary {
-        AppointmentSummary {
-            locator: self.locator(),
-            user_id: self.user_id,
-        }
+    pub fn uuid(&self) -> UUID {
+        UUID::new(self.inner.locator, self.user_id)
     }
 }
 
@@ -122,22 +98,14 @@ impl ExtendedAppointment {
 mod tests {
     use super::*;
 
-    use teos_common::appointment::Appointment;
-    use teos_common::cryptography::get_random_bytes;
-    use teos_common::test_utils::get_random_user_id;
+    use crate::test_utils::generate_uuid;
 
     #[test]
-    fn test_get_summary() {
-        let locator = Locator::from_slice(&get_random_bytes(16)).unwrap();
-        let user_id = get_random_user_id();
-        let signature = String::new();
-
-        let a = Appointment::new(locator, get_random_bytes(32), 42);
-        let e = ExtendedAppointment::new(a, user_id, signature, 21);
-
-        let s = e.get_summary();
-
-        assert_eq!(e.locator(), s.locator);
-        assert_eq!(e.user_id, s.user_id);
+    fn test_uuid_ser_deser() {
+        let original_uuid = generate_uuid();
+        assert_eq!(
+            UUID::from_slice(&original_uuid.to_vec()).unwrap(),
+            original_uuid
+        );
     }
 }

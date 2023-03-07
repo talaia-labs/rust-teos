@@ -32,6 +32,12 @@ pub fn get_random_user_id() -> UserId {
     UserId(pk)
 }
 
+pub fn get_random_locator() -> Locator {
+    let mut rng = rand::thread_rng();
+
+    Locator::from_slice(&rng.gen::<[u8; 16]>()).unwrap()
+}
+
 pub fn generate_random_appointment(dispute_txid: Option<&Txid>) -> Appointment {
     let dispute_txid = match dispute_txid {
         Some(l) => *l,

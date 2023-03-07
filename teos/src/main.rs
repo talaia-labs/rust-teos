@@ -48,6 +48,7 @@ where
 {
     let mut last_n_blocks = Vec::with_capacity(n);
     for _ in 0..n {
+        log::debug!("Fetching block #{}", last_known_block.height);
         let block = poller.fetch_block(&last_known_block).await?;
         last_known_block = poller.look_up_previous_header(&last_known_block).await?;
         last_n_blocks.push(block);
@@ -309,8 +310,8 @@ async fn main() {
     let shutdown_signal_tor = shutdown_signal_rpc_api.clone();
 
     // The ordering here actually matters. Listeners are called by order, and we want the gatekeeper to be called
-    // last, so both the Watcher and the Responder can query the necessary data from it during data deletion.
-    let listener = &(watcher.clone(), &(responder, gatekeeper));
+    // first so it updates the users' states and both the Watcher and the Responder operate only on registered users.
+    let listener = &(gatekeeper, &(watcher.clone(), responder));
     let cache = &mut UnboundedCache::new();
     let spv_client = SpvClient::new(tip, poller, cache, listener);
     let mut chain_monitor = ChainMonitor::new(

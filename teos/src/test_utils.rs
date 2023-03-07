@@ -323,7 +323,7 @@ pub(crate) fn generate_dummy_appointment_with_user(
     let mut app = generate_dummy_appointment(dispute_txid);
     app.user_id = user_id;
 
-    (UUID::new(app.locator(), user_id), app)
+    (app.uuid(), app)
 }
 
 pub(crate) fn get_random_breach() -> Breach {
@@ -341,17 +341,15 @@ pub(crate) fn get_random_tracker(
     TransactionTracker::new(breach, user_id, status)
 }
 
-pub(crate) fn store_appointment_and_fks_to_db(
-    dbm: &DBM,
-    uuid: UUID,
-    appointment: &ExtendedAppointment,
-) {
+pub(crate) fn store_appointment_and_its_user(dbm: &DBM, appointment: &ExtendedAppointment) {
     dbm.store_user(
         appointment.user_id,
         &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
     )
-    .unwrap();
-    dbm.store_appointment(uuid, appointment).unwrap();
+    // It's ok if the user is already stored.
+    .ok();
+    dbm.store_appointment(appointment.uuid(), appointment)
+        .unwrap();
 }
 
 pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<ValidatedBlock> {
