@@ -245,7 +245,7 @@ async fn main() {
     }
 
     let (shutdown_trigger, shutdown_signal_rpc_api) = triggered::trigger();
-    let shutdown_signal_internal_rpc_api = shutdown_signal_rpc_api.clone();
+    let shutdown_signal_internal_api = shutdown_signal_rpc_api.clone();
     let shutdown_signal_http = shutdown_signal_rpc_api.clone();
     let shutdown_signal_cm = shutdown_signal_rpc_api.clone();
     let shutdown_signal_tor = shutdown_signal_rpc_api.clone();
@@ -297,24 +297,20 @@ async fn main() {
         None
     };
 
-    let rpc_api = Arc::new(InternalAPI::new(
+    let internal_api = Arc::new(InternalAPI::new(
         watcher,
         addresses,
         bitcoind_reachable.clone(),
         shutdown_trigger,
     ));
-    let internal_rpc_api = rpc_api.clone();
+    let internal_api_cloned = internal_api.clone();
 
     let rpc_api_addr = format!("{}:{}", conf.rpc_bind, conf.rpc_port)
         .parse()
         .unwrap();
-    let internal_rpc_api_addr = format!("{}:{}", conf.internal_api_bind, conf.internal_api_port)
+    let internal_api_addr = format!("{}:{}", conf.internal_api_bind, conf.internal_api_port)
         .parse()
         .unwrap();
-    let internal_rpc_api_uri = format!(
-        "http://{}:{}",
-        conf.internal_api_bind, conf.internal_api_port
-    );
 
     // Generate mtls certificates to data directory so the admin can securely connect
     // to the server to perform administrative tasks.
@@ -332,7 +328,7 @@ async fn main() {
         Server::builder()
             .tls_config(tls)
             .expect("couldn't configure tls")
-            .add_service(PrivateTowerServicesServer::new(rpc_api))
+            .add_service(PrivateTowerServicesServer::new(internal_api))
             .serve_with_shutdown(rpc_api_addr, shutdown_signal_rpc_api)
             .await
             .unwrap();
@@ -340,8 +336,8 @@ async fn main() {
 
     let public_api_task = task::spawn(async move {
         Server::builder()
-            .add_service(PublicTowerServicesServer::new(internal_rpc_api))
-            .serve_with_shutdown(internal_rpc_api_addr, shutdown_signal_internal_rpc_api)
+            .add_service(PublicTowerServicesServer::new(internal_api_cloned))
+            .serve_with_shutdown(internal_api_addr, shutdown_signal_internal_api)
             .await
             .unwrap();
     });
@@ -349,7 +345,7 @@ async fn main() {
     let (http_service_ready, ready_signal_http) = triggered::trigger();
     let http_api_task = task::spawn(http::serve(
         http_api_addr,
-        internal_rpc_api_uri,
+        internal_api_addr,
         http_service_ready,
         shutdown_signal_http,
     ));
