@@ -1,7 +1,9 @@
 #!/bin/bash
 
+
 # Define the start command
-START_COMMAND="teosd"
+START_COMMAND="/srv/rust-teos/target/release/teosd"
+
 
 # Set the API bind address
 if [[ ! -z ${API_BIND} ]]; then
@@ -44,11 +46,6 @@ fi
 
 if [[ ! -z ${BTC_RPC_PORT} ]]; then
     START_COMMAND="$START_COMMAND --btcrpcport $BTC_RPC_PORT"
-fi
-
-# Set the TEOS data directory
-if [[ ! -z ${TEOS_DATADIR} ]]; then
-    START_COMMAND="$START_COMMAND --datadir $TEOS_DATADIR"
 fi
 
 # Set the onion hidden service port
