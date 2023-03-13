@@ -32,5 +32,5 @@ cln-plugin = "0.1.2"
 teos-common = { path = "../teos-common" }
 
 [dev-dependencies]
-httpmock = "0.6"
+mockito = "0.32.4"
 tempdir = "0.3.7"

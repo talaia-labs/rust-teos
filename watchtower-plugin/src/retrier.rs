@@ -576,13 +576,13 @@ impl Retrier {
 mod tests {
     use super::*;
 
-    use httpmock::prelude::*;
     use serde_json::json;
     use tempdir::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
 
     use teos_common::errors;
     use teos_common::net::http::Endpoint;
+    use teos_common::protos::AddAppointmentRequest;
     use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
     use teos_common::test_utils::{
         generate_random_appointment, get_random_registration_receipt, get_random_user_id,
@@ -600,6 +600,18 @@ mod tests {
     const MAX_INTERVAL_TIME: u16 = 1;
     const MAX_RUN_TIME: f64 = 0.2;
 
+    macro_rules! wait_until {
+        () => {};
+        ($cond:expr $(,)?) => {
+            loop {
+                if $cond {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs_f64(0.1)).await;
+            }
+        };
+    }
+
     impl Retrier {
         fn empty(wt_client: Arc<Mutex<WTClient>>, tower_id: TowerId) -> Self {
             Self {
@@ -612,15 +624,14 @@ mod tests {
     }
 
     #[tokio::test]
-    // TODO: It'll be nice to toggle the mock on and off instead of having it always on. Not sure MockServer allows that though:
-    // https://github.com/alexliesenfeld/httpmock/issues/67
     async fn test_manage_retry_reachable() {
         let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let (tx, rx) = unbounded_channel();
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
         ));
-        let server = MockServer::start();
+
+        let mut server = mockito::Server::new_async().await;
 
         // Add a tower with pending appointments
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
@@ -629,7 +640,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -647,13 +658,17 @@ mod tests {
         add_appointment_receipt.sign(&tower_sk);
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .delay(Duration::from_secs_f64(API_DELAY))
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
+
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |_| {
+                std::thread::sleep(Duration::from_secs_f64(API_DELAY));
+                json!(add_appointment_response).to_string().into()
+            })
+            .create_async()
+            .await;
 
         // Start the task and send the tower to the channel for retry
         tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
@@ -681,23 +696,23 @@ mod tests {
             .unwrap()
             .is_running());
 
-        // Wait for the remaining time and re-check
-        tokio::time::sleep(Duration::from_secs_f64(MAX_RUN_TIME + HALF_API_DELAY)).await;
-
-        let state = wt_client.lock().unwrap();
-        assert_eq!(
-            state.get_tower_status(&tower_id).unwrap(),
-            TowerStatus::Reachable
-        );
-        assert!(!state.retriers.contains_key(&tower_id));
-        assert!(!state
-            .towers
-            .get(&tower_id)
+        wait_until!(wt_client
+            .lock()
             .unwrap()
-            .pending_appointments
-            .contains(&appointment.locator));
+            .get_retrier_status(&tower_id)
+            .is_none());
 
-        api_mock.assert();
+        {
+            let state = wt_client.lock().unwrap();
+            assert!(state.get_tower_status(&tower_id).unwrap().is_reachable());
+            assert!(!state
+                .towers
+                .get(&tower_id)
+                .unwrap()
+                .pending_appointments
+                .contains(&appointment.locator));
+        }
+        api_mock.assert_async().await;
 
         task.abort();
     }
@@ -760,25 +775,23 @@ mod tests {
             .is_running());
 
         // Wait until the task gives up and check again (this gives up due to accumulation of transient errors, so the retiers will be idle).
-        // Notice we'd normally wait for MAX_ELAPSED_TIME + MAX_RUN_TIME (the maximum time a Retrier can be working plus the marginal time of the last retry).
-        // However, we've already waited for MAX_RUN_TIME right before to check the tower was temporary unreachable, so we don't need to account for that again.
-        tokio::time::sleep(Duration::from_secs(MAX_ELAPSED_TIME as u64)).await;
-        assert!(wt_client
-            .lock()
-            .unwrap()
-            .get_tower_status(&tower_id)
-            .unwrap()
-            .is_unreachable());
-        assert!(wt_client
+        wait_until!(wt_client
             .lock()
             .unwrap()
             .get_retrier_status(&tower_id)
             .unwrap()
             .is_idle());
 
+        assert!(wt_client
+            .lock()
+            .unwrap()
+            .get_tower_status(&tower_id)
+            .unwrap()
+            .is_unreachable());
+
         // Add a proper server and check that the auto-retry works
         // Prepare the mock response
-        let server = MockServer::start();
+        let mut server = mockito::Server::new_async().await;
         let mut add_appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42,
@@ -786,12 +799,13 @@ mod tests {
         add_appointment_receipt.sign(&tower_sk);
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(add_appointment_response).to_string())
+            .create_async()
+            .await;
 
         // Update the tower details
         wt_client
@@ -799,7 +813,7 @@ mod tests {
             .unwrap()
             .add_update_tower(
                 tower_id,
-                &server.base_url(),
+                &server.url(),
                 &get_registration_receipt_from_previous(&receipt),
             )
             .unwrap();
@@ -824,8 +838,7 @@ mod tests {
             .pending_appointments
             .contains(&appointment.locator));
         assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
-
-        api_mock.assert();
+        api_mock.assert_async().await;
 
         task.abort();
     }
@@ -837,7 +850,7 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
         ));
-        let server = MockServer::start();
+        let mut server = mockito::Server::new_async().await;
 
         // Add a tower with pending appointments
         let (_, tower_pk) = cryptography::get_random_keypair();
@@ -846,7 +859,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -857,16 +870,21 @@ mod tests {
             .add_pending_appointment(tower_id, &appointment);
 
         // Prepare the mock response
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(400)
-                .delay(Duration::from_secs_f64(API_DELAY))
-                .header("content-type", "application/json")
-                .json_body(json!(ApiError {
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(400)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(|_| {
+                std::thread::sleep(Duration::from_secs_f64(API_DELAY));
+                json!(ApiError {
                     error: "error_msg".to_owned(),
                     error_code: 1,
-                }));
-        });
+                })
+                .to_string()
+                .into()
+            })
+            .create_async()
+            .await;
 
         // Start the task and send the tower to the channel for retry
         tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
@@ -895,16 +913,18 @@ mod tests {
             .is_running());
 
         // Wait for the remaining time and re-check
-        tokio::time::sleep(Duration::from_secs_f64(MAX_RUN_TIME + HALF_API_DELAY)).await;
-        assert_eq!(
-            wt_client
-                .lock()
-                .unwrap()
-                .get_tower_status(&tower_id)
-                .unwrap(),
-            TowerStatus::Reachable
-        );
-        assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
+        wait_until!(wt_client
+            .lock()
+            .unwrap()
+            .get_retrier_status(&tower_id)
+            .is_none());
+
+        assert!(wt_client
+            .lock()
+            .unwrap()
+            .get_tower_status(&tower_id)
+            .unwrap()
+            .is_reachable());
         assert!(!wt_client
             .lock()
             .unwrap()
@@ -921,7 +941,7 @@ mod tests {
             .unwrap()
             .invalid_appointments
             .contains(&appointment.locator));
-        api_mock.assert();
+        api_mock.assert_async().await;
 
         task.abort();
     }
@@ -933,7 +953,7 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
         ));
-        let server = MockServer::start();
+        let mut server = mockito::Server::new_async().await;
 
         // Add a tower with pending appointments
         let (_, tower_pk) = cryptography::get_random_keypair();
@@ -942,7 +962,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -961,13 +981,16 @@ mod tests {
         add_appointment_receipt.sign(&cryptography::get_random_keypair().0);
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .delay(Duration::from_secs_f64(API_DELAY))
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |_| {
+                std::thread::sleep(Duration::from_secs_f64(API_DELAY));
+                json!(add_appointment_response).to_string().into()
+            })
+            .create_async()
+            .await;
 
         // Start the task and send the tower to the channel for retry
         tx.send((tower_id, RevocationData::Fresh(appointment.locator)))
@@ -995,19 +1018,21 @@ mod tests {
             .unwrap()
             .is_running());
 
-        // Wait for the remaining time and re-check
-        tokio::time::sleep(Duration::from_secs_f64(HALF_API_DELAY + MAX_RUN_TIME)).await;
+        // Wait until the tower is no longer being retried.
+        wait_until!(wt_client
+            .lock()
+            .unwrap()
+            .get_retrier_status(&tower_id)
+            .is_none());
+
+        // The tower should have a misbehaving status.
         assert!(wt_client
             .lock()
             .unwrap()
             .get_tower_status(&tower_id)
             .unwrap()
             .is_misbehaving());
-
-        // Retriers are wiped every polling interval, so we'll need to wait a bit more to check it
-        tokio::time::sleep(Duration::from_secs(POLLING_TIME)).await;
-        assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
-        api_mock.assert();
+        api_mock.assert_async().await;
 
         task.abort();
     }
@@ -1019,7 +1044,7 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
         ));
-        let server = MockServer::start();
+        let server = mockito::Server::new_async().await;
 
         // Add a tower with pending appointments
         let (_, tower_pk) = cryptography::get_random_keypair();
@@ -1028,7 +1053,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.url(), &receipt)
             .unwrap();
 
         // Remove the tower (to simulate it has been abandoned)
@@ -1049,7 +1074,6 @@ mod tests {
             .manage_retry()
             .await
         });
-
         assert!(!wt_client.lock().unwrap().towers.contains_key(&tower_id));
 
         task.abort();
@@ -1062,7 +1086,7 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
         ));
-        let server = MockServer::start();
+        let mut server = mockito::Server::new_async().await;
 
         // Add a tower with pending appointments
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
@@ -1073,7 +1097,7 @@ mod tests {
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &registration_receipt)
+            .add_update_tower(tower_id, &server.url(), &registration_receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -1083,7 +1107,11 @@ mod tests {
             .unwrap()
             .add_pending_appointment(tower_id, &appointment);
 
-        // Mock the add_appointment response (this is right, so after the re-registration the appointments are accepted)
+        // Mock the registration and add_appointment response (this is right, so after the re-registration the appointments are accepted)
+        let mut re_registration_receipt =
+            get_registration_receipt_from_previous(&registration_receipt);
+        re_registration_receipt.sign(&tower_sk);
+
         let mut add_appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42,
@@ -1091,24 +1119,25 @@ mod tests {
         add_appointment_receipt.sign(&tower_sk);
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
-        let add_appointment_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
 
-        // Mock the re-registration
-        let mut re_registration_receipt =
-            get_registration_receipt_from_previous(&registration_receipt);
-        re_registration_receipt.sign(&tower_sk);
-        let register_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::Register.path());
-            then.status(200)
-                .delay(Duration::from_secs_f64(API_DELAY))
-                .header("content-type", "application/json")
-                .json_body(json!(re_registration_receipt));
-        });
+        let api_mock = server
+            .mock("POST", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |request| {
+                let response = if request.path() == Endpoint::Register.path().as_str() {
+                    std::thread::sleep(Duration::from_secs_f64(API_DELAY));
+                    json!(re_registration_receipt).to_string()
+                } else if request.path() == Endpoint::AddAppointment.path().as_str() {
+                    json!(add_appointment_response).to_string()
+                } else {
+                    panic!("Wrong endpoint hit")
+                };
+                response.into()
+            })
+            .create_async()
+            .await
+            .expect(2);
 
         // Set the status as SubscriptionError so we simulate the retrier faced this in a previous round
         wt_client
@@ -1143,16 +1172,20 @@ mod tests {
             .is_running());
 
         // Wait for the remaining time and re-check
-        tokio::time::sleep(Duration::from_secs_f64(MAX_RUN_TIME + HALF_API_DELAY)).await;
-        let state = wt_client.lock().unwrap();
-        assert!(!state.retriers.contains_key(&tower_id));
+        wait_until!(wt_client
+            .lock()
+            .unwrap()
+            .get_retrier_status(&tower_id)
+            .is_none());
 
-        let tower = state.towers.get(&tower_id).unwrap();
-        assert!(tower.status.is_reachable());
-        assert!(tower.pending_appointments.is_empty());
+        {
+            let state = wt_client.lock().unwrap();
+            let tower = state.towers.get(&tower_id).unwrap();
+            assert!(tower.status.is_reachable());
+            assert!(tower.pending_appointments.is_empty());
+        }
+        api_mock.assert_async().await;
 
-        register_mock.assert();
-        add_appointment_mock.assert();
         task.abort();
     }
 
@@ -1216,12 +1249,12 @@ mod tests {
 
         // With the retrier idling all fresh data sent to it will be stored but it won't trigger a retry.
         // (we can check the data was stored later on)
-        let new_appointment = generate_random_appointment(None);
+        let appointment2 = generate_random_appointment(None);
         wt_client
             .lock()
             .unwrap()
-            .add_pending_appointment(tower_id, &new_appointment);
-        tx.send((tower_id, RevocationData::Fresh(new_appointment.locator)))
+            .add_pending_appointment(tower_id, &appointment2);
+        tx.send((tower_id, RevocationData::Fresh(appointment2.locator)))
             .unwrap();
 
         {
@@ -1232,22 +1265,40 @@ mod tests {
             assert_eq!(tower.status, TowerStatus::Unreachable);
         }
 
-        let mut add_appointment_receipt = AppointmentReceipt::new(
+        // Create the receipts, the responses and set the mocks
+        let mut appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42,
         );
+        let mut appointment2_receipt = AppointmentReceipt::new(
+            cryptography::sign(&appointment2.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            42,
+        );
+        appointment_receipt.sign(&tower_sk);
+        appointment2_receipt.sign(&tower_sk);
 
         // Mock a proper response
-        let server = MockServer::start();
-        add_appointment_receipt.sign(&tower_sk);
-        let add_appointment_response =
-            get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
+        let mut server = mockito::Server::new_async().await;
+
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |request| {
+                let body = serde_json::from_slice::<AddAppointmentRequest>(request.body().unwrap())
+                    .unwrap();
+
+                let response = if body.appointment.unwrap().locator == appointment.locator.to_vec()
+                {
+                    get_dummy_add_appointment_response(appointment.locator, &appointment_receipt)
+                } else {
+                    get_dummy_add_appointment_response(appointment2.locator, &appointment2_receipt)
+                };
+                json!(response).to_string().into()
+            })
+            .expect(2)
+            .create_async()
+            .await;
 
         // Patch the tower address
         wt_client
@@ -1256,7 +1307,7 @@ mod tests {
             .towers
             .get_mut(&tower_id)
             .unwrap()
-            .set_net_addr(server.base_url());
+            .set_net_addr(server.url());
 
         // Check pending data is still there now, and is it not once the retrier succeeds
         assert_eq!(
@@ -1274,24 +1325,19 @@ mod tests {
         // Send a retry flag to the retrier to force a retry.
         tx.send((tower_id, RevocationData::None)).unwrap();
 
+        // After retrying the pending pool has been emptied, meaning that both appointments went trough
         tokio::time::sleep(Duration::from_secs_f64(POLLING_TIME as f64 + MAX_RUN_TIME)).await;
-        // FIXME: Here we should be able to check this, however, due to httpmock limitations, we cannot return a response based on the request.
-        // Therefore, both requests will be responded with the same data. Given pending_appointments is a HashSet, we cannot even know which request
-        // will be sent first (sets are initialized with a random state, which decided the order or iteration).
-        // https://github.com/alexliesenfeld/httpmock/issues/49
-        // assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
-        // assert!(wt_client
-        //     .lock()
-        //     .unwrap()
-        //     .towers
-        //     .get(&tower_id)
-        //     .unwrap()
-        //     .pending_appointments
-        //     .is_empty());
+        assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
+        assert!(wt_client
+            .lock()
+            .unwrap()
+            .towers
+            .get(&tower_id)
+            .unwrap()
+            .pending_appointments
+            .is_empty());
+        api_mock.assert_async().await;
 
-        // This is not much tbh, but looks like its the best we can do at the moment without experiencing random errors.
-        // Depending on what appointment is sent first the api will be hit either one or two times.
-        assert!(api_mock.hits() >= 1 && api_mock.hits() <= 2);
         task.abort();
     }
 
@@ -1303,14 +1349,14 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
         ));
-        let server = MockServer::start();
+        let mut server = mockito::Server::new_async().await;
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
         let receipt = get_random_registration_receipt();
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -1328,18 +1374,19 @@ mod tests {
         add_appointment_receipt.sign(&tower_sk);
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(add_appointment_response).to_string())
+            .create_async()
+            .await;
 
         // Since we are retrying manually, we need to add the data to pending appointments manually too
         let retrier = Retrier::new(wt_client, tower_id, HashSet::from([appointment.locator]));
         let r = retrier.run().await;
         assert_eq!(r, Ok(()));
-        api_mock.assert();
+        api_mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1350,14 +1397,14 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
         ));
-        let server = MockServer::start();
+        let server = mockito::Server::new_async().await;
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
         let receipt = get_random_registration_receipt();
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.url(), &receipt)
             .unwrap();
 
         // If there are no pending appointments the method will simply return
@@ -1373,14 +1420,14 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
         ));
-        let server = MockServer::start();
+        let mut server = mockito::Server::new_async().await;
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
         let receipt = get_random_registration_receipt();
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.url(), &receipt)
             .unwrap();
 
         // Add appointment to pending
@@ -1398,12 +1445,13 @@ mod tests {
         add_appointment_receipt.sign(&cryptography::get_random_keypair().0);
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(200)
-                .header("content-type", "application/json")
-                .json_body(json!(add_appointment_response));
-        });
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(add_appointment_response).to_string())
+            .create_async()
+            .await;
 
         // Since we are retrying manually, we need to add the data to pending appointments manually too
         let retrier = Retrier::new(wt_client, tower_id, HashSet::from([appointment.locator]));
@@ -1412,7 +1460,7 @@ mod tests {
             r,
             Err(Error::Permanent(RetryError::Misbehaving { .. },))
         ));
-        api_mock.assert();
+        api_mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1454,25 +1502,29 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
         ));
-        let server = MockServer::start();
+        let mut server = mockito::Server::new_async().await;
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
         let receipt = get_random_registration_receipt();
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.url(), &receipt)
             .unwrap();
 
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(400)
-                .header("content-type", "application/json")
-                .json_body(json!(ApiError {
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(400)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!(ApiError {
                     error: "error_msg".to_owned(),
                     error_code: errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR,
-                }));
-        });
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
 
         // Add some pending appointments and try again (with an unreachable tower).
         let appointment = generate_random_appointment(None);
@@ -1492,7 +1544,7 @@ mod tests {
                 ..
             })
         ));
-        api_mock.assert();
+        api_mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1503,25 +1555,29 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
         ));
-        let server = MockServer::start();
+        let mut server = mockito::Server::new_async().await;
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
         let receipt = get_random_registration_receipt();
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, &server.url(), &receipt)
             .unwrap();
 
-        let api_mock = server.mock(|when, then| {
-            when.method(POST).path(Endpoint::AddAppointment.path());
-            then.status(400)
-                .header("content-type", "application/json")
-                .json_body(json!(ApiError {
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(400)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!(ApiError {
                     error: "error_msg".to_owned(),
                     error_code: 1,
-                }));
-        });
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
 
         // Add some pending appointments and try again (with an unreachable tower).
         let appointment = generate_random_appointment(None);
@@ -1538,8 +1594,6 @@ mod tests {
         );
         let r = retrier.run().await;
 
-        assert_eq!(r, Ok(()));
-        api_mock.assert();
         assert!(wt_client
             .lock()
             .unwrap()
@@ -1548,6 +1602,8 @@ mod tests {
             .unwrap()
             .invalid_appointments
             .contains(&appointment.locator));
+        assert!(r.is_ok());
+        api_mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1558,14 +1614,13 @@ mod tests {
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
         ));
-        let server = MockServer::start();
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
         let receipt = get_random_registration_receipt();
         wt_client
             .lock()
             .unwrap()
-            .add_update_tower(tower_id, &server.base_url(), &receipt)
+            .add_update_tower(tower_id, "http://tower.adrress", &receipt)
             .unwrap();
 
         // Remove the tower (to simulate it has been abandoned)
