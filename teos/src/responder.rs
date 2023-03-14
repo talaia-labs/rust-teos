@@ -1354,10 +1354,7 @@ mod tests {
         // Mock data into the GK
         let target_block_height = START_HEIGHT as u32;
         let user_id = get_random_user_id();
-        let uuids = (0..10)
-            .into_iter()
-            .map(|_| generate_uuid())
-            .collect::<Vec<UUID>>();
+        let uuids = (0..10).map(|_| generate_uuid()).collect::<Vec<UUID>>();
         responder
             .gatekeeper
             .add_outdated_user(user_id, target_block_height, Some(uuids.clone()));
