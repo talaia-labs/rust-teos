@@ -30,12 +30,14 @@ WORKDIR /srv/rust-teos
 # Copy the teos binary from the build stage to the new stage
 COPY --from=build /srv/rust-teos/target/release/ /usr/local/bin/
 
+# Copy the entrypoint script to the container
+COPY docker/entrypoint.sh /entrypoint.sh
+
+# Set the entrypoint script as executable
+RUN chmod +x /entrypoint.sh
+
 # Expose the default port used by Rust-TEOS
 EXPOSE 9814/tcp
 
-# # Start Rust-TEOS when the container starts
-# ENTRYPOINT [ "/usr/local/bin/teos" ]
-
-
 # Start Rust-TEOS when the container starts
-ENTRYPOINT [ "/srv/rust-teos/docker/entrypoint.sh" ]
+ENTRYPOINT [ "/entrypoint.sh" ]

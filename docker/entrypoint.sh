@@ -2,7 +2,7 @@
 
 
 # Define the start command
-START_COMMAND="/srv/rust-teos/target/release/teosd"
+START_COMMAND="/usr/local/bin/teosd"
 
 
 # Set the API bind address
