@@ -41,6 +41,7 @@ async fn get_last_n_blocks<B, T>(
     poller: &mut ChainPoller<B, T>,
     mut last_known_block: ValidatedBlockHeader,
     n: usize,
+    bypass_error: bool,
 ) -> Vec<ValidatedBlock>
 where
     B: DerefMut<Target = T> + Sized + Send + Sync,
@@ -48,12 +49,21 @@ where
 {
     let mut last_n_blocks = Vec::with_capacity(n);
     for _ in 0..n {
-        let block = poller.fetch_block(&last_known_block).await.unwrap();
-        last_known_block = poller
-            .look_up_previous_header(&last_known_block)
-            .await
-            .unwrap();
-        last_n_blocks.push(block);
+        let block = if bypass_error {
+            poller.fetch_block(&last_known_block).await.ok()
+        } else {
+            Some(poller.fetch_block(&last_known_block).await.unwrap())
+        };
+
+        if let Some(block) = block {
+            last_known_block = poller
+                .look_up_previous_header(&last_known_block)
+                .await
+                .unwrap();
+            last_n_blocks.push(block);
+        } else {
+            break;
+        }
     }
 
     last_n_blocks
@@ -209,7 +219,8 @@ async fn main() {
     };
 
     let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
-    let last_n_blocks = get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize).await;
+    let last_n_blocks =
+        get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize, true).await;
 
     // Build components
     let gatekeeper = Arc::new(Gatekeeper::new(
