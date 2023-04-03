@@ -56,8 +56,8 @@ async fn main() {
         })
         .connect()
         .await
-        .unwrap_or_else(|e| {
-            eprintln!("Could not connect to tower: {e:?}");
+        .unwrap_or_else(|_| {
+            eprintln!("Could not connect to tower. Is teosd running?");
             std::process::exit(1);
         });
 
