@@ -26,6 +26,7 @@ use teos::chain_monitor::ChainMonitor;
 use teos::config::{self, Config, Opt};
 use teos::dbm::DBM;
 use teos::gatekeeper::Gatekeeper;
+use teos::listener_actor::AsyncBlockListener;
 use teos::protos as msgs;
 use teos::protos::private_tower_services_server::PrivateTowerServicesServer;
 use teos::protos::public_tower_services_server::PublicTowerServicesServer;
@@ -311,13 +312,16 @@ async fn main() {
 
     // The ordering here actually matters. Listeners are called by order, and we want the gatekeeper to be called
     // first so it updates the users' states and both the Watcher and the Responder operate only on registered users.
-    let listener = &(gatekeeper, &(watcher.clone(), responder));
+    let listeners = (gatekeeper, (watcher.clone(), responder));
+    // This spawns a separate async actor that will be fed new blocks from a sync block listener.
+    // In this way we can have our components listen to blocks in an async manner from the async actor.
+    let listener = AsyncBlockListener::new(listeners, dbm);
+
     let cache = &mut UnboundedCache::new();
-    let spv_client = SpvClient::new(tip, poller, cache, listener);
+    let spv_client = SpvClient::new(tip, poller, cache, &listener);
     let mut chain_monitor = ChainMonitor::new(
         spv_client,
         tip,
-        dbm,
         conf.polling_delta,
         shutdown_signal_cm,
         bitcoind_reachable.clone(),

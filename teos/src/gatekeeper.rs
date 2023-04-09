@@ -332,6 +332,21 @@ impl chain::Listen for Gatekeeper {
     }
 }
 
+use bitcoin::Block;
+use bitcoin::BlockHeader;
+use crate::listener_actor::AsyncListen;
+
+#[tonic::async_trait]
+impl AsyncListen for Gatekeeper {
+    async fn block_connected(&self, block: &Block, height: u32) {
+        chain::Listen::block_connected(self, block, height);
+    }
+
+    async fn block_disconnected(&self, header: &BlockHeader, height: u32) {
+        chain::Listen::block_disconnected(self, header, height);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

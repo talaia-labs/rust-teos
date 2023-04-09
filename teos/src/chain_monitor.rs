@@ -11,8 +11,6 @@ use lightning::chain;
 use lightning_block_sync::poll::{ChainTip, Poll, ValidatedBlockHeader};
 use lightning_block_sync::{BlockSourceErrorKind, Cache, SpvClient};
 
-use crate::dbm::DBM;
-
 /// Component in charge of monitoring the chain for new blocks.
 ///
 /// Takes care of polling `bitcoind` for new tips and hand it to subscribers.
@@ -28,8 +26,6 @@ where
     spv_client: SpvClient<'a, P, C, L>,
     /// The lat known block header by the [ChainMonitor].
     last_known_block_header: ValidatedBlockHeader,
-    /// A [DBM] (database manager) instance. Used to persist block data into disk.
-    dbm: Arc<Mutex<DBM>>,
     /// The time between polls.
     polling_delta: time::Duration,
     /// A signal from the main thread indicating the tower is shuting down.
@@ -49,7 +45,6 @@ where
     pub async fn new(
         spv_client: SpvClient<'a, P, C, L>,
         last_known_block_header: ValidatedBlockHeader,
-        dbm: Arc<Mutex<DBM>>,
         polling_delta_sec: u16,
         shutdown_signal: Listener,
         bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
@@ -57,7 +52,6 @@ where
         ChainMonitor {
             spv_client,
             last_known_block_header,
-            dbm,
             polling_delta: time::Duration::from_secs(polling_delta_sec as u64),
             shutdown_signal,
             bitcoind_reachable,
@@ -75,11 +69,6 @@ where
                     ChainTip::Better(new_best) => {
                         log::debug!("Updating best tip: {}", new_best.header.block_hash());
                         self.last_known_block_header = new_best;
-                        self.dbm
-                            .lock()
-                            .unwrap()
-                            .store_last_known_block(&new_best.header.block_hash())
-                            .unwrap();
                     }
                     ChainTip::Worse(worse) => {
                         // This would happen both if a block has less chainwork than the previous one, or if it has the same chainwork
@@ -179,7 +168,6 @@ mod tests {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 
@@ -189,7 +177,7 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
 
         let mut cm =
-            ChainMonitor::new(spv_client, tip, dbm, 1, shutdown_signal, bitcoind_reachable).await;
+            ChainMonitor::new(spv_client, tip, 1, shutdown_signal, bitcoind_reachable).await;
 
         // If there's no new block nothing gets connected nor disconnected
         cm.poll_best_tip().await;
@@ -203,7 +191,6 @@ mod tests {
         let new_tip = chain.tip();
         let old_tip = chain.at_height(START_HEIGHT - 1);
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 
@@ -215,7 +202,6 @@ mod tests {
         let mut cm = ChainMonitor::new(
             spv_client,
             old_tip,
-            dbm,
             1,
             shutdown_signal,
             bitcoind_reachable,
@@ -226,7 +212,7 @@ mod tests {
         cm.poll_best_tip().await;
         assert_eq!(cm.last_known_block_header, new_tip);
         assert_eq!(
-            cm.dbm.lock().unwrap().load_last_known_block().unwrap(),
+            cm.last_known_block_header.header.block_hash(),
             new_tip.deref().header.block_hash()
         );
         assert!(listener
@@ -242,7 +228,6 @@ mod tests {
         let best_tip = chain.tip();
         chain.disconnect_tip();
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 
@@ -254,7 +239,6 @@ mod tests {
         let mut cm = ChainMonitor::new(
             spv_client,
             best_tip,
-            dbm,
             1,
             shutdown_signal,
             bitcoind_reachable,
@@ -264,7 +248,6 @@ mod tests {
         // If a new (worse, just one) block gets mined, nothing gets connected nor disconnected
         cm.poll_best_tip().await;
         assert_eq!(cm.last_known_block_header, best_tip);
-        assert!(cm.dbm.lock().unwrap().load_last_known_block().is_none());
         assert!(listener.connected_blocks.borrow().is_empty());
         assert!(listener.disconnected_blocks.borrow().is_empty());
     }
@@ -281,7 +264,6 @@ mod tests {
 
         let new_best = chain.tip();
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 
@@ -293,7 +275,6 @@ mod tests {
         let mut cm = ChainMonitor::new(
             spv_client,
             old_best,
-            dbm,
             1,
             shutdown_signal,
             bitcoind_reachable,
@@ -304,7 +285,7 @@ mod tests {
         cm.poll_best_tip().await;
         assert_eq!(cm.last_known_block_header, new_best);
         assert_eq!(
-            cm.dbm.lock().unwrap().load_last_known_block().unwrap(),
+            cm.last_known_block_header.header.block_hash(),
             new_best.deref().header.block_hash()
         );
         assert_eq!(*listener.connected_blocks.borrow(), new_blocks);
@@ -320,7 +301,6 @@ mod tests {
         let chain_offline = chain.unreachable.clone();
         let tip = chain.tip();
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 
@@ -332,7 +312,6 @@ mod tests {
         let mut cm = ChainMonitor::new(
             spv_client,
             tip,
-            dbm,
             1,
             shutdown_signal,
             bitcoind_reachable.clone(),

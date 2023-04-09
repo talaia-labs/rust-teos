@@ -15,8 +15,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::BlockHash;
 
-use teos_common::appointment::{compute_appointment_slots, Appointment, Locator};
-use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
+use teos_common::appointment::{Appointment, Locator};
 use teos_common::UserId;
 
 use crate::extended_appointment::{ExtendedAppointment, UUID};
