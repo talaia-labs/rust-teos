@@ -27,7 +27,7 @@ async fn main() {
     let command = opt.command.clone();
 
     // Load conf (from file or defaults) and patch it with the command line parameters received (if any)
-    let mut conf = config::from_file::<Config>(path.join("teos.toml"));
+    let mut conf = config::from_file::<Config>(&path.join("teos.toml"));
     conf.patch_with_options(opt);
 
     let key = fs::read(&path.join("client-key.pem"))
