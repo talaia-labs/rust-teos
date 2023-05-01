@@ -69,7 +69,7 @@ fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
 async fn main() {
     let opt = Opt::from_args();
     let path = config::data_dir_absolute_path(opt.data_dir.clone());
-
+    let conf_file_path = path.join("teos.toml");
     // Create data dir if it does not exist
     fs::create_dir_all(&path).unwrap_or_else(|e| {
         eprintln!("Cannot create data dir: {e:?}");
@@ -77,7 +77,7 @@ async fn main() {
     });
 
     // Load conf (from file or defaults) and patch it with the command line parameters received (if any)
-    let mut conf = config::from_file::<Config>(path.join("teos.toml"));
+    let mut conf = config::from_file::<Config>(&conf_file_path);
     let is_default = conf.is_default();
     conf.patch_with_options(opt);
     conf.verify().unwrap_or_else(|e| {
@@ -103,18 +103,27 @@ async fn main() {
         .init()
         .unwrap();
 
-    if is_default {
-        log::info!("Loading default configuration")
-    } else {
-        log::info!("Loading configuration from file")
-    }
-
     // Create network dir
     let path_network = path.join(conf.btc_network.clone());
     fs::create_dir_all(&path_network).unwrap_or_else(|e| {
         eprintln!("Cannot create network dir: {e:?}");
         std::process::exit(1);
     });
+
+    // Log default data dir
+    log::info!("Default data directory: {:?}", &path);
+
+    // Log datadir path
+    log::info!("Using data directory: {:?}", &path_network);
+
+    // Log config file path based on whether the config file is found or not
+    if is_default {
+        log::info!("Config file: {:?} (not found, skipping)", &conf_file_path);
+    } else {
+        log::info!("Config file: {:?}", &conf_file_path);
+        conf.log_non_default_options();
+    }
+
     let dbm = Arc::new(Mutex::new(
         DBM::new(path_network.join("teos_db.sql3")).unwrap(),
     ));

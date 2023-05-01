@@ -1,6 +1,6 @@
 //! Logic related to the tower configuration and command line parameter parsing.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -16,7 +16,7 @@ pub fn data_dir_absolute_path(data_dir: String) -> PathBuf {
     }
 }
 
-pub fn from_file<T: Default + serde::de::DeserializeOwned>(path: PathBuf) -> T {
+pub fn from_file<T: Default + serde::de::DeserializeOwned>(path: &PathBuf) -> T {
     match std::fs::read(path) {
         Ok(file_content) => toml::from_slice::<T>(&file_content).map_or_else(
             |e| {
@@ -117,7 +117,7 @@ pub struct Opt {
 /// - Defaults
 /// - Configuration file
 /// - Command line options
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
     // API
@@ -241,6 +241,27 @@ impl Config {
     /// Checks whether the config has been set with only with default values.
     pub fn is_default(&self) -> bool {
         self == &Config::default()
+    }
+
+    /// Logs non-default options.
+    pub fn log_non_default_options(&self) {
+        let json_default_config = serde_json::json!(&Config::default());
+        let json_config = serde_json::json!(&self);
+        let sensitive_args = ["btc_rpc_user", "btc_rpc_password"];
+
+        for (key, value) in json_config.as_object().unwrap().iter() {
+            if *value != json_default_config[key] {
+                log::info!(
+                    "Custom config arg: {}: {}",
+                    key,
+                    if sensitive_args.contains(&key.as_str()) {
+                        "****".to_owned()
+                    } else {
+                        value.to_string()
+                    }
+                );
+            }
+        }
     }
 }
 
