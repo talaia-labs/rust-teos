@@ -11,12 +11,12 @@ use tonic::transport::{Certificate, Server, ServerTlsConfig};
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-use bitcoincore_rpc::{Auth, Client};
+use bitcoincore_rpc::{Auth, Client, RpcApi};
 use lightning_block_sync::init::validate_best_block_header;
 use lightning_block_sync::poll::{
     ChainPoller, Poll, Validate, ValidatedBlock, ValidatedBlockHeader,
 };
-use lightning_block_sync::{BlockSource, SpvClient, UnboundedCache};
+use lightning_block_sync::{BlockSource, BlockSourceError, SpvClient, UnboundedCache};
 
 use teos::api::internal::InternalAPI;
 use teos::api::{http, tor::TorAPI};
@@ -41,22 +41,19 @@ async fn get_last_n_blocks<B, T>(
     poller: &mut ChainPoller<B, T>,
     mut last_known_block: ValidatedBlockHeader,
     n: usize,
-) -> Vec<ValidatedBlock>
+) -> Result<Vec<ValidatedBlock>, BlockSourceError>
 where
     B: DerefMut<Target = T> + Sized + Send + Sync,
     T: BlockSource,
 {
     let mut last_n_blocks = Vec::with_capacity(n);
     for _ in 0..n {
-        let block = poller.fetch_block(&last_known_block).await.unwrap();
-        last_known_block = poller
-            .look_up_previous_header(&last_known_block)
-            .await
-            .unwrap();
+        let block = poller.fetch_block(&last_known_block).await?;
+        last_known_block = poller.look_up_previous_header(&last_known_block).await?;
         last_n_blocks.push(block);
     }
 
-    last_n_blocks
+    Ok(last_n_blocks)
 }
 
 fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
@@ -186,14 +183,53 @@ async fn main() {
     // Load last known block from DB if found. Poll it from Bitcoind otherwise.
     let last_known_block = dbm.lock().unwrap().load_last_known_block();
     let tip = if let Some(block_hash) = last_known_block {
-        derefed
+        let mut last_known_header = derefed
             .get_header(&block_hash, None)
             .await
             .unwrap()
             .validate(block_hash)
-            .unwrap()
+            .unwrap();
+
+        log::info!(
+            "Last known block: {} (height: {})",
+            last_known_header.header.block_hash(),
+            last_known_header.height
+        );
+
+        // If we are running in pruned mode some data may be missing (if we happen to have been offline for a while)
+        if let Some(prune_height) = rpc.get_blockchain_info().unwrap().prune_height {
+            if last_known_header.height - IRREVOCABLY_RESOLVED + 1 < prune_height as u32 {
+                log::warn!(
+                    "Cannot load blocks in the range {}-{}. Chain has gone too far out of sync",
+                    last_known_header.height - IRREVOCABLY_RESOLVED + 1,
+                    last_known_header.height
+                );
+                if conf.force_update {
+                    log::info!("Forcing a backend update");
+                    // We want to grab the first IRREVOCABLY_RESOLVED we know about for the initial cache
+                    // So we can perform transitions from there onwards.
+                    let target_height = prune_height + IRREVOCABLY_RESOLVED as u64;
+                    let target_hash = rpc.get_block_hash(target_height).unwrap();
+                    last_known_header = derefed
+                        .get_header(
+                            &rpc.get_block_hash(target_height).unwrap(),
+                            Some(target_height as u32),
+                        )
+                        .await
+                        .unwrap()
+                        .validate(target_hash)
+                        .unwrap();
+                } else {
+                    log::error!(
+                        "The underlying chain has gone too far out of sync. The tower block cache cannot be initialized. Run with --forceupdate to force update. THIS WILL, POTENTIALLY, MAKE THE TOWER MISS SOME OF ITS APPOINTMENTS"
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        last_known_header
     } else {
-        validate_best_block_header(&mut derefed).await.unwrap()
+        validate_best_block_header(&derefed).await.unwrap()
     };
 
     // DISCUSS: This is not really required (and only triggered in regtest). This is only in place so the caches can be
@@ -208,7 +244,11 @@ async fn main() {
         std::process::exit(1);
     }
 
-    log::info!("Last known block: {}", tip.header.block_hash());
+    log::info!(
+        "Current chain tip: {} (height: {})",
+        tip.header.block_hash(),
+        tip.height
+    );
 
     // This is how chain poller names bitcoin networks.
     let btc_network = match conf.btc_network.as_str() {
@@ -218,7 +258,14 @@ async fn main() {
     };
 
     let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
-    let last_n_blocks = get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize).await;
+    let last_n_blocks = get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize)
+        .await.unwrap_or_else(|e| {
+            // I'm pretty sure this can only happen if we are pulling blocks from the target to the prune height, and by the time we get to
+            // the end at least one has been pruned.
+            log::error!("Couldn't load the latest {IRREVOCABLY_RESOLVED} blocks. Please try again (Error: {})", e.into_inner());
+            std::process::exit(1);
+        }
+    );
 
     // Build components
     let gatekeeper = Arc::new(Gatekeeper::new(
