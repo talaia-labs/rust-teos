@@ -44,6 +44,8 @@ pub const RPC_RETRY_TOWER_DESC: &str =
     "Retries to send pending appointment to an unreachable tower";
 pub const RPC_ABANDON_TOWER: &str = "abandontower";
 pub const RPC_ABANDON_TOWER_DESC: &str = "Forgets about a tower and wipes all local data";
+pub const RPC_PING: &str = "pingtower";
+pub const RPC_PING_DESC: &str = "Polls the tower to check if it is online";
 
 /// Collections of hook names
 

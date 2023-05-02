@@ -20,7 +20,8 @@ use teos_common::{cryptography, errors};
 
 use watchtower_plugin::convert::{CommitmentRevocation, GetAppointmentParams, RegisterParams};
 use watchtower_plugin::net::http::{
-    self, post_request, process_post_response, AddAppointmentError, ApiResponse, RequestError,
+    self, get_request, post_request, process_post_response, AddAppointmentError, ApiResponse,
+    RequestError,
 };
 use watchtower_plugin::net::ProxyInfo;
 use watchtower_plugin::retrier::RetryManager;
@@ -295,6 +296,38 @@ async fn get_tower_info(
     }
 }
 
+async fn ping(
+    plugin: Plugin<Arc<Mutex<WTClient>>>,
+    v: serde_json::Value,
+) -> Result<serde_json::Value, Error> {
+    let (tower_net_addr, proxy) = {
+        // Check if the tower_id is known to the plugin
+        let tower_id = TowerId::try_from(v).map_err(|e| anyhow!(e))?;
+        let state = plugin.state().lock().unwrap();
+        (
+            state
+                .towers
+                .get(&tower_id)
+                .ok_or(anyhow!("Unknown tower_id"))?
+                .net_addr
+                .clone(),
+            state.proxy.clone(),
+        )
+    };
+    let response = get_request(&tower_net_addr, Endpoint::Ping, &proxy)
+        .await
+        .map_err(to_cln_error)?;
+
+    if response.status().is_success() {
+        Ok(json!("Tower is reachable"))
+    } else {
+        Err(anyhow!(format!(
+            "Tower cannot be reached (Error: {})",
+            response.status()
+        )))
+    }
+}
+
 /// Triggers a manual retry of a tower, tries to send all pending appointments to it.
 ///
 /// Only works if the tower is unreachable or there's been a subscription error (and the tower is not already being retried).
@@ -556,6 +589,7 @@ async fn main() -> Result<(), Error> {
             constants::RPC_GET_TOWER_INFO_DESC,
             get_tower_info,
         )
+        .rpcmethod(constants::RPC_PING, constants::RPC_PING_DESC, ping)
         .rpcmethod(
             constants::RPC_RETRY_TOWER,
             constants::RPC_RETRY_TOWER_DESC,

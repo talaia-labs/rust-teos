@@ -3,6 +3,7 @@ pub enum Endpoint {
     AddAppointment,
     GetAppointment,
     GetSubscriptionInfo,
+    Ping,
 }
 
 impl std::fmt::Display for Endpoint {
@@ -15,6 +16,7 @@ impl std::fmt::Display for Endpoint {
                 Endpoint::AddAppointment => "add_appointment",
                 Endpoint::GetAppointment => "get_appointment",
                 Endpoint::GetSubscriptionInfo => "get_subscription_info",
+                Endpoint::Ping => "ping",
             }
         )
     }
