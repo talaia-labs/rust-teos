@@ -102,6 +102,11 @@ pub struct Opt {
     #[structopt(long)]
     pub tor_support: bool,
 
+    /// Forces the tower to run even if the underlying chain has gone too far out of sync. This can only happen
+    /// if the node is being run in pruned mode.
+    #[structopt(long)]
+    pub force_update: bool,
+
     /// Tor control port [default: 9051]
     #[structopt(long)]
     pub tor_control_port: Option<u16>,
@@ -139,6 +144,7 @@ pub struct Config {
     pub debug: bool,
     pub deps_debug: bool,
     pub overwrite_key: bool,
+    pub force_update: bool,
 
     // General
     pub subscription_slots: u32,
@@ -198,6 +204,7 @@ impl Config {
         self.debug |= options.debug;
         self.deps_debug |= options.deps_debug;
         self.overwrite_key = options.overwrite_key;
+        self.force_update = options.force_update;
     }
 
     /// Verifies that [Config] is properly built.
@@ -290,6 +297,7 @@ impl Default for Config {
             debug: false,
             deps_debug: false,
             overwrite_key: false,
+            force_update: false,
             subscription_slots: 10000,
             subscription_duration: 4320,
             expiry_delta: 6,
@@ -325,6 +333,7 @@ mod tests {
                 debug: false,
                 deps_debug: false,
                 overwrite_key: false,
+                force_update: false,
             }
         }
     }
