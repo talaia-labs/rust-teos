@@ -72,6 +72,35 @@ pub struct Responder {
 ## Test Coverage
 Tests should be provided to cover both positive and negative conditions. Tests should cover both the proper execution as well as all the covered error paths. PR with no proper test coverage will not be merged.
 
-## Signing Commits
+## Git conventions 
+
+### Commits, titles, and descriptions
+
+- Changes must be split logically in commits, such that a commit is self-contained
+- In general terms, all commits need to pass the test suite. There may be some exceptions to this rule if the change you are working on touches several components of the codebase and it makes more sense to split the change by component (or group of components)
+- Commit titles need to be short and explanatory. If we are, for instance, adding an RPC command to the backend, "Adds command X to the backend" will be a good short description, "Add command" or "Fix #123" where #123 is an issue referencing this feature **IS NOT**
+- Descriptions can be provided to give more context about what has been fixed and how
+
+### Pull requests
+
+- Pull request titles need to be explanatory, in the same way, commits titles were. If a PR includes a single commit, they can share the title, otherwise, a general title of what we are trying to achieve is required. **DO NOT REFERENCE ISSUES IN PULL REQUEST TITLES**, save that for the PR description
+- PR descriptions need to guide the reviewer into what has been changed. You can reference issues here. If the PR is a fix of a simple issue, "Fix #123" may suffice, however, if it involves several changes, a proper explanation of both what has been fixed and how is due. These are two good examples of PR descriptions, both long and short: [188](https://github.com/talaia-labs/rust-teos/pull/188), [194](https://github.com/talaia-labs/rust-teos/pull/194)
+- **WE DO NOT PILE "fix" COMMITS IN A PULL REQUEST**, that is, if some fixes are requested by reviewers, or something was missing from our original approach, it needs to be squashed. Do **NOT** do this:
+
+	```
+	886b0ff Adds X functionality to component Y
+	801ff5d Fixes the previous commit because Z
+	67ac345 Addresses review comments
+	7dc7fcd Updates X because G was missing
+	b60999c Adds missing test
+	...
+	```
+	
+- Create a new branch to work on your pull request. **DO NOT** work from the master branch of your fork*
+- **DO NOT** merge master into your branch, rebase master instead*
+
+	\* If you're not sure how to handle this, check external documentation on how to manage multiple remotes for the same repository.
+
+###  Signing Commits
 
 We require that all commits to be merged into master are signed. You can enable commit signing on GitHub by following [Signing commits](https://help.github.com/en/github/authenticating-to-github/signing-commits).
