@@ -395,6 +395,13 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         }
     }
 
+    /// Signs a message using the tower's signing key
+    async fn sign_message(&self, request: Request<String>) -> Result<Response<String>, Status> {
+        Ok(Response::new(
+            self.watcher.sign_message(&request.into_inner()),
+        ))
+    }
+
     /// Stop endpoint. Stops the tower daemon. Part of the private API.
     async fn stop(&self, request: Request<()>) -> Result<Response<()>, Status> {
         self.shutdown_trigger.trigger();
