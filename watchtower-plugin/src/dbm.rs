@@ -144,6 +144,7 @@ impl DBM {
     ///
     /// This function MUST be guarded against inserting duplicate (tower_id, subscription_expiry) pairs.
     /// This is currently done in WTClient::add_update_tower.
+    #[cfg(not(feature = "notAccountable"))]
     pub fn store_tower_record(
         &mut self,
         tower_id: TowerId,
@@ -165,7 +166,28 @@ impl DBM {
 
         tx.commit().map_err(Error::Unknown)
     }
+    #[cfg(feature = "notAccountable")]
+    pub fn store_tower_record(
+        &mut self,
+        tower_id: TowerId,
+        net_addr: &str,
+        receipt: &RegistrationReceipt,
+    ) -> Result<(), Error> {
+        let tx = self.get_mut_connection().transaction().unwrap();
+        tx.execute(
+            "INSERT INTO towers (tower_id, net_addr, available_slots) 
+                VALUES (?1, ?2, ?3) 
+                ON CONFLICT (tower_id) DO UPDATE SET net_addr = ?2, available_slots = ?3",
+            params![tower_id.to_vec(), net_addr, receipt.available_slots()],
+        )
+        .map_err(Error::Unknown)?;
+        tx.execute(
+                "INSERT INTO registration_receipts (tower_id, available_slots, subscription_start, subscription_expiry) 
+                    VALUES (?1, ?2, ?3, ?4)",
+                params![tower_id.to_vec(), receipt.available_slots(), receipt.subscription_start(), receipt.subscription_expiry()]).map_err( Error::Unknown)?;
 
+        tx.commit().map_err(Error::Unknown)
+    }
     /// Loads a tower record from the database.
     ///
     /// Tower records are composed from the tower information and the appointment data. The latter is split in:
@@ -212,6 +234,7 @@ impl DBM {
     /// Loads the latest registration receipt for a given tower.
     ///
     /// Latests is determined by the one with the `subscription_expiry` further into the future.
+    #[cfg(not(feature = "notAccountable"))]
     pub fn load_registration_receipt(
         &self,
         tower_id: TowerId,
@@ -241,6 +264,35 @@ impl DBM {
         .ok()
     }
 
+    #[cfg(feature = "notAccountable")]
+
+    pub fn load_registration_receipt(
+        &self,
+        tower_id: TowerId,
+        user_id: UserId,
+    ) -> Option<RegistrationReceipt> {
+        let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT available_slots, subscription_start, subscription_expiry
+                    FROM registration_receipts 
+                    WHERE tower_id = ?1 AND subscription_expiry = (SELECT MAX(subscription_expiry) 
+                        FROM registration_receipts 
+                        WHERE tower_id = ?1)",
+            )
+            .unwrap();
+
+        stmt.query_row([tower_id.to_vec()], |row| {
+            let slots: u32 = row.get(0).unwrap();
+            let start: u32 = row.get(1).unwrap();
+            let expiry: u32 = row.get(2).unwrap();
+
+            Ok(RegistrationReceipt::new(
+                user_id, slots, start, expiry,
+            ))
+        })
+        .ok()
+    }
     /// Removes a tower record from the database.
     ///
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single

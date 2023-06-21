@@ -34,3 +34,6 @@ teos-common = { path = "../teos-common" }
 [dev-dependencies]
 mockito = "0.32.4"
 tempdir = "0.3.7"
+
+[features]
+notAccountable = []

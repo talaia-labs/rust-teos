@@ -171,12 +171,20 @@ impl Watcher {
 
     /// Registers a new user within the [Watcher]. This request is passed to the [Gatekeeper], who is in
     /// charge of managing users.
+    #[cfg(not(feature = "notAccountable"))]
     pub(crate) fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let mut receipt = self.gatekeeper.add_update_user(user_id)?;
         receipt.sign(&self.signing_key);
-
+    
         Ok(receipt)
     }
+    
+    #[cfg(feature = "notAccountable")]
+    pub(crate) fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
+        let receipt = self.gatekeeper.add_update_user(user_id)?;
+        Ok(receipt)
+    }
+    
 
     /// Adds a new [Appointment] to the tower.
     ///

@@ -56,6 +56,7 @@ impl From<RequestError> for AddAppointmentError {
 }
 
 /// Handles the logic of interacting with the `register` endpoint of the tower.
+#[cfg(not(feature = "notAccountable"))]
 pub async fn register(
     tower_id: TowerId,
     user_id: UserId,
@@ -82,6 +83,35 @@ pub async fn register(
             r.subscription_start,
             r.subscription_expiry,
             r.subscription_signature,
+        )
+    })
+}
+#[cfg(feature = "notAccountable")]
+pub async fn register(
+    tower_id: TowerId,
+    user_id: UserId,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
+) -> Result<RegistrationReceipt, RequestError> {
+    log::info!("Registering in the Eye of Satoshi (tower_id={tower_id})");
+    process_post_response(
+        post_request(
+            tower_net_addr,
+            Endpoint::Register,
+            &common_msgs::RegisterRequest {
+                user_id: user_id.to_vec(),
+            },
+            proxy,
+        )
+        .await,
+    )
+    .await
+    .map(|r: common_msgs::RegisterResponse| {
+        RegistrationReceipt::new(
+            user_id,
+            r.available_slots,
+            r.subscription_start,
+            r.subscription_expiry
         )
     })
 }
