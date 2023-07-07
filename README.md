@@ -23,6 +23,8 @@ Refer to [INSTALL.md](INSTALL.md)
 
 Make sure `bitcoind` is running before running `teosd` (it will fail at startup if it cannot connect to `bitcoind`). [Here](DEPENDENCIES.md#installing-bitcoind) you can find a sample bitcoin.conf.
 
+Please see [Docker instructions](docker/README.md) for instructions on how to set up `teosd` in Docker.
+
 ### Starting the tower daemon ♖
 
 Once installed, you can start the tower by running:
