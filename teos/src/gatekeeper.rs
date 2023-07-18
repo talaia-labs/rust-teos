@@ -388,7 +388,7 @@ mod tests {
         ) {
             self.add_update_user(user_id).unwrap();
             let mut registered_users = self.registered_users.lock().unwrap();
-            let mut user = registered_users.get_mut(&user_id).unwrap();
+            let user = registered_users.get_mut(&user_id).unwrap();
             user.subscription_expiry = outdates_at - self.expiry_delta;
             if let Some(uuids) = appointments {
                 for uuid in uuids.iter() {
