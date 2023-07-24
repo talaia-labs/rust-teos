@@ -30,7 +30,7 @@ toml = "0.5"
 tonic = { version = "0.6", features = [ "tls", "transport" ] }
 tokio = { version = "1.5", features = [ "rt-multi-thread" ] }
 triggered = "0.1.2"
-warp = "0.3.2"
+warp = "0.3.5"
 torut = "0.2.1"
 
 # Bitcoin and Lightning
