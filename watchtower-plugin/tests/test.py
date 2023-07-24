@@ -48,7 +48,7 @@ def test_watchtower(node_factory, bitcoind, teosd):
     locator = change_endianness(dispute_txid[32:])
 
     # Make sure l2's normal penalty_tx doesn't reach the network
-    l2.daemon.rpcproxy.mock_rpc("sendrawtransaction", lambda: None)
+    l2.daemon.rpcproxy.mock_rpc("sendrawtransaction", lambda _: {"result": None, "error": None, "id": "pytest"})
     l2.start()
 
     # The tower will react once the dispute gets confirmed. For now it is still watching for it
