@@ -90,7 +90,7 @@ impl RegistrationReceipt {
 
         ser
     }
-
+    #[cfg(feature = "Accountable")]
     pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
         self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
@@ -103,10 +103,10 @@ impl RegistrationReceipt {
             false
         }
     }
-    #[cfg(not(feature = "Accountable"))]
-    pub fn verify(&self, id: &UserId) -> bool {
-        true
-    }
+    // #[cfg(not(feature = "Accountable"))]
+    // pub fn verify(&self, id: &UserId) -> bool {
+    //     true
+    // }
     
 }
 
@@ -156,12 +156,12 @@ impl AppointmentReceipt {
 
         ser
     }
-
+    #[cfg(feature = "Accountable")]
     pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
         self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
     }
-
+    #[cfg(feature = "Accountable")]
     pub fn verify(&self, id: &UserId) -> bool {
         if let Some(signature) = self.signature() {
             cryptography::verify(&self.to_vec(), &signature, &id.0)

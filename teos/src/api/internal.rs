@@ -67,7 +67,7 @@ impl InternalAPI {
 #[tonic::async_trait]
 impl PublicTowerServices for Arc<InternalAPI> {
     /// Register endpoint. Part of the public API. Internally calls [Watcher::register].
-    #[cfg(feature = "Accountable")]
+    
 async fn register(
     &self,
     request: Request<common_msgs::RegisterRequest>,
@@ -88,36 +88,9 @@ async fn register(
             available_slots: receipt.available_slots(),
             subscription_start: receipt.subscription_start(),
             subscription_expiry: receipt.subscription_expiry(),
+            #[cfg(feature = "Accountable")]
             subscription_signature: receipt.signature().unwrap(),
-        })),
-        Err(_) => Err(Status::new(
-            Code::ResourceExhausted,
-            "Subscription maximum slots count reached",
-        )),
-    }
-}
-
-#[cfg(not(feature = "Accountable"))]
-async fn register(
-    &self,
-    request: Request<common_msgs::RegisterRequest>,
-) -> Result<Response<common_msgs::RegisterResponse>, Status> {
-    self.check_service_unavailable()?;
-    let req_data = request.into_inner();
-
-    let user_id = UserId::from_slice(&req_data.user_id).map_err(|_| {
-        Status::new(
-            Code::InvalidArgument,
-            "Provided public key does not match expected format (33-byte compressed key)",
-        )
-    })?;
-
-    match self.watcher.register(user_id) {
-        Ok(receipt) => Ok(Response::new(common_msgs::RegisterResponse {
-            user_id: req_data.user_id,
-            available_slots: receipt.available_slots(),
-            subscription_start: receipt.subscription_start(),
-            subscription_expiry: receipt.subscription_expiry(),
+            #[cfg(not(feature = "Accountable"))]
             subscription_signature: None,
         })),
         Err(_) => Err(Status::new(
@@ -126,7 +99,6 @@ async fn register(
         )),
     }
 }
-
 
     /// Add appointment endpoint. Part of the public API. Internally calls [Watcher::add_appointment].
     async fn add_appointment(

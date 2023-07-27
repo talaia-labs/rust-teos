@@ -234,12 +234,13 @@ impl DBM {
     /// Loads the latest registration receipt for a given tower.
     ///
     /// Latests is determined by the one with the `subscription_expiry` further into the future.
-    #[cfg(feature = "Accountable")]
+    
     pub fn load_registration_receipt(
         &self,
         tower_id: TowerId,
         user_id: UserId,
     ) -> Option<RegistrationReceipt> {
+        #[cfg(feature = "Accountable")]
         let mut stmt = self
             .connection
             .prepare(
@@ -250,7 +251,18 @@ impl DBM {
                         WHERE tower_id = ?1)",
             )
             .unwrap();
-
+            #[cfg(not(feature = "Accountable"))]
+            let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT available_slots, subscription_start, subscription_expiry
+                    FROM registration_receipts 
+                    WHERE tower_id = ?1 AND subscription_expiry = (SELECT MAX(subscription_expiry) 
+                        FROM registration_receipts 
+                        WHERE tower_id = ?1)",
+            )
+            .unwrap();
+            #[cfg(feature = "Accountable")]
         stmt.query_row([tower_id.to_vec()], |row| {
             let slots: u32 = row.get(0).unwrap();
             let start: u32 = row.get(1).unwrap();
@@ -262,26 +274,7 @@ impl DBM {
             ))
         })
         .ok()
-    }
-
-    #[cfg(not(feature = "Accountable"))]
-
-    pub fn load_registration_receipt(
-        &self,
-        tower_id: TowerId,
-        user_id: UserId,
-    ) -> Option<RegistrationReceipt> {
-        let mut stmt = self
-            .connection
-            .prepare(
-                "SELECT available_slots, subscription_start, subscription_expiry
-                    FROM registration_receipts 
-                    WHERE tower_id = ?1 AND subscription_expiry = (SELECT MAX(subscription_expiry) 
-                        FROM registration_receipts 
-                        WHERE tower_id = ?1)",
-            )
-            .unwrap();
-
+        #[cfg(not(feature = "Accountable"))]
         stmt.query_row([tower_id.to_vec()], |row| {
             let slots: u32 = row.get(0).unwrap();
             let start: u32 = row.get(1).unwrap();
@@ -293,6 +286,7 @@ impl DBM {
         })
         .ok()
     }
+
     /// Removes a tower record from the database.
     ///
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
