@@ -95,7 +95,7 @@ impl RegistrationReceipt {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
         self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
     }
-#[cfg(not(feature = "notAccountable"))]
+#[cfg(feature = "Accountable")]
     pub fn verify(&self, id: &UserId) -> bool {
         if let Some(signature) = self.signature() {
             cryptography::verify(&self.to_vec(), &signature, &id.0)
@@ -103,7 +103,7 @@ impl RegistrationReceipt {
             false
         }
     }
-    #[cfg(feature = "notAccountable")]
+    #[cfg(not(feature = "Accountable"))]
     pub fn verify(&self, id: &UserId) -> bool {
         true
     }

@@ -67,7 +67,7 @@ impl InternalAPI {
 #[tonic::async_trait]
 impl PublicTowerServices for Arc<InternalAPI> {
     /// Register endpoint. Part of the public API. Internally calls [Watcher::register].
-    #[cfg(not(feature = "notAccountable"))]
+    #[cfg(feature = "Accountable")]
 async fn register(
     &self,
     request: Request<common_msgs::RegisterRequest>,
@@ -97,7 +97,7 @@ async fn register(
     }
 }
 
-#[cfg(feature = "notAccountable")]
+#[cfg(not(feature = "Accountable"))]
 async fn register(
     &self,
     request: Request<common_msgs::RegisterRequest>,

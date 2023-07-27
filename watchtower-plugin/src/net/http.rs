@@ -56,7 +56,7 @@ impl From<RequestError> for AddAppointmentError {
 }
 
 /// Handles the logic of interacting with the `register` endpoint of the tower.
-#[cfg(not(feature = "notAccountable"))]
+#[cfg(feature = "Accountable")]
 pub async fn register(
     tower_id: TowerId,
     user_id: UserId,
@@ -86,7 +86,7 @@ pub async fn register(
         )
     })
 }
-#[cfg(feature = "notAccountable")]
+#[cfg(not(feature = "Accountable"))]
 pub async fn register(
     tower_id: TowerId,
     user_id: UserId,

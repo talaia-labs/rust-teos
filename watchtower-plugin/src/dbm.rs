@@ -144,7 +144,7 @@ impl DBM {
     ///
     /// This function MUST be guarded against inserting duplicate (tower_id, subscription_expiry) pairs.
     /// This is currently done in WTClient::add_update_tower.
-    #[cfg(not(feature = "notAccountable"))]
+    #[cfg(feature = "Accountable")]
     pub fn store_tower_record(
         &mut self,
         tower_id: TowerId,
@@ -166,7 +166,7 @@ impl DBM {
 
         tx.commit().map_err(Error::Unknown)
     }
-    #[cfg(feature = "notAccountable")]
+    #[cfg(not(feature = "Accountable"))]
     pub fn store_tower_record(
         &mut self,
         tower_id: TowerId,
@@ -234,7 +234,7 @@ impl DBM {
     /// Loads the latest registration receipt for a given tower.
     ///
     /// Latests is determined by the one with the `subscription_expiry` further into the future.
-    #[cfg(not(feature = "notAccountable"))]
+    #[cfg(feature = "Accountable")]
     pub fn load_registration_receipt(
         &self,
         tower_id: TowerId,
@@ -264,7 +264,7 @@ impl DBM {
         .ok()
     }
 
-    #[cfg(feature = "notAccountable")]
+    #[cfg(not(feature = "Accountable"))]
 
     pub fn load_registration_receipt(
         &self,

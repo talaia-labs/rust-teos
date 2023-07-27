@@ -27,4 +27,4 @@ lightning = "0.0.108"
 tonic-build = "0.6"
 
 [features]
-notAccountable = []
+Accountable = []
