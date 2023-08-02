@@ -6,10 +6,14 @@ use teos_common::cryptography;
 use teos_common::net::http::Endpoint;
 use teos_common::net::NetAddr;
 use teos_common::protos as common_msgs;
+#[cfg(feature = "accountable")]
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
+#[cfg(not(feature = "accountable"))]
+use teos_common::receipts::RegistrationReceipt;
 use teos_common::{TowerId, UserId};
 
 use crate::net::ProxyInfo;
+#[cfg(feature = "accountable")]
 use crate::MisbehaviorProof;
 
 /// Represents a generic api response.
@@ -46,6 +50,7 @@ impl RequestError {
 pub enum AddAppointmentError {
     RequestError(RequestError),
     ApiError(ApiError),
+    #[cfg(feature = "accountable")]
     SignatureError(MisbehaviorProof),
 }
 
@@ -56,7 +61,7 @@ impl From<RequestError> for AddAppointmentError {
 }
 
 /// Handles the logic of interacting with the `register` endpoint of the tower.
-
+#[cfg(feature = "accountable")]
 pub async fn register(
     tower_id: TowerId,
     user_id: UserId,
@@ -77,7 +82,6 @@ pub async fn register(
     )
     .await
     .map(|r: common_msgs::RegisterResponse| {
-        #[cfg(feature = "Accountable")]
         RegistrationReceipt::with_signature(
             user_id,
             r.available_slots,
@@ -85,7 +89,29 @@ pub async fn register(
             r.subscription_expiry,
             r.subscription_signature,
         )
-        #[cfg(not(feature = "Accountable"))]
+    })
+}
+#[cfg(not(feature = "accountable"))]
+pub async fn register(
+    tower_id: TowerId,
+    user_id: UserId,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
+) -> Result<RegistrationReceipt, RequestError> {
+    log::info!("Registering in the Eye of Satoshi (tower_id={tower_id})");
+    process_post_response(
+        post_request(
+            tower_net_addr,
+            Endpoint::Register,
+            &common_msgs::RegisterRequest {
+                user_id: user_id.to_vec(),
+            },
+            proxy,
+        )
+        .await,
+    )
+    .await
+    .map(|r: common_msgs::RegisterResponse| {
         RegistrationReceipt::new(
             user_id,
             r.available_slots,
@@ -96,13 +122,16 @@ pub async fn register(
 }
 
 /// Encapsulates the logging and response parsing of sending and appointment to the tower.
+#[cfg(feature = "accountable")]
 pub async fn add_appointment(
     tower_id: TowerId,
     tower_net_addr: &NetAddr,
     proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
-) -> Result<(u32, AppointmentReceipt), AddAppointmentError> {
+) -> 
+Result<(u32, AppointmentReceipt), AddAppointmentError> 
+ {
     log::debug!(
         "Sending appointment {} to tower {tower_id}",
         appointment.locator
@@ -111,22 +140,41 @@ pub async fn add_appointment(
         send_appointment(tower_id, tower_net_addr, proxy, appointment, signature).await?;
     log::debug!("Appointment accepted and signed by {tower_id}");
     log::debug!("Remaining slots: {}", response.available_slots);
-    log::debug!("Start block: {}", response.start_block);
-
+    log::debug!("Start block: {:?}", response.start_block);
     Ok((response.available_slots, receipt))
 }
-
+#[cfg(not(feature = "accountable"))]
+pub async fn add_appointment(
+    tower_id: TowerId,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
+    appointment: &Appointment,
+    signature: &str,
+) -> 
+Result<u32, AddAppointmentError> {
+    log::debug!(
+        "Sending appointment {} to tower {tower_id}",
+        appointment.locator
+    );
+        let response =
+        send_appointment(tower_id, tower_net_addr, proxy, appointment, signature).await?;
+    log::debug!("Appointment accepted by {tower_id}");
+    log::debug!("Remaining slots: {}", response.available_slots);
+    Ok((response.available_slots))
+}
 /// Handles the logic of interacting with the `add_appointment` endpoint of the tower.
+#[cfg(feature = "accountable")]
 pub async fn send_appointment(
     tower_id: TowerId,
     tower_net_addr: &NetAddr,
     proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
-) -> Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointmentError> {
+) -> 
+Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointmentError>  {
     let request_data = common_msgs::AddAppointmentRequest {
         appointment: Some(appointment.clone().into()),
-        signature: signature.to_owned(),
+        signature: signature.to_owned()
     };
 
     match process_post_response(
@@ -151,13 +199,45 @@ pub async fn send_appointment(
             );
             if recovered_id == tower_id {
                 Ok((r, receipt))
-            } else {
+            } 
+            else {
                 Err(AddAppointmentError::SignatureError(MisbehaviorProof::new(
                     appointment.locator,
                     receipt,
                     recovered_id,
                 )))
             }
+        }
+        ApiResponse::Error(e) => Err(AddAppointmentError::ApiError(e)),
+    }
+}
+#[cfg(not(feature = "accountable"))]
+pub async fn send_appointment(
+    tower_id: TowerId,
+    tower_net_addr: &NetAddr,
+    proxy: &Option<ProxyInfo>,
+    appointment: &Appointment,
+    signature: &str,
+) -> 
+Result<(common_msgs::AddAppointmentResponse), AddAppointmentError> {
+    let request_data = common_msgs::AddAppointmentRequest {
+        appointment: Some(appointment.clone().into()),
+        signature: signature.to_owned()
+    };
+
+    match process_post_response(
+        post_request(
+            tower_net_addr,
+            Endpoint::AddAppointment,
+            &request_data,
+            proxy,
+        )
+        .await,
+    )
+    .await?
+    {
+        ApiResponse::Response::<common_msgs::AddAppointmentResponse>(r) => {
+            Ok(r)
         }
         ApiResponse::Error(e) => Err(AddAppointmentError::ApiError(e)),
     }
@@ -250,11 +330,16 @@ mod tests {
     use serde_json::json;
 
     use crate::test_utils::get_dummy_add_appointment_response;
+    #[cfg(feature = "accountable")]
     use teos_common::test_utils::{
         generate_random_appointment, get_random_appointment_receipt,
         get_random_registration_receipt, get_random_user_id,
     };
-
+    #[cfg(not(feature = "accountable"))]
+    use teos_common::test_utils::{
+        generate_random_appointment,
+        get_random_registration_receipt, get_random_user_id,
+    };
     mod request_error {
         use super::*;
 

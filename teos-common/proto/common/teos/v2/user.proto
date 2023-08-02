@@ -14,7 +14,7 @@ message RegisterRequest {
     uint32 available_slots = 2;
     uint32 subscription_start = 3;
     uint32 subscription_expiry = 4;
-    optional string subscription_signature = 5;
+    string subscription_signature = 5;
   }
 
   message GetSubscriptionInfoRequest {

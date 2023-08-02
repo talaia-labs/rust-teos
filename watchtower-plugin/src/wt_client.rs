@@ -9,13 +9,19 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
 use teos_common::dbm::Error as DBError;
+#[cfg(feature = "accountable")]
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
+#[cfg(not(feature = "accountable"))]
+use teos_common::receipts::RegistrationReceipt;
 use teos_common::{TowerId, UserId};
 
 use crate::dbm::DBM;
 use crate::net::ProxyInfo;
 use crate::retrier::RetrierStatus;
+#[cfg(feature = "accountable")]
 use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
+#[cfg(not(feature = "accountable"))]
+use crate::{SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
 
 #[derive(Eq, PartialEq)]
 pub enum RevocationData {
@@ -213,6 +219,7 @@ impl WTClient {
     }
 
     /// Adds an appointment receipt to the tower record.
+    #[cfg(feature = "accountable")]
     pub fn add_appointment_receipt(
         &mut self,
         tower_id: TowerId,
@@ -231,8 +238,26 @@ impl WTClient {
             log::error!("Cannot add appointment receipt to tower. Unknown tower_id: {tower_id}");
         }
     }
+    #[cfg(not(feature = "accountable"))]
+    pub fn add_accepted_appointment(
+        &mut self,
+        tower_id: TowerId,
+        locator: Locator,
+        available_slots: u32,
+    ) {
+        if let Some(tower) = self.towers.get_mut(&tower_id) {
+            // DISCUSS: It may be nice to independently compute the slots and compare
+            tower.available_slots = available_slots;
 
+            self.dbm
+                .store_accepted_appointments(tower_id, locator, available_slots)
+                .unwrap();
+        } else {
+            log::error!("Cannot add accepted appointment to tower. Unknown tower_id: {tower_id}");
+        }
+    }
     /// Gets an appointment receipt from the database (if found).
+    #[cfg(feature = "accountable")]
     pub fn get_appointment_receipt(
         &self,
         tower_id: TowerId,
@@ -281,6 +306,7 @@ impl WTClient {
     }
 
     /// Flags a given tower as misbehaving, storing the misbehaving proof in the database.
+    #[cfg(feature = "accountable")]
     pub fn flag_misbehaving_tower(&mut self, tower_id: TowerId, proof: MisbehaviorProof) {
         if let Some(tower) = self.towers.get_mut(&tower_id) {
             self.dbm.store_misbehaving_proof(tower_id, &proof).unwrap();

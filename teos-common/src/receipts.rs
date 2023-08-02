@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use bitcoin::secp256k1::SecretKey;
 
-use crate::{cryptography, UserId};
+use crate::{ cryptography, UserId };
 
 /// Proof that a user has registered with a tower. This serves two purposes:
 ///
@@ -34,7 +34,7 @@ impl RegistrationReceipt {
         user_id: UserId,
         available_slots: u32,
         subscription_start: u32,
-        subscription_expiry: u32,
+        subscription_expiry: u32
     ) -> Self {
         RegistrationReceipt {
             user_id,
@@ -44,13 +44,13 @@ impl RegistrationReceipt {
             signature: None,
         }
     }
-
+    
     pub fn with_signature(
         user_id: UserId,
         available_slots: u32,
         subscription_start: u32,
         subscription_expiry: u32,
-        signature: String,
+        signature: String
     ) -> Self {
         RegistrationReceipt {
             user_id,
@@ -90,12 +90,12 @@ impl RegistrationReceipt {
 
         ser
     }
-    #[cfg(feature = "Accountable")]
+    
     pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
         self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
     }
-#[cfg(feature = "Accountable")]
+    
     pub fn verify(&self, id: &UserId) -> bool {
         if let Some(signature) = self.signature() {
             cryptography::verify(&self.to_vec(), &signature, &id.0)
@@ -103,17 +103,17 @@ impl RegistrationReceipt {
             false
         }
     }
-    // #[cfg(not(feature = "Accountable"))]
+    // #[cfg(not(feature = "accountable"))]
     // pub fn verify(&self, id: &UserId) -> bool {
     //     true
     // }
-    
 }
 
 /// Proof that a certain state was backed up with the tower.
 ///
 /// Appointment receipts can be used alongside a registration receipt that covers it, and on chain data (a breach not being reacted with a penalty), to prove a tower has not reacted to a channel breach.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+
 pub struct AppointmentReceipt {
     user_signature: String,
     start_block: u32,
@@ -156,12 +156,12 @@ impl AppointmentReceipt {
 
         ser
     }
-    #[cfg(feature = "Accountable")]
+
     pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
         self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
     }
-    #[cfg(feature = "Accountable")]
+
     pub fn verify(&self, id: &UserId) -> bool {
         if let Some(signature) = self.signature() {
             cryptography::verify(&self.to_vec(), &signature, &id.0)

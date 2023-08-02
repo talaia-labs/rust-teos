@@ -12,7 +12,10 @@ use bitcoin::Txid;
 
 use crate::appointment::{Appointment, Locator};
 use crate::cryptography;
+#[cfg(feature = "accountable")]
 use crate::receipts::{AppointmentReceipt, RegistrationReceipt};
+#[cfg(not(feature = "accountable"))]
+use crate::receipts::RegistrationReceipt;
 use crate::UserId;
 
 pub static TXID_HEX: &str = "338bda693c4a26e0d41a01f7f2887aaf48bf0bdf93e6415c9110b29349349d3e";
@@ -57,6 +60,7 @@ pub fn get_random_registration_receipt() -> RegistrationReceipt {
     let start = get_random_int();
     let mut receipt =
         RegistrationReceipt::new(get_random_user_id(), get_random_int(), start, start + 420);
+        #[cfg(feature = "accountable")]
     receipt.sign(&sk);
 
     receipt
@@ -70,11 +74,12 @@ pub fn get_registration_receipt_from_previous(r: &RegistrationReceipt) -> Regist
         r.subscription_start(),
         r.subscription_expiry() + 1 + get_random_int::<u8>() as u32,
     );
+    #[cfg(feature = "accountable")]
     receipt.sign(&sk);
 
     receipt
 }
-
+#[cfg(feature = "accountable")]
 pub fn get_random_appointment_receipt(tower_sk: SecretKey) -> AppointmentReceipt {
     let mut receipt = AppointmentReceipt::new("user_sig".into(), 42);
     receipt.sign(&tower_sk);

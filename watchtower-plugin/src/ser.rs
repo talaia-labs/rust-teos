@@ -1,7 +1,7 @@
 use bitcoin::consensus::encode;
 use bitcoin::Transaction;
 
-use teos_common::appointment::{Appointment, Locator};
+use teos_common::appointment::{Appointment, Locator, Locators};
 
 use hex::FromHex;
 use serde::{de, ser::SerializeMap, Deserializer, Serialize, Serializer};
@@ -52,6 +52,11 @@ struct AppointmentInners {
     to_self_delay: u32,
 }
 
+struct LocatorInners {
+   arg1: String,
+   arg2: u32,
+}
+
 pub fn serialize_appointments<S>(v: &Vec<Appointment>, s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -64,6 +69,20 @@ where
                 encrypted_blob: hex::encode(&a.encrypted_blob),
                 to_self_delay: a.to_self_delay,
             },
+        )?;
+    }
+    map.end()
+}
+
+pub fn serialize_locators<S>(v: &Vec<Locators>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut map = s.serialize_map(Some(v.len()))?;
+    for a in v {
+        map.serialize_entry(
+            &hex::encode(a.locator),
+            "None",
         )?;
     }
     map.end()

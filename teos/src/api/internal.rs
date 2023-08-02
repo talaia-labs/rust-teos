@@ -88,10 +88,10 @@ async fn register(
             available_slots: receipt.available_slots(),
             subscription_start: receipt.subscription_start(),
             subscription_expiry: receipt.subscription_expiry(),
-            #[cfg(feature = "Accountable")]
+            #[cfg(feature = "accountable")]
             subscription_signature: receipt.signature().unwrap(),
-            #[cfg(not(feature = "Accountable"))]
-            subscription_signature: None,
+            #[cfg(not(feature = "accountable"))]
+            subscription_signature: "None".to_string(),
         })),
         Err(_) => Err(Status::new(
             Code::ResourceExhausted,
@@ -120,11 +120,22 @@ async fn register(
             .watcher
             .add_appointment(appointment, req_data.signature)
         {
-            Ok((receipt, available_slots, subscription_expiry)) => {
+            #[cfg(feature = "accountable")]
+            Ok((receipt, available_slots, subscription_expiry))  => {
                 Ok(Response::new(common_msgs::AddAppointmentResponse {
                     locator: locator.to_vec(),
                     start_block: receipt.start_block(),
                     signature: receipt.signature().unwrap(),
+                    available_slots,
+                    subscription_expiry,
+                }))
+            }
+            #[cfg(not(feature = "accountable"))]
+            Ok((available_slots, subscription_expiry)) => {
+                Ok(Response::new(common_msgs::AddAppointmentResponse {
+                    locator: locator.to_vec(),
+                    start_block: 0,
+                    signature: "None".to_string(),
                     available_slots,
                     subscription_expiry,
                 }))

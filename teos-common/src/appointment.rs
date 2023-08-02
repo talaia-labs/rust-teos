@@ -12,13 +12,43 @@ pub const LOCATOR_LEN: usize = 16;
 
 /// User identifier for appointments.
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Hash, Serialize, Deserialize)]
+
 pub struct Locator([u8; LOCATOR_LEN]);
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct Locators {
+    data: [u8; LOCATOR_LEN],
+    pub locator: Locator
+}
+
+impl Locators {
+    pub fn from_slice(data: &[u8]) -> Result<Self, &'static str> {
+        if data.len() < LOCATOR_LEN {
+            return Err("Data slice too short for Locator");
+        }
+
+        let locator_data: [u8; LOCATOR_LEN] = data[..LOCATOR_LEN]
+            .try_into()
+            .map_err(|_| "Conversion to Locator data failed")?;
+
+        let locator = Locator(locator_data);
+
+        Ok(Self {
+            data: locator_data,
+            locator,
+        })
+    }
+}
+
 
 impl Locator {
     /// Creates a new [Locator].
+    
     pub fn new(txid: Txid) -> Self {
         Locator(txid[..LOCATOR_LEN].try_into().unwrap())
     }
+
+    
 
     /// Encodes a locator into its byte representation.
     pub fn to_vec(&self) -> Vec<u8> {

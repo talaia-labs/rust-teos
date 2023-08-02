@@ -4,7 +4,7 @@ version = "0.2.0"
 authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
 license = "MIT"
 edition = "2018"
-default-run="teosd"
+default-run = "teosd"
 
 [[bin]]
 name = "teos-cli"
@@ -16,30 +16,28 @@ path = "src/main.rs"
 
 [dependencies]
 # General
-hex = { version = "0.4.3", features = [ "serde" ] }
+hex = { version = "0.4.3", features = ["serde"] }
 home = "0.5.3"
 log = "0.4"
 prost = "0.9"
 rcgen = { version = "0.8", features = ["pem", "x509-parser"] }
-rusqlite = { version = "0.26.0", features = [ "bundled", "limits" ] }
+rusqlite = { version = "0.26.0", features = ["bundled", "limits"] }
 serde = "1.0.130"
 serde_json = "1.0"
 simple_logger = "2.1.0"
 structopt = "0.3"
 toml = "0.5"
-tonic = { version = "0.6", features = [ "tls", "transport" ] }
-tokio = { version = "1.5", features = [ "rt-multi-thread" ] }
+tonic = { version = "0.6", features = ["tls", "transport"] }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 triggered = "0.1.2"
 warp = "0.3.2"
 torut = "0.2.1"
-
 # Bitcoin and Lightning
-bitcoin = { version = "0.28.0", features = [ "base64" ] }
+bitcoin = { version = "0.28.0", features = ["base64"] }
 bitcoincore-rpc = "0.15.0"
 lightning = "0.0.108"
 lightning-net-tokio = "0.0.108"
-lightning-block-sync = { version = "0.0.108", features = [ "rpc-client" ] }
-
+lightning-block-sync = { version = "0.0.108", features = ["rpc-client"] }
 # Local
 teos-common = { path = "../teos-common" }
 
@@ -50,8 +48,7 @@ tonic-build = "0.6"
 jsonrpc-http-server = "17.1.0"
 rand = "0.8.4"
 tempdir = "0.3.7"
-tokio-stream = { version = "0.1.5", features = [ "net" ] }
+tokio-stream = { version = "0.1.5", features = ["net"] }
 
 [features]
-Accountable = []
-
+accountable = []

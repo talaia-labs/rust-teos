@@ -3,8 +3,9 @@ use std::fmt;
 
 use serde::Serialize;
 
-use teos_common::appointment::{Appointment, Locator};
+use teos_common::appointment::{Appointment, Locator, Locators};
 use teos_common::net::NetAddr;
+#[cfg(feature = "accountable")]
 use teos_common::receipts::AppointmentReceipt;
 use teos_common::TowerId;
 
@@ -27,6 +28,7 @@ pub enum TowerStatus {
     TemporaryUnreachable,
     Unreachable,
     SubscriptionError,
+    #[cfg(feature = "accountable")]
     Misbehaving,
 }
 
@@ -61,6 +63,7 @@ impl fmt::Display for TowerStatus {
                 TowerStatus::TemporaryUnreachable => "temporary unreachable",
                 TowerStatus::Unreachable => "unreachable",
                 TowerStatus::SubscriptionError => "subscription error",
+                #[cfg(feature = "accountable")]
                 TowerStatus::Misbehaving => "misbehaving",
             }
         )
@@ -84,6 +87,7 @@ impl TowerStatus {
     }
 
     /// Whether the tower is misbehaving or not.
+    #[cfg(feature = "accountable")]
     pub fn is_misbehaving(&self) -> bool {
         *self == TowerStatus::Misbehaving
     }
@@ -202,13 +206,18 @@ pub struct TowerInfo {
     pub subscription_start: u32,
     pub subscription_expiry: u32,
     pub status: TowerStatus,
+    #[cfg(feature = "accountable")]
     #[serde(serialize_with = "crate::ser::serialize_receipts")]
     pub appointments: HashMap<Locator, String>,
+    #[cfg(not(feature = "accountable"))]
+    #[serde(serialize_with = "crate::ser::serialize_locators")]
+    pub appointments: Vec<Locators>,
     #[serde(serialize_with = "crate::ser::serialize_appointments")]
     pub pending_appointments: Vec<Appointment>,
     #[serde(serialize_with = "crate::ser::serialize_appointments")]
     pub invalid_appointments: Vec<Appointment>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(feature = "accountable")]
     pub misbehaving_proof: Option<MisbehaviorProof>,
 }
 
@@ -219,7 +228,10 @@ impl TowerInfo {
         available_slots: u32,
         subscription_start: u32,
         subscription_expiry: u32,
+        #[cfg(feature = "accountable")]
         appointments: HashMap<Locator, String>,
+        #[cfg(not(feature = "accountable"))]
+        appointments: Vec<Locators>,
         pending_appointments: Vec<Appointment>,
         invalid_appointments: Vec<Appointment>,
     ) -> Self {
@@ -232,6 +244,7 @@ impl TowerInfo {
             appointments,
             pending_appointments,
             invalid_appointments,
+            #[cfg(feature = "accountable")]
             misbehaving_proof: None,
         }
     }
@@ -243,6 +256,7 @@ impl TowerInfo {
     }
 
     /// Sets the misbehaving proof of a tower.
+    #[cfg(feature = "accountable")]
     pub fn set_misbehaving_proof(&mut self, proof: MisbehaviorProof) {
         self.misbehaving_proof = Some(proof);
     }
@@ -250,13 +264,14 @@ impl TowerInfo {
 
 /// A misbehaving proof. Contains proof of a tower replying with a public key different from the advertised one.
 #[derive(Clone, Serialize, Debug, PartialEq, Eq)]
+#[cfg(feature = "accountable")]
 pub struct MisbehaviorProof {
     #[serde(with = "hex::serde")]
     pub locator: Locator,
     pub appointment_receipt: AppointmentReceipt,
     pub recovered_id: TowerId,
 }
-
+#[cfg(feature = "accountable")]
 impl MisbehaviorProof {
     /// Creates a new [MisbehavingProof] instance.
     pub fn new(

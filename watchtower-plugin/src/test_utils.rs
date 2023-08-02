@@ -1,10 +1,12 @@
 use teos_common::appointment::Locator;
 use teos_common::protos as common_msgs;
+#[cfg(feature = "accountable")]
 use teos_common::receipts::AppointmentReceipt;
-
+#[cfg(feature = "accountable")]
 pub fn get_dummy_add_appointment_response(
     locator: Locator,
-    receipt: &AppointmentReceipt,
+    #[cfg(feature = "accountable")] 
+    receipt: &AppointmentReceipt
 ) -> common_msgs::AddAppointmentResponse {
     common_msgs::AddAppointmentResponse {
         locator: locator.to_vec(),
