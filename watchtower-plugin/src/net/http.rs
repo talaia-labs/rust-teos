@@ -101,6 +101,7 @@ pub async fn register(
     log::info!("Registering in the Eye of Satoshi (tower_id={tower_id})");
     process_post_response(
         post_request(
+            
             tower_net_addr,
             Endpoint::Register,
             &common_msgs::RegisterRequest {
@@ -109,6 +110,7 @@ pub async fn register(
             proxy,
         )
         .await,
+        
     )
     .await
     .map(|r: common_msgs::RegisterResponse| {
@@ -118,6 +120,7 @@ pub async fn register(
             r.subscription_start,
             r.subscription_expiry
         )
+        
     })
 }
 
@@ -328,7 +331,7 @@ pub async fn process_post_response<T: DeserializeOwned>(
 mod tests {
     use super::*;
     use serde_json::json;
-
+    
     use crate::test_utils::get_dummy_add_appointment_response;
     #[cfg(feature = "accountable")]
     use teos_common::test_utils::{

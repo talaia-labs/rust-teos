@@ -18,7 +18,7 @@ use teos_common::{ TowerId, UserId };
 use crate::{ AppointmentStatus, MisbehaviorProof, TowerInfo, TowerStatus, TowerSummary };
 #[cfg(not(feature = "accountable"))]
 use crate::{ AppointmentStatus,TowerInfo, TowerStatus, TowerSummary };
-const TABLES: [&str; 9] = [
+const TABLES: [&str; 10] = [
     "CREATE TABLE IF NOT EXISTS towers (
     tower_id INT PRIMARY KEY,
     net_addr TEXT NOT NULL,
@@ -56,7 +56,17 @@ const TABLES: [&str; 9] = [
     available_slots INT NOT NULL,
     subscription_start INT NOT NULL,
     subscription_expiry INT NOT NULL,
-    signature BLOB NOT NULL,
+    signature BLOB,
+    PRIMARY KEY (tower_id, subscription_expiry),
+    FOREIGN KEY(tower_id)
+        REFERENCES towers(tower_id)
+        ON DELETE CASCADE
+)",
+"CREATE TABLE IF NOT EXISTS nonaccountable_registration_receipts (
+    tower_id INT NOT NULL,
+    available_slots INT NOT NULL,
+    subscription_start INT NOT NULL,
+    subscription_expiry INT NOT NULL,
     PRIMARY KEY (tower_id, subscription_expiry),
     FOREIGN KEY(tower_id)
         REFERENCES towers(tower_id)
@@ -74,7 +84,7 @@ const TABLES: [&str; 9] = [
         ON DELETE CASCADE
 )",
     "CREATE TABLE IF NOT EXISTS accepted_appointments (
-    locator INT NOT NULL,
+    locator INT PRIMARY KEY,
     tower_id INT NOT NULL
 )",
     "CREATE TABLE IF NOT EXISTS misbehaving_proofs (
@@ -180,16 +190,17 @@ impl DBM {
                 ]
             )
             .map_err(Error::Unknown)?;
+        let data2: Option<Vec<u8>> = None;
         #[cfg(not(feature = "accountable"))]
         tx
             .execute(
-                "INSERT INTO registration_receipts (tower_id, available_slots, subscription_start, subscription_expiry) 
+                "INSERT INTO nonaccountable_registration_receipts (tower_id, available_slots, subscription_start, subscription_expiry) 
                         VALUES (?1, ?2, ?3, ?4)",
                 params![
                     tower_id.to_vec(),
                     receipt.available_slots(),
                     receipt.subscription_start(),
-                    receipt.subscription_expiry()
+                    receipt.subscription_expiry(),
                 ]
             )
             .map_err(Error::Unknown)?;
@@ -202,12 +213,23 @@ impl DBM {
     /// accepted appointments (represented by appointment receipts), pending appointments and invalid appointments.
     /// In the case that the tower has misbehaved, then a misbehaving proof is also attached to the record.
     pub fn load_tower_record(&self, tower_id: TowerId) -> Option<TowerInfo> {
+        #[cfg(feature = "accountable")]
         let mut stmt = self.connection
             .prepare(
                 "SELECT t.net_addr, t.available_slots, r.subscription_start, r.subscription_expiry 
                     FROM towers as t, registration_receipts as r 
                     WHERE t.tower_id = r.tower_id AND t.tower_id = ?1 AND r.subscription_expiry = (SELECT MAX(subscription_expiry) 
                         FROM registration_receipts 
+                        WHERE tower_id = ?1)"
+            )
+            .unwrap();
+        #[cfg(not(feature = "accountable"))]
+        let mut stmt = self.connection
+            .prepare(
+                "SELECT t.net_addr, t.available_slots, r.subscription_start, r.subscription_expiry 
+                    FROM towers as t, nonaccountable_registration_receipts as r 
+                    WHERE t.tower_id = r.tower_id AND t.tower_id = ?1 AND r.subscription_expiry = (SELECT MAX(subscription_expiry) 
+                        FROM nonaccountable_registration_receipts 
                         WHERE tower_id = ?1)"
             )
             .unwrap();
@@ -303,9 +325,9 @@ impl DBM {
         let mut stmt = self.connection
             .prepare(
                 "SELECT available_slots, subscription_start, subscription_expiry
-                    FROM registration_receipts 
+                    FROM nonaccountable_registration_receipts 
                     WHERE tower_id = ?1 AND subscription_expiry = (SELECT MAX(subscription_expiry) 
-                        FROM registration_receipts 
+                        FROM nonaccountable_registration_receipts 
                         WHERE tower_id = ?1)"
             )
             .unwrap();
@@ -329,6 +351,7 @@ impl DBM {
     /// Loads all tower records from the database.
     pub fn load_towers(&self) -> HashMap<TowerId, TowerSummary> {
         let mut towers = HashMap::new();
+        #[cfg(feature = "accountable")]
         let mut stmt = self.connection
             .prepare(
                 "SELECT tw.tower_id, tw.net_addr, tw.available_slots, rr.subscription_start, rr.subscription_expiry 
@@ -336,6 +359,19 @@ impl DBM {
                         JOIN registration_receipts AS rr 
                         JOIN (SELECT tower_id, MAX(subscription_expiry) AS max_se 
                             FROM registration_receipts 
+                            GROUP BY tower_id) AS max_rrs ON (tw.tower_id = rr.tower_id) 
+                        AND (rr.tower_id = max_rrs.tower_id) 
+                        AND (rr.subscription_expiry = max_rrs.max_se)"
+            )
+            .unwrap();
+        #[cfg(not(feature = "accountable"))]
+        let mut stmt = self.connection
+            .prepare(
+                "SELECT tw.tower_id, tw.net_addr, tw.available_slots, rr.subscription_start, rr.subscription_expiry 
+                        FROM towers AS tw 
+                        JOIN nonaccountable_registration_receipts AS rr 
+                        JOIN (SELECT tower_id, MAX(subscription_expiry) AS max_se 
+                            FROM nonaccountable_registration_receipts 
                             GROUP BY tower_id) AS max_rrs ON (tw.tower_id = rr.tower_id) 
                         AND (rr.tower_id = max_rrs.tower_id) 
                         AND (rr.subscription_expiry = max_rrs.max_se)"
@@ -811,6 +847,17 @@ mod tests {
         let net_addr = "talaia.watch";
 
         let receipt = get_random_registration_receipt();
+        #[cfg(feature = "accountable")]
+        let tower_info = TowerInfo::new(
+            net_addr.to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+            HashMap::new(),
+            Vec::new(),
+            Vec::new()
+        );
+        #[cfg(not(feature = "accountable"))]
         let tower_info = TowerInfo::new(
             net_addr.to_owned(),
             receipt.available_slots(),
@@ -964,23 +1011,26 @@ mod tests {
         for _ in 0..5 {
             let appointment = generate_random_appointment(None);
             let user_signature = "user_signature";
-            let appointment_receipt = AppointmentReceipt::with_signature(
+            #[cfg(feature = "accountable")]
+            let appointment_receipt = 
+            AppointmentReceipt::with_signature(
                 user_signature.to_owned(),
                 42,
                 "tower_signature".to_owned()
             );
 
             tower_summary.available_slots -= 1;
-
+            #[cfg(feature = "accountable")]
             dbm.store_appointment_receipt(
                 tower_id,
                 appointment.locator,
                 tower_summary.available_slots,
                 &appointment_receipt
             ).unwrap();
+            #[cfg(feature = "accountable")]
             receipts.insert(appointment.locator, appointment_receipt.signature().unwrap());
         }
-
+        #[cfg(feature = "accountable")]
         assert_eq!(dbm.load_appointment_receipts(tower_id), receipts);
     }
 
