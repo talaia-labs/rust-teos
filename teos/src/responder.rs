@@ -29,6 +29,7 @@ pub enum ConfirmationStatus {
     ConfirmedIn(u32),
     InMempoolSince(u32),
     IrrevocablyResolved,
+    OffSync,
     Rejected(i32),
     ReorgedOut,
 }
@@ -69,6 +70,16 @@ impl ConfirmationStatus {
             self,
             ConfirmationStatus::ConfirmedIn(_) | &ConfirmationStatus::InMempoolSince(_)
         )
+    }
+
+    /// Whether the transaction was rejected
+    pub fn rejected(&self) -> bool {
+        matches!(self, ConfirmationStatus::Rejected(_))
+    }
+
+    /// Whether the transaction couldn't be processed because we are off sync.
+    pub fn off_sync(&self) -> bool {
+        matches!(self, ConfirmationStatus::OffSync)
     }
 }
 
@@ -222,7 +233,7 @@ impl Responder {
             carrier.send_transaction(&breach.penalty_tx)
         };
 
-        if status.accepted() {
+        if status.accepted() || status.off_sync() {
             self.add_tracker(uuid, breach, user_id, status);
         }
 
@@ -348,17 +359,19 @@ impl Responder {
     ) -> HashMap<UUID, (Transaction, Option<Transaction>)> {
         let dbm = self.dbm.lock().unwrap();
         let mut tx_to_rebroadcast = HashMap::new();
-        let mut tracker: TransactionTracker;
 
         for (uuid, t) in self.trackers.lock().unwrap().iter() {
             if let ConfirmationStatus::InMempoolSince(h) = t.status {
                 if (height - h) as u8 >= CONFIRMATIONS_BEFORE_RETRY {
-                    tracker = dbm.load_tracker(*uuid).unwrap();
-                    tx_to_rebroadcast.insert(*uuid, (tracker.penalty_tx, None));
+                    tx_to_rebroadcast
+                        .insert(*uuid, (dbm.load_tracker(*uuid).unwrap().penalty_tx, None));
                 }
             } else if let ConfirmationStatus::ReorgedOut = t.status {
-                tracker = dbm.load_tracker(*uuid).unwrap();
+                let tracker = dbm.load_tracker(*uuid).unwrap();
                 tx_to_rebroadcast.insert(*uuid, (tracker.penalty_tx, Some(tracker.dispute_tx)));
+            } else if t.status.off_sync() {
+                tx_to_rebroadcast
+                    .insert(*uuid, (dbm.load_tracker(*uuid).unwrap().penalty_tx, None));
             }
         }
 
@@ -413,13 +426,15 @@ impl Responder {
                 if tx_index.contains_key(&dispute_tx.txid())
                     | carrier.in_mempool(&dispute_tx.txid())
                 {
-                    // Dispute tx is on chain (or mempool), so we only need to care about the penalty
+                    // Dispute tx is on chain (or mempool), so we only need to care about the penalty.
+                    // We know for a fact that the penalty is not in the index, because otherwise it would have been received
+                    // a confirmation during the processing of the current block (hence it would not have been passed to this method)
                     carrier.send_transaction(&penalty_tx)
                 } else {
                     // Dispute tx has also been reorged out, meaning that both transactions need to be broadcast.
                     // DISCUSS: For lightning transactions, if the dispute has been reorged the penalty cannot make it to the network.
                     // If we keep this general, the dispute can simply be a trigger and the penalty doesn't necessarily have to spend from it.
-                    // We'll keel it lightning specific, at least for now.
+                    // We'll keep it lightning specific, at least for now.
                     let status = carrier.send_transaction(&dispute_tx);
                     if let ConfirmationStatus::Rejected(e) = status {
                         log::error!(
@@ -427,6 +442,10 @@ impl Responder {
                         dispute_tx.txid()
                     );
                         status
+                    } else if status.off_sync() {
+                        // If the dispute bounces because we are off-sync, we want to try again with the whole package. Hence, we leave this as
+                        // reorged.
+                        ConfirmationStatus::ReorgedOut
                     } else {
                         // The dispute was accepted, so we can rebroadcast the penalty.
                         carrier.send_transaction(&penalty_tx)
@@ -435,7 +454,7 @@ impl Responder {
             } else {
                 // The tracker has simply reached CONFIRMATIONS_BEFORE_RETRY missed confirmations.
                 log::warn!(
-                    "Penalty transaction has missed many confirmations: {}",
+                    "Penalty transaction has missed many confirmations or was sent while we were off-sync with the backend: {}",
                     penalty_tx.txid()
                 );
                 carrier.send_transaction(&penalty_tx)
@@ -444,11 +463,14 @@ impl Responder {
             if let ConfirmationStatus::Rejected(_) = status {
                 rejected.insert(uuid);
             } else {
-                // Update the tracker if it gets accepted. This will also update the height (since when we are counting the tracker
-                // to have been in mempool), so it resets the wait period instead of trying to rebroadcast every block.
+                // Update the status if the tracker is not rejected. This will update the height for InMempooolSince, resetting the
+                // missed confirmation counter, or flag it as OffSync if we happen to not be on sync.
                 // DISCUSS: We may want to find another approach in the future for the InMempoool transactions.
                 trackers.get_mut(&uuid).unwrap().status = status;
-                accepted.insert(uuid, status);
+
+                if status.accepted() {
+                    accepted.insert(uuid, status);
+                }
             }
         }
 

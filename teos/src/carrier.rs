@@ -104,15 +104,23 @@ impl Carrier {
                     ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
                 }
                 rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {
-                    log::info!(
-                        "Transaction was confirmed long ago, not keeping track of it: {}",
-                        tx.txid()
-                    );
+                    if self.bitcoin_cli.get_block_count().unwrap() as u32 > self.block_height {
+                        // We are out of sync, either we are trying to send things to bitcoind after a reorg (and we have not reached the new tip yet)
+                        // or a block was found right when we were trying to send something and we have not yet processed it.
+                        // In both cases we don't know if what we are trying to send is really old (IRREVOCABLY_RESOLVED) or if it'll just be processed
+                        // in our way up to the new tip (we need to make this work both for txindex and prune mode, so getrawtransaction is not an option)
+                        ConfirmationStatus::OffSync
+                    } else {
+                        log::info!(
+                            "Transaction was confirmed long ago, not keeping track of it: {}",
+                            tx.txid()
+                        );
 
-                    // Given we are not using txindex, if a transaction bounces we cannot get its confirmation count. However, [send_transaction] is guarded by
-                    // checking whether the transaction id can be found in the [Responder]'s [TxIndex], meaning that if the transaction bounces it was confirmed long
-                    // ago (> IRREVOCABLY_RESOLVED), so we don't need to worry about it.
-                    ConfirmationStatus::IrrevocablyResolved
+                        // Given we are not using txindex, if a transaction bounces we cannot get its confirmation count. However, [send_transaction] is guarded by
+                        // checking whether the transaction id can be found in the [Responder]'s [TxIndex], and we know we are on sync, so he transaction
+                        // must have confirmed a long ago (> IRREVOCABLY_RESOLVED). Therefore, we don't need to worry about it anymore.
+                        ConfirmationStatus::IrrevocablyResolved
+                    }
                 }
                 rpc_errors::RPC_DESERIALIZATION_ERROR => {
                     // Adding this here just for completeness. We should never end up here. The Carrier only sends txs handed by the Responder,
@@ -311,12 +319,44 @@ mod tests {
 
     #[test]
     fn test_send_transaction_verify_already_in_chain() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::with_error(
-            rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN as i64,
-        ));
+        let start_height = START_HEIGHT as u32;
+        // Set the backend to be one block ahead of us
+        let bitcoind_mock = BitcoindMock::new(
+            MockOptions::with_error(rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN as i64)
+                .at_height(start_height + 1),
+        );
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock.server);
+
+        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+        let r = carrier.send_transaction(&tx);
+
+        // We are offsync, so the transaction should bounce but tell us about it
+        assert_eq!(r, ConfirmationStatus::OffSync);
+        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
+
+        // Try again, but this time being onsync, now we should get an IrrevocablyResolved
+        // We first need to clear the issued_receipts
+        carrier.issued_receipts.remove(&tx.txid());
+        // And either increase our height
+        carrier.block_height += 1;
+
+        let r = carrier.send_transaction(&tx);
+        assert_eq!(r, ConfirmationStatus::IrrevocablyResolved);
+        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
+    }
+
+    #[test]
+    fn test_send_transaction_verify_already_in_chain_offsync() {
         let start_height = START_HEIGHT as u32;
+        let bitcoind_mock = BitcoindMock::new(
+            MockOptions::with_error(rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN as i64)
+                .at_height(start_height),
+        );
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         start_server(bitcoind_mock.server);
 
         let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);

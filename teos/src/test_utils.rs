@@ -538,6 +538,7 @@ pub(crate) struct BitcoindMock {
 
 #[derive(Default)]
 pub(crate) struct MockOptions {
+    height: u32,
     error_code: Option<i64>,
     in_mempool: bool,
 }
@@ -545,6 +546,7 @@ pub(crate) struct MockOptions {
 impl MockOptions {
     pub fn with_error(error_code: i64) -> Self {
         Self {
+            height: 0,
             error_code: Some(error_code),
             in_mempool: false,
         }
@@ -552,15 +554,22 @@ impl MockOptions {
 
     pub fn in_mempool() -> Self {
         Self {
+            height: 0,
             error_code: None,
             in_mempool: true,
         }
+    }
+
+    pub fn at_height(self, h: u32) -> Self {
+        Self { height: h, ..self }
     }
 }
 
 impl BitcoindMock {
     pub fn new(options: MockOptions) -> Self {
         let mut io = IoHandler::default();
+
+        BitcoindMock::add_getblockcount(&mut io, options.height);
 
         if let Some(error) = options.error_code {
             io.add_sync_method("error", move |_params: Params| {
@@ -612,6 +621,12 @@ impl BitcoindMock {
                 }
             }
         })
+    }
+
+    fn add_getblockcount(io: &mut IoHandler, h: u32) {
+        io.add_sync_method("getblockcount", move |_params: Params| {
+            Ok(Value::Number(h.into()))
+        });
     }
 
     pub fn url(&self) -> &str {
