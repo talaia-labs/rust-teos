@@ -972,7 +972,7 @@ mod tests {
             receipt.subscription_expiry(),
             START_HEIGHT as u32 + DURATION
         );
-
+        #[cfg(feature = "accountable")]
         assert!(cryptography::verify(
             &receipt.to_vec(),
             &receipt.signature().unwrap(),
@@ -1072,8 +1072,9 @@ mod tests {
             user_id,
             ConfirmationStatus::InMempoolSince(chain.get_block_count()),
         );
+        #[cfg(feature = "accountable")]
         let receipt = watcher.add_appointment(triggered_appointment.inner, signature);
-
+        #[cfg(feature = "accountable")]
         assert!(matches!(
             receipt,
             Err(AddAppointmentFailure::AlreadyTriggered)

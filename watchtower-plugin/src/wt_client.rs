@@ -335,9 +335,16 @@ mod tests {
 
     use tempdir::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
-
+    #[cfg(feature = "accountable")]
     use teos_common::test_utils::{
-        generate_random_appointment, get_random_appointment_receipt,
+        generate_random_appointment, 
+        get_random_appointment_receipt,
+        get_random_registration_receipt, get_random_user_id,
+        get_registration_receipt_from_previous,
+    };
+    #[cfg(not(feature = "accountable"))]
+    use teos_common::test_utils::{
+        generate_random_appointment, 
         get_random_registration_receipt, get_random_user_id,
         get_registration_receipt_from_previous,
     };
@@ -425,6 +432,7 @@ mod tests {
 
         // Decrease the slots count (simulate exhaustion) and update with more than the current count it should work
         let locator = generate_random_appointment(None).locator;
+        #[cfg(feature = "accountable")]
         wt_client.add_appointment_receipt(
             tower_id,
             locator,
@@ -482,6 +490,7 @@ mod tests {
             TowerStatus::TemporaryUnreachable,
             TowerStatus::Unreachable,
             TowerStatus::SubscriptionError,
+            #[cfg(feature = "accountable")]
             TowerStatus::Misbehaving,
         ] {
             wt_client.set_tower_status(tower_id, status);
@@ -500,9 +509,11 @@ mod tests {
 
         let locator = generate_random_appointment(None).locator;
         let registration_receipt = get_random_registration_receipt();
+        #[cfg(feature = "accountable")]
         let appointment_receipt = get_random_appointment_receipt(tower_sk);
 
         // If we call this on an unknown tower it will simply do nothing
+        #[cfg(feature = "accountable")]
         wt_client.add_appointment_receipt(
             tower_id,
             locator,
@@ -512,6 +523,7 @@ mod tests {
         assert!(!wt_client.towers.contains_key(&tower_id));
 
         // Add the tower to the state and try again
+        #[cfg(feature = "accountable")]
         let tower_info = TowerInfo::new(
             "talaia.watch".to_owned(),
             registration_receipt.available_slots(),
@@ -521,9 +533,20 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
+        #[cfg(not(feature = "accountable"))]
+        let tower_info = TowerInfo::new(
+            "talaia.watch".to_owned(),
+            registration_receipt.available_slots(),
+            registration_receipt.subscription_start(),
+            registration_receipt.subscription_expiry(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
         wt_client
             .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
             .unwrap();
+        #[cfg(feature = "accountable")]
         wt_client.add_appointment_receipt(
             tower_id,
             locator,
@@ -555,12 +578,23 @@ mod tests {
         assert!(!wt_client.towers.contains_key(&tower_id));
 
         // Add the tower to the state and try again
+        #[cfg(feature = "accountable")]
         let tower_info = TowerInfo::new(
             "talaia.watch".to_owned(),
             registration_receipt.available_slots(),
             registration_receipt.subscription_start(),
             registration_receipt.subscription_expiry(),
             HashMap::new(),
+            vec![appointment.clone()],
+            Vec::new(),
+        );
+        #[cfg(not(feature = "accountable"))]
+        let tower_info = TowerInfo::new(
+            "talaia.watch".to_owned(),
+            registration_receipt.available_slots(),
+            registration_receipt.subscription_start(),
+            registration_receipt.subscription_expiry(),
+            Vec::new(),
             vec![appointment.clone()],
             Vec::new(),
         );
@@ -629,14 +663,25 @@ mod tests {
         assert!(!wt_client.towers.contains_key(&tower_id));
 
         // Add the tower to the state and try again
+        #[cfg(feature = "accountable")]
         let tower_info = TowerInfo::new(
             "talaia.watch".to_owned(),
             registration_receipt.available_slots(),
             registration_receipt.subscription_start(),
             registration_receipt.subscription_expiry(),
             HashMap::new(),
+            vec![appointment.clone()],
+            Vec::new(),
+        );
+        #[cfg(not(feature = "accountable"))]
+        let tower_info = TowerInfo::new(
+            "talaia.watch".to_owned(),
+            registration_receipt.available_slots(),
+            registration_receipt.subscription_start(),
+            registration_receipt.subscription_expiry(),
             Vec::new(),
             vec![appointment.clone()],
+            Vec::new(),
         );
 
         wt_client
@@ -781,8 +826,11 @@ mod tests {
 
         // If we call this on an unknown tower it will simply do nothing
         let appointment = generate_random_appointment(None);
+        #[cfg(feature = "accountable")]
         let receipt = get_random_appointment_receipt(tower_sk);
+        #[cfg(feature = "accountable")]
         let proof = MisbehaviorProof::new(appointment.locator, receipt, get_random_user_id());
+        #[cfg(feature = "accountable")]
         wt_client.flag_misbehaving_tower(tower_id, proof.clone());
         assert!(!wt_client.towers.contains_key(&tower_id));
 
@@ -791,17 +839,22 @@ mod tests {
         wt_client
             .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
             .unwrap();
+        #[cfg(feature = "accountable")]
         wt_client.flag_misbehaving_tower(tower_id, proof.clone());
 
         // Check data in memory
         let tower_summary = wt_client.towers.get(&tower_id);
         assert!(tower_summary.is_some());
+        #[cfg(feature = "accountable")]
         assert!(tower_summary.unwrap().status.is_misbehaving());
 
         // Check data in DB
         let loaded_info = wt_client.load_tower_info(tower_id).unwrap();
+        #[cfg(feature = "accountable")]
         assert!(loaded_info.status.is_misbehaving());
+        #[cfg(feature = "accountable")]
         assert_eq!(loaded_info.misbehaving_proof, Some(proof));
+        #[cfg(feature = "accountable")]
         assert!(loaded_info.appointments.contains_key(&appointment.locator));
     }
 
@@ -843,9 +896,11 @@ mod tests {
 
         let locator = generate_random_appointment(None).locator;
         let registration_receipt = get_random_registration_receipt();
+        #[cfg(feature = "accountable")]
         let appointment_receipt = get_random_appointment_receipt(tower_sk);
 
         // If we call this on an unknown tower it will simply do nothing
+        #[cfg(feature = "accountable")]
         wt_client.add_appointment_receipt(
             tower_id,
             locator,
@@ -885,15 +940,18 @@ mod tests {
 
         let locator = generate_random_appointment(None).locator;
         let registration_receipt = get_random_registration_receipt();
+        #[cfg(feature = "accountable")]
         let appointment_receipt_1 = get_random_appointment_receipt(tower1_sk);
+        #[cfg(feature = "accountable")]
         let appointment_receipt_2 = get_random_appointment_receipt(tower2_sk);
-
+        #[cfg(feature = "accountable")]
         wt_client.add_appointment_receipt(
             tower1_id,
             locator,
             registration_receipt.available_slots(),
             &appointment_receipt_1,
         );
+        #[cfg(feature = "accountable")]
         wt_client.add_appointment_receipt(
             tower2_id,
             locator,

@@ -863,7 +863,7 @@ mod tests {
             receipt.available_slots(),
             receipt.subscription_start(),
             receipt.subscription_expiry(),
-            HashMap::new(),
+            Vec::new(),
             Vec::new(),
             Vec::new()
         );
@@ -1007,6 +1007,7 @@ mod tests {
         dbm.store_tower_record(tower_id, net_addr, &receipt).unwrap();
 
         // Add some appointment receipts and check they match
+        #[cfg(feature = "accountable")]
         let mut receipts = HashMap::new();
         for _ in 0..5 {
             let appointment = generate_random_appointment(None);
@@ -1042,13 +1043,14 @@ mod tests {
 
         // If there is no appointment receipt for the given (locator, tower_id) pair, Error::NotFound is returned
         // Try first with both being unknown
+        #[cfg(feature = "accountable")]
         assert!(dbm.load_appointment_receipt(tower_id, appointment.locator).is_none());
 
         // Add the tower but not the appointment and try again
         let net_addr = "talaia.watch";
         let receipt = get_random_registration_receipt();
         dbm.store_tower_record(tower_id, net_addr, &receipt).unwrap();
-
+        #[cfg(feature = "accountable")]
         assert!(dbm.load_appointment_receipt(tower_id, appointment.locator).is_none());
 
         // Add both
@@ -1058,18 +1060,20 @@ mod tests {
             receipt.subscription_start(),
             receipt.subscription_expiry()
         );
+        #[cfg(feature = "accountable")]
         let appointment_receipt = AppointmentReceipt::with_signature(
             "user_signature".to_owned(),
             42,
             "tower_signature".to_owned()
         );
+        #[cfg(feature = "accountable")]
         dbm.store_appointment_receipt(
             tower_id,
             appointment.locator,
             tower_summary.available_slots,
             &appointment_receipt
         ).unwrap();
-
+        #[cfg(feature = "accountable")]
         assert_eq!(
             dbm.load_appointment_receipt(tower_id, appointment.locator).unwrap(),
             appointment_receipt
@@ -1101,6 +1105,7 @@ mod tests {
         let mut invalid_appointments = HashSet::new();
         for _ in 0..5 {
             let appointment = generate_random_appointment(None);
+            #[cfg(feature = "accountable")]
             let appointment_receipt = AppointmentReceipt::with_signature(
                 user_signature.to_owned(),
                 42,
@@ -1108,7 +1113,7 @@ mod tests {
             );
             let pending_appointment = generate_random_appointment(None);
             let invalid_appointment = generate_random_appointment(None);
-
+            #[cfg(feature = "accountable")]
             dbm.store_appointment_receipt(
                 tower_id,
                 appointment.locator,
@@ -1341,25 +1346,28 @@ mod tests {
 
         // Store a misbehaving proof and load it back
         let appointment = generate_random_appointment(None);
+        #[cfg(feature = "accountable")]
         let appointment_receipt = AppointmentReceipt::with_signature(
             "user_signature".to_owned(),
             42,
             "tower_signature".to_owned()
         );
-
+        #[cfg(feature = "accountable")]
         let proof = MisbehaviorProof::new(
             appointment.locator,
             appointment_receipt,
             get_random_user_id()
         );
-
+        #[cfg(feature = "accountable")]
         dbm.store_misbehaving_proof(tower_id, &proof).unwrap();
+        #[cfg(feature = "accountable")]
         assert_eq!(dbm.load_misbehaving_proof(tower_id).unwrap(), proof);
     }
 
     #[test]
     fn test_store_load_non_existing_misbehaving_proof() {
         let dbm = DBM::in_memory().unwrap();
+        #[cfg(feature = "accountable")]
         assert!(dbm.load_misbehaving_proof(get_random_user_id()).is_none());
     }
 
@@ -1383,25 +1391,28 @@ mod tests {
 
         // // Store a misbehaving proof check
         let appointment = generate_random_appointment(None);
+        #[cfg(feature = "accountable")]
         let appointment_receipt = AppointmentReceipt::with_signature(
             "user_signature".to_owned(),
             42,
             "tower_signature".to_owned()
         );
-
+        #[cfg(feature = "accountable")]
         let proof = MisbehaviorProof::new(
             appointment.locator,
             appointment_receipt,
             get_random_user_id()
         );
-
+        #[cfg(feature = "accountable")]
         dbm.store_misbehaving_proof(tower_id, &proof).unwrap();
+        #[cfg(feature = "accountable")]
         assert!(dbm.exists_misbehaving_proof(tower_id));
     }
 
     #[test]
     fn test_exists_misbehaving_proof_false() {
         let dbm = DBM::in_memory().unwrap();
+        #[cfg(feature = "accountable")]
         assert!(!dbm.exists_misbehaving_proof(get_random_user_id()));
     }
 

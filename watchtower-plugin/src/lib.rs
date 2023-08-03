@@ -290,7 +290,7 @@ impl MisbehaviorProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    #[cfg(feature = "accountable")]
     const STATUSES: [TowerStatus; 5] = [
         TowerStatus::Reachable,
         TowerStatus::TemporaryUnreachable,
@@ -298,7 +298,13 @@ mod tests {
         TowerStatus::SubscriptionError,
         TowerStatus::Misbehaving,
     ];
-
+    #[cfg(not(feature = "accountable"))]
+    const STATUSES: [TowerStatus; 4] = [
+        TowerStatus::Reachable,
+        TowerStatus::TemporaryUnreachable,
+        TowerStatus::Unreachable,
+        TowerStatus::SubscriptionError,
+    ];
     const AVAILABLE_SLOTS: u32 = 21;
     const SUBSCRIPTION_START: u32 = 100;
     const SUBSCRIPTION_EXPIRY: u32 = SUBSCRIPTION_START + 42;
@@ -341,6 +347,7 @@ mod tests {
         }
 
         #[test]
+        #[cfg(feature = "accountable")]
         fn test_is_misbehaving() {
             for status in STATUSES {
                 if status == Misbehaving {
@@ -461,7 +468,7 @@ mod tests {
         use super::*;
 
         use teos_common::test_utils::{generate_random_appointment, get_random_user_id};
-
+        #[cfg(feature = "accountable")]
         impl TowerInfo {
             pub fn empty(
                 net_addr: String,
@@ -480,8 +487,28 @@ mod tests {
                 )
             }
         }
+        #[cfg(not(feature = "accountable"))]
+        impl TowerInfo {
+            pub fn empty(
+                net_addr: String,
+                available_slots: u32,
+                subscription_start: u32,
+                subscription_expiry: u32,
+            ) -> Self {
+                TowerInfo::new(
+                    net_addr,
+                    available_slots,
+                    subscription_start,
+                    subscription_expiry,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            }
+        }
 
         #[test]
+        #[cfg(feature = "accountable")]
         fn test_new() {
             let tower_info = TowerInfo::new(
                 "addr".to_owned(),
@@ -494,6 +521,23 @@ mod tests {
             );
 
             assert!(tower_info.status.is_reachable());
+            #[cfg(feature = "accountable")]
+            assert!(tower_info.misbehaving_proof.is_none());
+        }
+        #[cfg(not(feature = "accountable"))]
+        fn test_new() {
+            let tower_info = TowerInfo::new(
+                "addr".to_owned(),
+                AVAILABLE_SLOTS,
+                SUBSCRIPTION_START,
+                SUBSCRIPTION_EXPIRY,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+
+            assert!(tower_info.status.is_reachable());
+            #[cfg(feature = "accountable")]
             assert!(tower_info.misbehaving_proof.is_none());
         }
 
@@ -510,7 +554,7 @@ mod tests {
             tower_info.status = TowerStatus::Unreachable;
             assert_eq!(unreachable_tower, tower_info);
         }
-
+        #[cfg(feature = "accountable")]
         #[test]
         fn test_set_misbehaving_proof() {
             let mut tower_info = TowerInfo::empty(

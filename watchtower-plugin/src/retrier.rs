@@ -657,18 +657,23 @@ mod tests {
         // Add appointment to pending
         let appointment = generate_random_appointment(None);
         wt_client.lock().unwrap().add_pending_appointment(tower_id, &appointment);
-
+        #[cfg(not(feature = "accountable"))]
         // Prepare the mock response
         let mut add_appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42
         );
+        #[cfg(not(feature = "accountable"))]
         add_appointment_receipt.sign(&tower_sk);
+        #[cfg(feature = "accountable")]
         let add_appointment_response = get_dummy_add_appointment_response(
             appointment.locator,
             &add_appointment_receipt
         );
-
+        #[cfg(not(feature = "accountable"))]
+        let add_appointment_response = get_dummy_add_appointment_response(
+            appointment.locator
+        );
         let api_mock = server
             .mock("POST", Endpoint::AddAppointment.path().as_str())
             .with_status(200)
@@ -774,10 +779,22 @@ mod tests {
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42
         );
+        #[cfg(not(feature = "accountable"))]
+        // Prepare the mock response
+        let mut add_appointment_receipt = AppointmentReceipt::new(
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            42
+        );
+        #[cfg(not(feature = "accountable"))]
         add_appointment_receipt.sign(&tower_sk);
+        #[cfg(feature = "accountable")]
         let add_appointment_response = get_dummy_add_appointment_response(
             appointment.locator,
             &add_appointment_receipt
+        );
+        #[cfg(not(feature = "accountable"))]
+        let add_appointment_response = get_dummy_add_appointment_response(
+            appointment.locator
         );
         let api_mock = server
             .mock("POST", Endpoint::AddAppointment.path().as_str())
@@ -921,10 +938,22 @@ mod tests {
             42
         );
         // Sign with a random key so it counts as misbehaving
-        add_appointment_receipt.sign(&cryptography::get_random_keypair().0);
+        #[cfg(not(feature = "accountable"))]
+        // Prepare the mock response
+        let mut add_appointment_receipt = AppointmentReceipt::new(
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            42
+        );
+        #[cfg(feature = "accountable")]
+        add_appointment_receipt.sign(&tower_sk);
+        #[cfg(feature = "accountable")]
         let add_appointment_response = get_dummy_add_appointment_response(
             appointment.locator,
             &add_appointment_receipt
+        );
+        #[cfg(not(feature = "accountable"))]
+        let add_appointment_response = get_dummy_add_appointment_response(
+            appointment.locator
         );
         let api_mock = server
             .mock("POST", Endpoint::AddAppointment.path().as_str())
@@ -958,6 +987,7 @@ mod tests {
         wait_until!(wt_client.lock().unwrap().get_retrier_status(&tower_id).is_none());
 
         // The tower should have a misbehaving status.
+        #[cfg(feature = "accountable")]
         assert!(wt_client.lock().unwrap().get_tower_status(&tower_id).unwrap().is_misbehaving());
         api_mock.assert_async().await;
 
@@ -1039,10 +1069,16 @@ mod tests {
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42
         );
+        #[cfg(feature = "accountable")]
         add_appointment_receipt.sign(&tower_sk);
+        #[cfg(feature = "accountable")]
         let add_appointment_response = get_dummy_add_appointment_response(
             appointment.locator,
             &add_appointment_receipt
+        );
+        #[cfg(not(feature = "accountable"))]
+        let add_appointment_response = get_dummy_add_appointment_response(
+            appointment.locator
         );
 
         let api_mock = server
@@ -1179,7 +1215,7 @@ mod tests {
 
         // Mock a proper response
         let mut server = mockito::Server::new_async().await;
-
+        #[cfg(feature = "accountable")]
         let api_mock = server
             .mock("POST", Endpoint::AddAppointment.path().as_str())
             .with_status(200)
@@ -1188,12 +1224,13 @@ mod tests {
                 let body = serde_json
                     ::from_slice::<AddAppointmentRequest>(request.body().unwrap())
                     .unwrap();
-
+                
                 let response = if body.appointment.unwrap().locator == appointment.locator.to_vec() {
                     get_dummy_add_appointment_response(appointment.locator, &appointment_receipt)
                 } else {
                     get_dummy_add_appointment_response(appointment2.locator, &appointment2_receipt)
                 };
+                
                 json!(response).to_string().into()
             })
             .expect(2)
@@ -1217,6 +1254,7 @@ mod tests {
         assert!(
             wt_client.lock().unwrap().towers.get(&tower_id).unwrap().pending_appointments.is_empty()
         );
+        #[cfg(feature = "accountable")]
         api_mock.assert_async().await;
 
         task.abort();
@@ -1246,9 +1284,14 @@ mod tests {
             42
         );
         add_appointment_receipt.sign(&tower_sk);
+        #[cfg(feature = "accountable")]
         let add_appointment_response = get_dummy_add_appointment_response(
             appointment.locator,
             &add_appointment_receipt
+        );
+        #[cfg(not(feature = "accountable"))]
+        let add_appointment_response = get_dummy_add_appointment_response(
+            appointment.locator
         );
         let api_mock = server
             .mock("POST", Endpoint::AddAppointment.path().as_str())
@@ -1307,9 +1350,14 @@ mod tests {
             42
         );
         add_appointment_receipt.sign(&cryptography::get_random_keypair().0);
+        #[cfg(feature = "accountable")]
         let add_appointment_response = get_dummy_add_appointment_response(
             appointment.locator,
             &add_appointment_receipt
+        );
+        #[cfg(not(feature = "accountable"))]
+        let add_appointment_response = get_dummy_add_appointment_response(
+            appointment.locator
         );
         let api_mock = server
             .mock("POST", Endpoint::AddAppointment.path().as_str())
@@ -1321,6 +1369,7 @@ mod tests {
         // Since we are retrying manually, we need to add the data to pending appointments manually too
         let retrier = Retrier::new(wt_client, tower_id, HashSet::from([appointment.locator]));
         let r = retrier.run().await;
+        #[cfg(feature = "accountable")]
         assert!(matches!(r, Err(Error::Permanent(RetryError::Misbehaving { .. }))));
         api_mock.assert_async().await;
     }

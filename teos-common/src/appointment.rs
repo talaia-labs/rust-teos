@@ -38,6 +38,13 @@ impl Locators {
             locator,
         })
     }
+    
+    pub fn new(txid: Txid) -> Self {
+        Locators {
+            data: txid[..LOCATOR_LEN].try_into().unwrap(),
+            locator: Locator(txid[..LOCATOR_LEN].try_into().unwrap()),
+        }
+    }
 }
 
 
