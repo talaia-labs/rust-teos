@@ -442,12 +442,9 @@ impl Responder {
                         dispute_tx.txid()
                     );
                         status
-                    } else if status.off_sync() {
-                        // If the dispute bounces because we are off-sync, we want to try again with the whole package. Hence, we leave this as
-                        // reorged.
-                        ConfirmationStatus::ReorgedOut
                     } else {
-                        // The dispute was accepted, so we can rebroadcast the penalty.
+                        // If the dispute is not rejected we can send the penalty.
+                        // Notice this covers both the dispute being accepted or bouncing, given bouncing will mean it is already on chain.
                         carrier.send_transaction(&penalty_tx)
                     }
                 }
