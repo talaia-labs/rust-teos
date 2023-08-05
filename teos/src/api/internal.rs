@@ -477,13 +477,18 @@ mod tests_private_api {
 
         // Add data to the Watcher so we can retrieve it later on
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
+            .await
             .unwrap();
 
         let response = internal_api
@@ -504,7 +509,7 @@ mod tests_private_api {
         let (internal_api, _s) = create_api().await;
 
         // Add data to the Responser so we can retrieve it later on
-        internal_api.watcher.add_random_tracker_to_responder();
+        internal_api.watcher.add_random_tracker_to_responder().await;
 
         let response = internal_api
             .get_all_appointments(Request::new(()))
@@ -547,12 +552,17 @@ mod tests_private_api {
             // Add that many appointments to the watcher.
             for _ in 0..appointments_to_create {
                 let (user_sk, user_pk) = get_random_keypair();
-                internal_api.watcher.register(UserId(user_pk)).unwrap();
+                internal_api
+                    .watcher
+                    .register(UserId(user_pk))
+                    .await
+                    .unwrap();
                 let appointment = generate_dummy_appointment(Some(&dispute_txid)).inner;
                 let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
                 internal_api
                     .watcher
                     .add_appointment(appointment, signature)
+                    .await
                     .unwrap();
             }
 
@@ -604,7 +614,8 @@ mod tests_private_api {
                 );
                 internal_api
                     .watcher
-                    .add_dummy_tracker_to_responder(&tracker);
+                    .add_dummy_tracker_to_responder(&tracker)
+                    .await;
             }
 
             let locator = Locator::new(dispute_tx.txid());
@@ -657,7 +668,7 @@ mod tests_private_api {
         // Register a user
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        internal_api.watcher.register(user_id).unwrap();
+        internal_api.watcher.register(user_id).await.unwrap();
 
         // Add data to the Watcher
         for _ in 0..2 {
@@ -666,12 +677,13 @@ mod tests_private_api {
             internal_api
                 .watcher
                 .add_appointment(appointment.clone(), user_signature)
+                .await
                 .unwrap();
         }
 
         // And the Responder
         for _ in 0..3 {
-            internal_api.watcher.add_random_tracker_to_responder();
+            internal_api.watcher.add_random_tracker_to_responder().await;
         }
 
         let response = internal_api
@@ -696,7 +708,7 @@ mod tests_private_api {
         for _ in 0..2 {
             let (_, user_pk) = get_random_keypair();
             let user_id = UserId(user_pk);
-            internal_api.watcher.register(user_id).unwrap();
+            internal_api.watcher.register(user_id).await.unwrap();
             users.insert(user_id.to_vec());
         }
 
@@ -729,7 +741,7 @@ mod tests_private_api {
         // Register a user and get it back
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        internal_api.watcher.register(user_id).unwrap();
+        internal_api.watcher.register(user_id).await.unwrap();
 
         let response = internal_api
             .get_user(Request::new(msgs::GetUserRequest {
@@ -749,6 +761,7 @@ mod tests_private_api {
         internal_api
             .watcher
             .add_appointment(appointment.inner, user_signature)
+            .await
             .unwrap();
 
         let response = internal_api
@@ -912,7 +925,11 @@ mod tests_public_api {
 
         // User must be registered
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
@@ -966,7 +983,11 @@ mod tests_public_api {
 
         // User is registered but has no slots
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
@@ -995,7 +1016,11 @@ mod tests_public_api {
 
         // User is registered but subscription is expired
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
@@ -1021,7 +1046,7 @@ mod tests_public_api {
 
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        internal_api.watcher.register(user_id).unwrap();
+        internal_api.watcher.register(user_id).await.unwrap();
 
         // Add a tracker to the responder to simulate it being triggered.
         let dispute_tx = get_random_tx();
@@ -1032,7 +1057,8 @@ mod tests_public_api {
         );
         internal_api
             .get_watcher()
-            .add_dummy_tracker_to_responder(&tracker);
+            .add_dummy_tracker_to_responder(&tracker)
+            .await;
 
         // Try to add it again using the API.
         let appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
@@ -1084,7 +1110,11 @@ mod tests_public_api {
 
         // The user must be registered
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         // Add the appointment
         let appointment = generate_dummy_appointment(None).inner;
@@ -1092,6 +1122,7 @@ mod tests_public_api {
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
+            .await
             .unwrap();
 
         // Get the appointment through the API
@@ -1117,7 +1148,11 @@ mod tests_public_api {
 
         // Add a first user to link the appointment to him
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         // There's no need to add the appointment given the subscription status is checked first
         let appointment = generate_dummy_appointment(None).inner;
@@ -1145,7 +1180,11 @@ mod tests_public_api {
 
         // The user is registered but the appointment does not exist
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         // Try to get the appointment through the API
         let appointment = generate_dummy_appointment(None).inner;
@@ -1172,7 +1211,11 @@ mod tests_public_api {
 
         // Register the user
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         // There s no need to add the appointment given the subscription status is checked first.
         let appointment = generate_dummy_appointment(None).inner;
@@ -1223,7 +1266,11 @@ mod tests_public_api {
 
         // The user must be registered
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         // Get the subscription info though the API
         let message = "get subscription info".to_string();
@@ -1270,7 +1317,11 @@ mod tests_public_api {
 
         // The user is registered but the subscription has expired
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api
+            .watcher
+            .register(UserId(user_pk))
+            .await
+            .unwrap();
 
         // Try to get the subscription info though the API
         let message = "get subscription info".to_string();

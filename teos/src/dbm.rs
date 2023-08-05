@@ -153,7 +153,7 @@ impl DBM {
     }
 
     /// Removes some users from the database in batch.
-    pub(crate) async fn batch_remove_users(&self, users: &Vec<UserId>) -> usize {
+    pub(crate) async fn batch_remove_users(&self, users: Vec<UserId>) -> usize {
         let users: Vec<_> = users.iter().map(|uuid| uuid.to_vec()).collect();
 
         for chunk in users.chunks(SQL_VARIABLE_LIMIT) {
@@ -330,6 +330,7 @@ impl DBM {
     /// Removes an [Appointment] from the database.
     pub(crate) async fn remove_appointment(&self, uuid: UUID) {
         if let Err(e) = sqlx::query("DELETE FROM appointments WHERE UUID=($1)")
+            .bind(uuid.to_vec())
             .execute(&self.pool)
             .await
         {
@@ -342,8 +343,8 @@ impl DBM {
     /// update is atomic.
     pub(crate) async fn batch_remove_appointments(
         &self,
-        appointments: &Vec<UUID>,
-        updated_users: &HashMap<UserId, UserInfo>,
+        appointments: Vec<UUID>,
+        updated_users: HashMap<UserId, UserInfo>,
     ) -> usize {
         let uuids: Vec<_> = appointments.iter().map(|uuid| uuid.to_vec()).collect();
         let mut tx = self.pool.begin().await.unwrap();
@@ -790,7 +791,7 @@ mod tests {
 
         // SQL_VARIABLE_LIMIT is 10 for tests,
         // Check that deletion had `ceil(10 * 3 / 2) / 10` (2) queries on it
-        assert_eq!(dbm.batch_remove_users(&to_be_deleted).await, 2);
+        assert_eq!(dbm.batch_remove_users(to_be_deleted).await, 2);
 
         // Check user data was deleted
         assert_eq!(rest, dbm.load_all_users().await.keys().cloned().collect());
@@ -813,7 +814,7 @@ mod tests {
         // Appointment only
         dbm.store_appointment(uuid, &appointment).await.unwrap();
 
-        dbm.batch_remove_users(&vec![appointment.user_id]).await;
+        dbm.batch_remove_users(vec![appointment.user_id]).await;
         assert!(dbm.load_user(appointment.user_id).await.is_none());
         assert!(dbm.load_appointment(uuid).await.is_none());
 
@@ -822,7 +823,7 @@ mod tests {
         dbm.store_appointment(uuid, &appointment).await.unwrap();
         dbm.store_tracker(uuid, &tracker).await.unwrap();
 
-        dbm.batch_remove_users(&vec![appointment.user_id]).await;
+        dbm.batch_remove_users(vec![appointment.user_id]).await;
         assert!(dbm.load_user(appointment.user_id).await.is_none());
         assert!(dbm.load_appointment(uuid).await.is_none());
         assert!(dbm.load_tracker(uuid).await.is_none());
@@ -834,7 +835,7 @@ mod tests {
         let users = (0..10).map(|_| get_random_user_id()).collect();
 
         // Test it does not fail even if the user does not exist
-        dbm.batch_remove_users(&users).await;
+        dbm.batch_remove_users(users).await;
     }
 
     #[tokio::test]
@@ -1101,6 +1102,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_remove_appointment() {
+        let dbm = DBM::test_db().await;
+
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(
+            AVAILABLE_SLOTS + 123,
+            SUBSCRIPTION_START,
+            SUBSCRIPTION_EXPIRY,
+        );
+        dbm.store_user(user_id, &user).await.unwrap();
+
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        dbm.store_appointment(uuid, &appointment).await.unwrap();
+
+        dbm.remove_appointment(uuid).await;
+        assert!(!dbm.appointment_exists(uuid).await)
+    }
+
+    #[tokio::test]
     async fn test_batch_remove_appointments() {
         let dbm = DBM::test_db().await;
 
@@ -1133,7 +1153,7 @@ mod tests {
 
             // Check that the db transaction had i queries on it
             assert_eq!(
-                dbm.batch_remove_appointments(&to_be_deleted, &updated_users)
+                dbm.batch_remove_appointments(to_be_deleted, updated_users)
                     .await,
                 i as usize
             );
@@ -1167,8 +1187,8 @@ mod tests {
         dbm.store_appointment(uuid, &appointment).await.unwrap();
 
         dbm.batch_remove_appointments(
-            &vec![uuid],
-            &HashMap::from_iter([(appointment.user_id, info.clone())]),
+            vec![uuid],
+            HashMap::from_iter([(appointment.user_id, info.clone())]),
         )
         .await;
         assert!(dbm.load_appointment(uuid).await.is_none());
@@ -1178,8 +1198,8 @@ mod tests {
         dbm.store_tracker(uuid, &tracker).await.unwrap();
 
         dbm.batch_remove_appointments(
-            &vec![uuid],
-            &HashMap::from_iter([(appointment.user_id, info)]),
+            vec![uuid],
+            HashMap::from_iter([(appointment.user_id, info)]),
         )
         .await;
         assert!(dbm.load_appointment(uuid).await.is_none());
@@ -1192,7 +1212,7 @@ mod tests {
         let appointments = (0..10).map(|_| generate_uuid()).collect();
 
         // Test it does not fail even if the user does not exist
-        dbm.batch_remove_appointments(&appointments, &HashMap::new())
+        dbm.batch_remove_appointments(appointments, HashMap::new())
             .await;
     }
 
@@ -1499,7 +1519,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn test_load_trackers_with_confirmation_status_confirmed() {
+    async fn test_load_trackers_with_confirmation_status_confirmed() {
         let dbm = DBM::test_db().await;
         let n_blocks = 100;
         let n_trackers = 30;
@@ -1556,7 +1576,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_trackers_with_confirmation_status_bad_status() {
-        let dbm = DBM::in_memory().unwrap();
+        let dbm = DBM::test_db().await;
 
         assert!(matches!(
             dbm.load_trackers_with_confirmation_status(ConfirmationStatus::Rejected(

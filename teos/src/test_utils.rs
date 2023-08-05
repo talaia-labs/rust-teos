@@ -474,13 +474,16 @@ pub(crate) async fn create_api_with_config(
     let mut chain = Blockchain::default().with_height(START_HEIGHT);
 
     let dbm = Arc::new(DBM::test_db().await);
-    let gk = Arc::new(Gatekeeper::new(
-        chain.get_block_count(),
-        api_config.slots,
-        api_config.duration,
-        EXPIRY_DELTA,
-        dbm.clone(),
-    ));
+    let gk = Arc::new(
+        Gatekeeper::new(
+            chain.get_block_count(),
+            api_config.slots,
+            api_config.duration,
+            EXPIRY_DELTA,
+            dbm.clone(),
+        )
+        .await,
+    );
     let responder =
         create_responder(&mut chain, gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
     let (watcher, stopper) = create_watcher(
