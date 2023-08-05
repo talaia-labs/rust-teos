@@ -199,14 +199,8 @@ mod tests {
         let spv_client = SpvClient::new(old_tip, poller, cache, &listener);
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
 
-        let mut cm = ChainMonitor::new(
-            spv_client,
-            old_tip,
-            1,
-            shutdown_signal,
-            bitcoind_reachable,
-        )
-        .await;
+        let mut cm =
+            ChainMonitor::new(spv_client, old_tip, 1, shutdown_signal, bitcoind_reachable).await;
 
         // If a new (best) block gets mined, it should be connected
         cm.poll_best_tip().await;
@@ -236,14 +230,8 @@ mod tests {
         let spv_client = SpvClient::new(best_tip, poller, cache, &listener);
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
 
-        let mut cm = ChainMonitor::new(
-            spv_client,
-            best_tip,
-            1,
-            shutdown_signal,
-            bitcoind_reachable,
-        )
-        .await;
+        let mut cm =
+            ChainMonitor::new(spv_client, best_tip, 1, shutdown_signal, bitcoind_reachable).await;
 
         // If a new (worse, just one) block gets mined, nothing gets connected nor disconnected
         cm.poll_best_tip().await;
@@ -272,14 +260,8 @@ mod tests {
         let spv_client = SpvClient::new(old_best, poller, cache, &listener);
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
 
-        let mut cm = ChainMonitor::new(
-            spv_client,
-            old_best,
-            1,
-            shutdown_signal,
-            bitcoind_reachable,
-        )
-        .await;
+        let mut cm =
+            ChainMonitor::new(spv_client, old_best, 1, shutdown_signal, bitcoind_reachable).await;
 
         // If a a reorg is found (tip is disconnected and a new best is found), both data should be connected and disconnected
         cm.poll_best_tip().await;

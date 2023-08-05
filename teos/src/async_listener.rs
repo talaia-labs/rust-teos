@@ -1,3 +1,6 @@
+//! Contains the [AsyncListen] trait that's analogous to the [chain::Listen] from LDK but runs
+//! inside an asynchronous context.
+
 use crate::dbm::DBM;
 
 use std::marker::{Send, Sync};
@@ -7,6 +10,7 @@ use bitcoin::{Block, BlockHeader};
 use lightning::chain;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
+/// A trait similar to LDK's [chain::Listen] but runs asynchronously.
 #[tonic::async_trait]
 pub trait AsyncListen: Send + Sync {
     async fn block_connected(&self, block: &Block, height: u32);
@@ -43,24 +47,31 @@ enum BlockListenerAction {
     BlockDisconnected(BlockHeader, u32),
 }
 
-pub struct AsyncBlockListener<L> {
+/// A helper struct that wraps a listener that implements [AsyncListen] and feeds it connected and disconnected
+/// blocks received from [UnboundedReceiver] in the background.
+pub struct AsyncBlockListener<L: AsyncListen> {
     listener: L,
     dbm: Arc<Mutex<DBM>>,
     rx: UnboundedReceiver<BlockListenerAction>,
 }
 
-impl<L> AsyncBlockListener<L>
-where
-    L: AsyncListen + 'static,
-{
-    pub fn new(listener: L, dbm: Arc<Mutex<DBM>>) -> SyncBlockListener {
+impl<L: AsyncListen + 'static> AsyncBlockListener<L> {
+    /// Takes a `listener` that implements [AsyncListen] and returns a listener that implements [chain::Listen].
+    ///
+    /// These two listeners are connected. That is, blocks connected-to/disconnected-from the [chain::Listen]
+    /// listener are forwarded to the [AsyncListen] listener.
+    ///
+    /// The [AsyncListen] listener will be actively listening for actions in a background tokio task.
+    pub fn wrap_listener(listener: L, dbm: Arc<Mutex<DBM>>) -> SyncBlockListener {
         let (tx, rx) = unbounded_channel();
         let actor = AsyncBlockListener { listener, dbm, rx };
         actor.run_actor_in_bg();
         SyncBlockListener { tx }
     }
 
-    fn run_actor_in_bg(mut self: Self) {
+    /// Spawns a forever living task that listens for [BlockListenerAction] and feeds them to the
+    /// listener in an asynchronous context.
+    fn run_actor_in_bg(mut self) {
         tokio::spawn(async move {
             while let Some(action) = self.rx.recv().await {
                 match action {
@@ -82,7 +93,8 @@ where
     }
 }
 
-#[derive(Debug)]
+/// A block listener that implements the sync [chain::Listen] trait. All it does is forward the blocks received
+/// another (async) block listener through an [UnboundedSender].
 pub struct SyncBlockListener {
     tx: UnboundedSender<BlockListenerAction>,
 }
@@ -107,7 +119,7 @@ impl chain::Listen for SyncBlockListener {
         height: u32,
     ) {
         let block = Block {
-            header: header.clone(),
+            header: *header,
             txdata: txdata.iter().map(|&(_, tx)| tx.clone()).collect(),
         };
         self.tx

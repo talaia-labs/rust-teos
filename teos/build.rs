@@ -1,4 +1,6 @@
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
+    // trigger recompilation when a new migration is added without a change in the source code.
+    println!("cargo:rerun-if-changed=migrations");
     tonic_build::configure()
         .extern_path(".common.teos.v2", "::teos-common::protos")
         .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
@@ -23,7 +25,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/teos/v2/user.proto",
             ],
             &["proto/teos/v2", "../teos-common/proto/"],
-        )?;
-
-    Ok(())
+        )
+        .unwrap();
 }

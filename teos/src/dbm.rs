@@ -84,17 +84,9 @@ pub struct DBM {
 }
 
 impl DBM {
-    fn get_connection(&self) -> &Connection {
-        &self.connection
-    }
-
-    fn get_mut_connection(&mut self) -> &mut Connection {
-        &mut self.connection
-    }
-
     /// Creates the database tables if not present.
     fn create_tables(&mut self, tables: Vec<&str>) -> Result<(), SqliteError> {
-        let tx = self.get_mut_connection().transaction().unwrap();
+        let tx = self.connection.transaction().unwrap();
         for table in tables.iter() {
             tx.execute(table, [])?;
         }
@@ -103,7 +95,7 @@ impl DBM {
 
     /// Generic method to store data into the database.
     fn store_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
-        match self.get_connection().execute(query, params) {
+        match self.connection.execute(query, params) {
             Ok(_) => Ok(()),
             Err(e) => match e {
                 SqliteError::SqliteFailure(ie, _) => match ie.code {
@@ -121,7 +113,7 @@ impl DBM {
 
     /// Generic method to remove data from the database.
     fn remove_data<P: Params>(&self, query: &str, params: P) -> Result<(), Error> {
-        match self.get_connection().execute(query, params).unwrap() {
+        match self.connection.execute(query, params).unwrap() {
             0 => Err(Error::NotFound),
             _ => Ok(()),
         }

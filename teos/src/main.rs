@@ -20,13 +20,14 @@ use lightning_block_sync::{BlockSource, BlockSourceError, SpvClient, UnboundedCa
 
 use teos::api::internal::InternalAPI;
 use teos::api::{http, tor::TorAPI};
+use teos::async_listener::AsyncBlockListener;
 use teos::bitcoin_cli::BitcoindClient;
 use teos::carrier::Carrier;
 use teos::chain_monitor::ChainMonitor;
 use teos::config::{self, Config, Opt};
 use teos::dbm::DBM;
+use teos::dbm_new::DBM as NewDBM;
 use teos::gatekeeper::Gatekeeper;
-use teos::listener_actor::AsyncBlockListener;
 use teos::protos as msgs;
 use teos::protos::private_tower_services_server::PrivateTowerServicesServer;
 use teos::protos::public_tower_services_server::PublicTowerServicesServer;
@@ -58,9 +59,9 @@ where
     Ok(last_n_blocks)
 }
 
-fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
+async fn create_new_tower_keypair(dbm: &NewDBM) -> (SecretKey, PublicKey) {
     let (sk, pk) = get_random_keypair();
-    db.store_tower_key(&sk).unwrap();
+    dbm.store_tower_key(&sk).await.unwrap();
     (sk, pk)
 }
 
@@ -123,6 +124,22 @@ async fn main() {
         conf.log_non_default_options();
     }
 
+    let new_dbm = if conf.database_url == "managed" {
+        teos::dbm_new::DBM::new(&format!(
+            "sqlite://{}",
+            path_network
+                // rwc = Read + Write + Create (creates the database file if not found)
+                .join("teos_db.sql3?mode=rwc")
+                .to_str()
+                .expect("Path to the sqlite DB contains non-UTF-8 characters.")
+        ))
+        .await
+        .unwrap()
+    } else {
+        teos::dbm_new::DBM::new(&conf.database_url).await.unwrap()
+    };
+    let new_dbm = Arc::new(new_dbm);
+
     let dbm = Arc::new(Mutex::new(
         DBM::new(path_network.join("teos_db.sql3")).unwrap(),
     ));
@@ -130,15 +147,14 @@ async fn main() {
     // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
     // key straightaway
     let (tower_sk, tower_pk) = {
-        let locked_db = dbm.lock().unwrap();
         if conf.overwrite_key {
             log::info!("Overwriting tower keys");
-            create_new_tower_keypair(&locked_db)
-        } else if let Some(sk) = locked_db.load_tower_key() {
+            create_new_tower_keypair(&new_dbm).await
+        } else if let Some(sk) = new_dbm.load_tower_key().await {
             (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk))
         } else {
             log::info!("Tower keys not found. Creating a fresh set");
-            create_new_tower_keypair(&locked_db)
+            create_new_tower_keypair(&new_dbm).await
         }
     };
     log::info!("tower_id: {tower_pk}");
@@ -183,7 +199,7 @@ async fn main() {
     );
     let mut derefed = bitcoin_cli.deref();
     // Load last known block from DB if found. Poll it from Bitcoind otherwise.
-    let last_known_block = dbm.lock().unwrap().load_last_known_block();
+    let last_known_block = new_dbm.load_last_known_block().await;
     let tip = if let Some(block_hash) = last_known_block {
         let mut last_known_header = derefed
             .get_header(&block_hash, None)
@@ -313,9 +329,10 @@ async fn main() {
     // The ordering here actually matters. Listeners are called by order, and we want the gatekeeper to be called
     // first so it updates the users' states and both the Watcher and the Responder operate only on registered users.
     let listeners = (gatekeeper, (watcher.clone(), responder));
+
     // This spawns a separate async actor that will be fed new blocks from a sync block listener.
     // In this way we can have our components listen to blocks in an async manner from the async actor.
-    let listener = AsyncBlockListener::new(listeners, dbm);
+    let listener = AsyncBlockListener::wrap_listener(listeners, dbm);
 
     let cache = &mut UnboundedCache::new();
     let spv_client = SpvClient::new(tip, poller, cache, &listener);

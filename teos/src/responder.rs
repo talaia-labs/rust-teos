@@ -4,14 +4,14 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::{consensus, BlockHash};
-use bitcoin::{BlockHeader, Transaction, Txid};
-use lightning::chain;
+use bitcoin::{Block, BlockHeader, Transaction, Txid};
 use lightning_block_sync::poll::ValidatedBlock;
 
 use teos_common::constants;
 use teos_common::protos as common_msgs;
 use teos_common::UserId;
 
+use crate::async_listener::AsyncListen;
 use crate::carrier::Carrier;
 use crate::dbm::DBM;
 use crate::extended_appointment::UUID;
@@ -388,7 +388,8 @@ impl Responder {
 }
 
 /// Listen implementation by the [Responder]. Handles monitoring and reorgs.
-impl chain::Listen for Responder {
+#[tonic::async_trait]
+impl AsyncListen for Responder {
     /// Handles the monitoring process by the [Responder].
     ///
     /// Watching is performed in a per-block basis. A [TransactionTracker] is tracked until:
@@ -399,20 +400,16 @@ impl chain::Listen for Responder {
     /// Every time a block is received the tracking conditions are checked against the monitored [TransactionTracker]s and
     /// data deletion is performed accordingly. Moreover, lack of confirmations is check for the tracked transactions and
     /// rebroadcasting is performed for those that have missed too many.
-    fn filtered_block_connected(
-        &self,
-        header: &BlockHeader,
-        txdata: &chain::transaction::TransactionData,
-        height: u32,
-    ) {
-        log::info!("New block received: {}", header.block_hash());
+    async fn block_connected(&self, block: &Block, height: u32) {
+        log::info!("New block received: {}", block.header.block_hash());
         self.carrier.lock().unwrap().update_height(height);
 
-        let txs = txdata
+        let txs = block
+            .txdata
             .iter()
-            .map(|(_, tx)| (tx.txid(), header.block_hash()))
+            .map(|tx| (tx.txid(), block.header.block_hash()))
             .collect();
-        self.tx_index.lock().unwrap().update(*header, &txs);
+        self.tx_index.lock().unwrap().update(block.header, &txs);
 
         // Delete trackers completed at this height
         if let Some(trackers) = self.check_confirmations(txs.keys().cloned().collect(), height) {
@@ -444,7 +441,7 @@ impl chain::Listen for Responder {
     }
 
     /// Handles reorgs in the [Responder].
-    fn block_disconnected(&self, header: &BlockHeader, height: u32) {
+    async fn block_disconnected(&self, header: &BlockHeader, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
         // Update the carrier and our tx_index.
         self.carrier.lock().unwrap().update_height(height);
@@ -466,24 +463,9 @@ impl chain::Listen for Responder {
     }
 }
 
-use bitcoin::Block;
-use crate::listener_actor::AsyncListen;
-
-#[tonic::async_trait]
-impl AsyncListen for Responder {
-    async fn block_connected(&self, block: &Block, height: u32) {
-        chain::Listen::block_connected(self, block, height);
-    }
-
-    async fn block_disconnected(&self, header: &BlockHeader, height: u32) {
-        chain::Listen::block_disconnected(self, header, height);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightning::chain::Listen;
     use teos_common::appointment::Locator;
 
     use std::collections::HashMap;
@@ -1165,14 +1147,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_filtered_block_connected() {
+    async fn test_block_connected() {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let start_height = START_HEIGHT * 2;
         let mut chain = Blockchain::default().with_height(start_height);
         let (responder, _s) =
             init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm).await;
 
-        // filtered_block_connected is used to keep track of the confirmation received (or missed) by the trackers the Responder
+        // block_connected is used to keep track of the confirmation received (or missed) by the trackers the Responder
         // is keeping track of.
         //
         // If there are any trackers, the Responder will:
@@ -1342,8 +1324,8 @@ mod tests {
         ));
         let height = chain.get_block_count();
         // We connect the gatekeeper first so it deletes the outdated users.
-        responder.gatekeeper.block_connected(&block, height);
-        responder.block_connected(&block, height);
+        responder.gatekeeper.block_connected(&block, height).await;
+        responder.block_connected(&block, height).await;
 
         // CARRIER CHECKS
         assert!(responder
@@ -1468,7 +1450,7 @@ mod tests {
         // Check that trackers are flagged as reorged if the height they were included at gets disconnected
         for (i, uuid) in block_range.clone().zip(reorged.iter()).rev() {
             // The header doesn't really matter, just the height
-            responder.block_disconnected(&chain.tip().header, i as u32);
+            responder.block_disconnected(&chain.tip().header, i as u32).await;
             // Check that the proper tracker gets reorged at the proper height
             assert!(responder.reorged_trackers.lock().unwrap().contains(uuid));
             // Check that the carrier block_height has been updated
@@ -1481,7 +1463,9 @@ mod tests {
         }
 
         // But should be clear after the first block connection
-        responder.block_connected(&chain.generate(None), block_range.start as u32);
+        responder
+            .block_connected(&chain.generate(None), block_range.start as u32)
+            .await;
         assert!(responder.reorged_trackers.lock().unwrap().is_empty());
     }
 }

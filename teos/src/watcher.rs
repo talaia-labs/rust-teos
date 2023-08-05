@@ -5,8 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bitcoin::secp256k1::SecretKey;
-use bitcoin::{BlockHeader, Transaction};
-use lightning::chain;
+use bitcoin::{Block, BlockHeader, Transaction};
 use lightning_block_sync::poll::ValidatedBlock;
 
 use teos_common::appointment::{Appointment, Locator};
@@ -14,6 +13,7 @@ use teos_common::cryptography;
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
+use crate::async_listener::AsyncListen;
 use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, MaxSlotsReached, UserInfo};
@@ -479,7 +479,8 @@ impl Watcher {
 }
 
 /// Listen implementation by the [Watcher]. Handles monitoring and reorgs.
-impl chain::Listen for Watcher {
+#[tonic::async_trait]
+impl AsyncListen for Watcher {
     /// Handles the monitoring process by the [Watcher].
     ///
     /// Watching is performed in a per-block basis. Therefore, a breach is only considered (and detected) if seen
@@ -491,23 +492,19 @@ impl chain::Listen for Watcher {
     ///
     /// This also takes care of updating the [LocatorCache] and removing outdated data from the [Watcher] when
     /// told by the [Gatekeeper].
-    fn filtered_block_connected(
-        &self,
-        header: &BlockHeader,
-        txdata: &chain::transaction::TransactionData,
-        height: u32,
-    ) {
-        log::info!("New block received: {}", header.block_hash());
+    async fn block_connected(&self, block: &Block, height: u32) {
+        log::info!("New block received: {}", block.header.block_hash());
 
-        let locator_tx_map = txdata
+        let locator_tx_map = block
+            .txdata
             .iter()
-            .map(|(_, tx)| (Locator::new(tx.txid()), (*tx).clone()))
+            .map(|tx| (Locator::new(tx.txid()), (*tx).clone()))
             .collect();
 
         self.locator_cache
             .lock()
             .unwrap()
-            .update(*header, &locator_tx_map);
+            .update(block.header, &locator_tx_map);
 
         // Get the breaches found in this block, handle them, and delete invalid ones.
         if let Some(invalid_breaches) = self.handle_breaches(self.get_breaches(locator_tx_map)) {
@@ -522,7 +519,7 @@ impl chain::Listen for Watcher {
     /// Handle reorgs in the [Watcher].
     ///
     /// Fixes the [LocatorCache] by removing the disconnected data and updates the last_known_block_height.
-    fn block_disconnected(&self, header: &BlockHeader, height: u32) {
+    async fn block_disconnected(&self, header: &BlockHeader, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
         self.locator_cache
             .lock()
@@ -530,20 +527,6 @@ impl chain::Listen for Watcher {
             .remove_disconnected_block(&header.block_hash());
         self.last_known_block_height
             .store(height - 1, Ordering::Release);
-    }
-}
-
-use bitcoin::Block;
-use crate::listener_actor::AsyncListen;
-
-#[tonic::async_trait]
-impl AsyncListen for Watcher {
-    async fn block_connected(&self, block: &Block, height: u32) {
-        chain::Listen::block_connected(self, block, height);
-    }
-
-    async fn block_disconnected(&self, header: &BlockHeader, height: u32) {
-        chain::Listen::block_disconnected(self, header, height);
     }
 }
 
@@ -566,8 +549,6 @@ mod tests {
     use teos_common::cryptography::get_random_keypair;
 
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
-
-    use lightning::chain::Listen;
 
     impl PartialEq for Watcher {
         fn eq(&self, other: &Self) -> bool {
@@ -1229,7 +1210,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_filtered_block_connected() {
+    async fn test_block_connected() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let (watcher, _s) = init_watcher(&mut chain).await;
 
@@ -1242,7 +1223,9 @@ mod tests {
             watcher.last_known_block_height.load(Ordering::Relaxed),
             chain.get_block_count()
         );
-        watcher.block_connected(&chain.generate(None), chain.get_block_count());
+        watcher
+            .block_connected(&chain.generate(None), chain.get_block_count())
+            .await;
         assert_eq!(
             watcher.last_known_block_height.load(Ordering::Relaxed),
             chain.get_block_count()
@@ -1290,8 +1273,11 @@ mod tests {
         let block = chain.generate(None);
         watcher
             .gatekeeper
-            .block_connected(&block, chain.get_block_count());
-        watcher.block_connected(&block, chain.get_block_count());
+            .block_connected(&block, chain.get_block_count())
+            .await;
+        watcher
+            .block_connected(&block, chain.get_block_count())
+            .await;
 
         // uuid1 and user1 should have been deleted while uuid2 and user2 still exists.
         assert!(!watcher.dbm.lock().unwrap().appointment_exists(uuid1));
@@ -1321,8 +1307,11 @@ mod tests {
         let block = chain.generate(Some(vec![dispute_tx]));
         watcher
             .gatekeeper
-            .block_connected(&block, chain.get_block_count());
-        watcher.block_connected(&block, chain.get_block_count());
+            .block_connected(&block, chain.get_block_count())
+            .await;
+        watcher
+            .block_connected(&block, chain.get_block_count())
+            .await;
 
         // Data should have been kept in the database
         assert!(watcher.responder.has_tracker(uuid));
@@ -1339,8 +1328,11 @@ mod tests {
         let block = chain.generate(Some(vec![dispute_tx]));
         watcher
             .gatekeeper
-            .block_connected(&block, chain.get_block_count());
-        watcher.block_connected(&block, chain.get_block_count());
+            .block_connected(&block, chain.get_block_count())
+            .await;
+        watcher
+            .block_connected(&block, chain.get_block_count())
+            .await;
 
         // Data should have been wiped from the database
         assert!(!watcher.responder.has_tracker(uuid));
@@ -1364,8 +1356,11 @@ mod tests {
         let block = chain.generate(Some(vec![dispute_tx]));
         watcher
             .gatekeeper
-            .block_connected(&block, chain.get_block_count());
-        watcher.block_connected(&block, chain.get_block_count());
+            .block_connected(&block, chain.get_block_count())
+            .await;
+        watcher
+            .block_connected(&block, chain.get_block_count())
+            .await;
 
         // Data should have been wiped from the database
         assert!(!watcher.responder.has_tracker(uuid));
@@ -1388,7 +1383,9 @@ mod tests {
             .blocks()
             .contains(&last_block_header.block_hash()));
 
-        watcher.block_disconnected(&last_block_header, start_height);
+        watcher
+            .block_disconnected(&last_block_header, start_height)
+            .await;
 
         assert_eq!(
             watcher.last_known_block_height.load(Ordering::Relaxed),

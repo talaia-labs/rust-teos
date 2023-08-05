@@ -1,6 +1,5 @@
 //! Logic related to the Gatekeeper, the component in charge of managing access to the tower resources.
 
-use lightning::chain;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,6 +10,7 @@ use teos_common::cryptography;
 use teos_common::receipts::RegistrationReceipt;
 use teos_common::UserId;
 
+use crate::async_listener::AsyncListen;
 use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 
@@ -291,17 +291,13 @@ impl Gatekeeper {
     }
 }
 
-impl chain::Listen for Gatekeeper {
+#[tonic::async_trait]
+impl AsyncListen for Gatekeeper {
     /// Handles the monitoring process by the [Gatekeeper].
     ///
     /// This is mainly used to keep track of time and expire / outdate subscriptions when needed.
-    fn filtered_block_connected(
-        &self,
-        header: &bitcoin::BlockHeader,
-        _: &chain::transaction::TransactionData,
-        height: u32,
-    ) {
-        log::info!("New block received: {}", header.block_hash());
+    async fn block_connected(&self, block: &bitcoin::Block, height: u32) {
+        log::info!("New block received: {}", block.header.block_hash());
 
         // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
         let outdated_users = self.get_outdated_users(height);
@@ -324,26 +320,11 @@ impl chain::Listen for Gatekeeper {
     }
 
     /// Handles reorgs in the [Gatekeeper]. Simply updates the last_known_block_height.
-    fn block_disconnected(&self, header: &bitcoin::BlockHeader, height: u32) {
+    async fn block_disconnected(&self, header: &bitcoin::BlockHeader, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
         // There's nothing to be done here but updating the last known block
         self.last_known_block_height
             .store(height - 1, Ordering::Release);
-    }
-}
-
-use bitcoin::Block;
-use bitcoin::BlockHeader;
-use crate::listener_actor::AsyncListen;
-
-#[tonic::async_trait]
-impl AsyncListen for Gatekeeper {
-    async fn block_connected(&self, block: &Block, height: u32) {
-        chain::Listen::block_connected(self, block, height);
-    }
-
-    async fn block_disconnected(&self, header: &BlockHeader, height: u32) {
-        chain::Listen::block_disconnected(self, header, height);
     }
 }
 
@@ -352,7 +333,6 @@ mod tests {
     use super::*;
 
     use crate::test_utils::{generate_dummy_appointment_with_user, get_random_tracker, Blockchain};
-    use lightning::chain::Listen;
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
     use teos_common::test_utils::get_random_user_id;
 
@@ -393,8 +373,8 @@ mod tests {
         Gatekeeper::new(chain.get_block_count(), SLOTS, DURATION, EXPIRY_DELTA, dbm)
     }
 
-    #[test]
-    fn test_new() {
+    #[tokio::test]
+    async fn test_new() {
         // A fresh gatekeeper has no associated data
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
@@ -434,8 +414,8 @@ mod tests {
         assert_eq!(gatekeeper, another_gk);
     }
 
-    #[test]
-    fn test_authenticate_user() {
+    #[tokio::test]
+    async fn test_authenticate_user() {
         let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
 
         // Authenticate user returns the UserId if the user is found in the system, or an AuthenticationError otherwise.
@@ -465,8 +445,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_add_update_user() {
+    #[tokio::test]
+    async fn test_add_update_user() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let gatekeeper = init_gatekeeper(&chain);
 
@@ -534,8 +514,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_add_update_appointment() {
+    #[tokio::test]
+    async fn test_add_update_appointment() {
         let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
 
         // if a given appointment is not associated with a given user, add_update_appointment adds the appointment user appointments alongside the number os slots it consumes. If the appointment
@@ -665,8 +645,8 @@ mod tests {
         assert_eq!(loaded_user.available_slots, updated_slot_count);
     }
 
-    #[test]
-    fn test_has_subscription_expired() {
+    #[tokio::test]
+    async fn test_has_subscription_expired() {
         let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
 
         // If the user is not registered, querying for a subscription expiry check should return an error
@@ -698,8 +678,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_outdated_users() {
+    #[tokio::test]
+    async fn test_get_outdated_users() {
         let start_height = START_HEIGHT as u32 + EXPIRY_DELTA;
         let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(start_height as usize));
 
@@ -720,8 +700,8 @@ mod tests {
         assert_eq!(gatekeeper.get_outdated_users(start_height), vec![user_id]);
     }
 
-    #[test]
-    fn test_delete_appointments_without_refund() {
+    #[tokio::test]
+    async fn test_delete_appointments_without_refund() {
         let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
         let n_users = 100;
         let n_apps = 10;
@@ -792,8 +772,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_delete_appointments_with_refund() {
+    #[tokio::test]
+    async fn test_delete_appointments_with_refund() {
         let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
         let n_users = 100;
         let n_apps = 10;
@@ -876,8 +856,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_filtered_block_connected() {
+    #[tokio::test]
+    async fn test_block_connected() {
         // block_connected in the Gatekeeper is used to keep track of time in order to manage the users' subscription expiry.
         // Remove users that get outdated at the new block's height from registered_users and the database.
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
@@ -893,7 +873,9 @@ mod tests {
         }
 
         // Connect a new block. Outdated users are deleted
-        gatekeeper.block_connected(&chain.generate(None), chain.get_block_count());
+        gatekeeper
+            .block_connected(&chain.generate(None), chain.get_block_count())
+            .await;
 
         // Check that users have been removed from registered_users and the database
         for user_id in &[user1_id, user2_id, user3_id] {
@@ -912,8 +894,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_block_disconnected() {
+    #[tokio::test]
+    async fn test_block_disconnected() {
         // Block disconnected simply updates the last known block
         let chain = Blockchain::default().with_height(START_HEIGHT);
         let gatekeeper = init_gatekeeper(&chain);
@@ -922,7 +904,9 @@ mod tests {
         let last_known_block_header = chain.tip();
         let prev_block_header = chain.at_height((height - 1) as usize);
 
-        gatekeeper.block_disconnected(&last_known_block_header.header, height);
+        gatekeeper
+            .block_disconnected(&last_known_block_header.header, height)
+            .await;
         assert_eq!(
             gatekeeper.last_known_block_height.load(Ordering::Relaxed),
             prev_block_header.height
