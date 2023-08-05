@@ -26,7 +26,6 @@ use teos::carrier::Carrier;
 use teos::chain_monitor::ChainMonitor;
 use teos::config::{self, Config, Opt};
 use teos::dbm::DBM;
-use teos::dbm_new::DBM as NewDBM;
 use teos::gatekeeper::Gatekeeper;
 use teos::protos as msgs;
 use teos::protos::private_tower_services_server::PrivateTowerServicesServer;
@@ -59,7 +58,7 @@ where
     Ok(last_n_blocks)
 }
 
-async fn create_new_tower_keypair(dbm: &NewDBM) -> (SecretKey, PublicKey) {
+async fn create_new_tower_keypair(dbm: &DBM) -> (SecretKey, PublicKey) {
     let (sk, pk) = get_random_keypair();
     dbm.store_tower_key(&sk).await.unwrap();
     (sk, pk)
@@ -124,8 +123,8 @@ async fn main() {
         conf.log_non_default_options();
     }
 
-    let new_dbm = if conf.database_url == "managed" {
-        teos::dbm_new::DBM::new(&format!(
+    let dbm = if conf.database_url == "managed" {
+        DBM::new(&format!(
             "sqlite://{}",
             path_network
                 // rwc = Read + Write + Create (creates the database file if not found)
@@ -136,25 +135,21 @@ async fn main() {
         .await
         .unwrap()
     } else {
-        teos::dbm_new::DBM::new(&conf.database_url).await.unwrap()
+        DBM::new(&conf.database_url).await.unwrap()
     };
-    let new_dbm = Arc::new(new_dbm);
-
-    let dbm = Arc::new(Mutex::new(
-        DBM::new(path_network.join("teos_db.sql3")).unwrap(),
-    ));
+    let dbm = Arc::new(dbm);
 
     // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
     // key straightaway
     let (tower_sk, tower_pk) = {
         if conf.overwrite_key {
             log::info!("Overwriting tower keys");
-            create_new_tower_keypair(&new_dbm).await
-        } else if let Some(sk) = new_dbm.load_tower_key().await {
+            create_new_tower_keypair(&dbm).await
+        } else if let Some(sk) = dbm.load_tower_key().await {
             (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk))
         } else {
             log::info!("Tower keys not found. Creating a fresh set");
-            create_new_tower_keypair(&new_dbm).await
+            create_new_tower_keypair(&dbm).await
         }
     };
     log::info!("tower_id: {tower_pk}");
@@ -199,7 +194,7 @@ async fn main() {
     );
     let mut derefed = bitcoin_cli.deref();
     // Load last known block from DB if found. Poll it from Bitcoind otherwise.
-    let last_known_block = new_dbm.load_last_known_block().await;
+    let last_known_block = dbm.load_last_known_block().await;
     let tip = if let Some(block_hash) = last_known_block {
         let mut last_known_header = derefed
             .get_header(&block_hash, None)
@@ -276,13 +271,16 @@ async fn main() {
     };
 
     // Build components
-    let gatekeeper = Arc::new(Gatekeeper::new(
-        tip.height,
-        conf.subscription_slots,
-        conf.subscription_duration,
-        conf.expiry_delta,
-        dbm.clone(),
-    ));
+    let gatekeeper = Arc::new(
+        Gatekeeper::new(
+            tip.height,
+            conf.subscription_slots,
+            conf.subscription_duration,
+            conf.expiry_delta,
+            dbm.clone(),
+        )
+        .await,
+    );
 
     let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
     let (responder, watcher) = {
@@ -314,7 +312,7 @@ async fn main() {
         (responder, watcher)
     };
 
-    if watcher.is_fresh() & responder.is_fresh() & gatekeeper.is_fresh() {
+    if watcher.is_fresh().await & responder.is_fresh().await & gatekeeper.is_fresh().await {
         log::info!("Fresh bootstrap");
     } else {
         log::info!("Bootstrapping from backed up data");

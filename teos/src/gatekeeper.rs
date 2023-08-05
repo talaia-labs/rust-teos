@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use teos_common::appointment::{compute_appointment_slots, Locator};
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
@@ -69,20 +71,20 @@ pub struct Gatekeeper {
     expiry_delta: u32,
     /// Map of users registered within the tower.
     registered_users: Mutex<HashMap<UserId, UserInfo>>,
-    /// A [DBM] (database manager) instance. Used to persist appointment data into disk.
-    dbm: Arc<Mutex<DBM>>,
+    /// A [DBM] (database manager) instance. Used to persist user data into disk.
+    dbm: Arc<DBM>,
 }
 
 impl Gatekeeper {
     /// Creates a new [Gatekeeper] instance.
-    pub fn new(
+    pub async fn new(
         last_known_block_height: u32,
         subscription_slots: u32,
         subscription_duration: u32,
         expiry_delta: u32,
-        dbm: Arc<Mutex<DBM>>,
+        dbm: Arc<DBM>,
     ) -> Self {
-        let registered_users = dbm.lock().unwrap().load_all_users();
+        let registered_users = dbm.load_all_users().await;
         Gatekeeper {
             last_known_block_height: AtomicU32::new(last_known_block_height),
             subscription_slots,
@@ -94,36 +96,34 @@ impl Gatekeeper {
     }
 
     /// Returns whether the [Gatekeeper] has been created from scratch (fresh) or from backed-up data.
-    pub fn is_fresh(&self) -> bool {
-        self.registered_users.lock().unwrap().is_empty()
+    pub async fn is_fresh(&self) -> bool {
+        self.registered_users.lock().await.is_empty()
     }
 
     /// Ges the number of users currently registered to the tower.
-    pub(crate) fn get_registered_users_count(&self) -> usize {
-        self.registered_users.lock().unwrap().len()
+    pub(crate) async fn get_registered_users_count(&self) -> usize {
+        self.registered_users.lock().await.len()
     }
 
     /// Gets the list of all registered user ids.
-    pub(crate) fn get_user_ids(&self) -> Vec<UserId> {
-        self.registered_users
-            .lock()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect()
+    pub(crate) async fn get_user_ids(&self) -> Vec<UserId> {
+        self.registered_users.lock().await.keys().cloned().collect()
     }
 
     /// Gets the data held by the tower about a given user.
-    pub(crate) fn get_user_info(&self, user_id: UserId) -> Option<(UserInfo, Vec<Locator>)> {
-        let info = self.registered_users.lock().unwrap().get(&user_id).cloned();
-        info.map(|info| (info, self.dbm.lock().unwrap().load_user_locators(user_id)))
+    pub(crate) async fn get_user_info(&self, user_id: UserId) -> Option<(UserInfo, Vec<Locator>)> {
+        let info = self.registered_users.lock().await.get(&user_id).cloned();
+        if let Some(info) = info {
+            return Some((info, self.dbm.load_user_locators(user_id).await));
+        }
+        None
     }
 
     /// Authenticates a user.
     ///
     /// User authentication is performed using ECRecover against fixed messages (one for each command).
     /// Notice all interaction with the tower should be guarded by this.
-    pub(crate) fn authenticate_user(
+    pub(crate) async fn authenticate_user(
         &self,
         message: &[u8],
         signature: &str,
@@ -133,7 +133,7 @@ impl Gatekeeper {
                 .map_err(|_| AuthenticationFailure("Wrong message or signature."))?,
         );
 
-        if self.registered_users.lock().unwrap().contains_key(&user_id) {
+        if self.registered_users.lock().await.contains_key(&user_id) {
             Ok(user_id)
         } else {
             Err(AuthenticationFailure("User not found."))
@@ -141,14 +141,14 @@ impl Gatekeeper {
     }
 
     /// Adds a new user to the tower (or updates its subscription if already registered).
-    pub(crate) fn add_update_user(
+    pub(crate) async fn add_update_user(
         &self,
         user_id: UserId,
     ) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let block_count = self.last_known_block_height.load(Ordering::Acquire);
 
         // TODO: For now, new calls to `add_update_user` add subscription_slots to the current count and reset the expiry time
-        let mut registered_users = self.registered_users.lock().unwrap();
+        let mut registered_users = self.registered_users.lock().await;
         let user_info = match registered_users.get_mut(&user_id) {
             // User already exists, updating the info
             Some(user_info) => {
@@ -160,7 +160,7 @@ impl Gatekeeper {
                     .subscription_expiry
                     .checked_add(self.subscription_duration)
                     .unwrap_or(u32::MAX);
-                self.dbm.lock().unwrap().update_user(user_id, user_info);
+                self.dbm.update_user(user_id, user_info).await.ok();
 
                 user_info
             }
@@ -171,11 +171,7 @@ impl Gatekeeper {
                     block_count,
                     block_count + self.subscription_duration,
                 );
-                self.dbm
-                    .lock()
-                    .unwrap()
-                    .store_user(user_id, &user_info)
-                    .unwrap();
+                self.dbm.store_user(user_id, &user_info).await.unwrap();
 
                 registered_users.insert(user_id, user_info);
                 registered_users.get_mut(&user_id).unwrap()
@@ -191,21 +187,16 @@ impl Gatekeeper {
     }
 
     /// Adds an appointment to a given user, or updates it if already present in the system (and belonging to the requester).
-    pub(crate) fn add_update_appointment(
+    pub(crate) async fn add_update_appointment(
         &self,
         user_id: UserId,
         uuid: UUID,
         appointment: &ExtendedAppointment,
     ) -> Result<u32, NotEnoughSlots> {
         // For updates, the difference between the existing appointment size and the update is computed.
-        let mut registered_users = self.registered_users.lock().unwrap();
+        let mut registered_users = self.registered_users.lock().await;
         let user_info = registered_users.get_mut(&user_id).unwrap();
-        let used_blob_size = self
-            .dbm
-            .lock()
-            .unwrap()
-            .get_appointment_length(uuid)
-            .unwrap_or(0);
+        let used_blob_size = self.dbm.get_appointment_length(uuid).await.unwrap_or(0);
         let used_slots = compute_appointment_slots(used_blob_size, ENCRYPTED_BLOB_MAX_SIZE);
 
         let required_slots =
@@ -217,7 +208,7 @@ impl Gatekeeper {
             // than the old appointment
             user_info.available_slots = (user_info.available_slots as i64 - diff) as u32;
 
-            self.dbm.lock().unwrap().update_user(user_id, user_info);
+            self.dbm.update_user(user_id, user_info).await.ok();
 
             Ok(user_info.available_slots)
         } else {
@@ -226,11 +217,11 @@ impl Gatekeeper {
     }
 
     /// Checks whether a subscription has expired.
-    pub(crate) fn has_subscription_expired(
+    pub(crate) async fn has_subscription_expired(
         &self,
         user_id: UserId,
     ) -> Result<(bool, u32), AuthenticationFailure<'_>> {
-        self.registered_users.lock().unwrap().get(&user_id).map_or(
+        self.registered_users.lock().await.get(&user_id).map_or(
             Err(AuthenticationFailure("User not found.")),
             |user_info| {
                 Ok((
@@ -244,15 +235,14 @@ impl Gatekeeper {
 
     /// Gets a map of outdated users. Outdated users are those whose subscription has expired and the renewal grace period
     /// has already passed ([expiry_delta](Self::expiry_delta)).
-    pub(crate) fn get_outdated_users(&self, block_height: u32) -> Vec<UserId> {
-        self.registered_users
-            .lock()
-            .unwrap()
-            .iter()
+    pub(crate) async fn get_outdated_users(&self, block_height: u32) -> Vec<UserId> {
+        let registered_users = self.registered_users.lock().await.clone();
+        registered_users
+            .into_iter()
             // NOTE: Ideally there won't be a user with `block_height > subscription_expiry + expiry_delta`, but
             // this might happen if we skip a couple of block connections due to a force update.
             .filter(|(_, info)| block_height >= info.subscription_expiry + self.expiry_delta)
-            .map(|(user_id, _)| *user_id)
+            .map(|(user_id, _)| user_id)
             .collect()
     }
 
@@ -262,15 +252,17 @@ impl Gatekeeper {
     ///
     /// DISCUSS: When `refund` is `false` we don't give back the slots to the user for the deleted appointments.
     /// This is to discourage misbehavior (sending bad appointments, either non-decryptable or rejected by the network).
-    pub(crate) fn delete_appointments(&self, appointments: Vec<UUID>, refund: bool) {
-        let mut dbm = self.dbm.lock().unwrap();
-
+    pub(crate) async fn delete_appointments(&self, appointments: Vec<UUID>, refund: bool) {
         let updated_users = if refund {
             let mut updated_users = HashMap::new();
-            let mut registered_users = self.registered_users.lock().unwrap();
+            let mut registered_users = self.registered_users.lock().await;
             // Give back the consumed slots to each user.
             for uuid in appointments.iter() {
-                let (user_id, blob_size) = dbm.get_appointment_user_and_length(*uuid).unwrap();
+                let (user_id, blob_size) = self
+                    .dbm
+                    .get_appointment_user_and_length(*uuid)
+                    .await
+                    .unwrap();
                 registered_users.get_mut(&user_id).unwrap().available_slots +=
                     compute_appointment_slots(blob_size, ENCRYPTED_BLOB_MAX_SIZE);
                 updated_users.insert(user_id, registered_users[&user_id]);
@@ -284,9 +276,11 @@ impl Gatekeeper {
         // An optimization for the case when only one appointment is being deleted without refunding.
         // This avoids creating a DB transaction for a single query.
         if appointments.len() == 1 && updated_users.is_empty() {
-            dbm.remove_appointment(appointments[0])
+            self.dbm.remove_appointment(appointments[0]).await;
         } else {
-            dbm.batch_remove_appointments(&appointments, &updated_users);
+            self.dbm
+                .batch_remove_appointments(&appointments, &updated_users)
+                .await;
         }
     }
 }
@@ -300,18 +294,18 @@ impl AsyncListen for Gatekeeper {
         log::info!("New block received: {}", block.header.block_hash());
 
         // Expired user deletion is delayed. Users are deleted when their subscription is outdated, not expired.
-        let outdated_users = self.get_outdated_users(height);
+        let outdated_users = self.get_outdated_users(height).await;
         if !outdated_users.is_empty() {
             // Remove the outdated users from memory first.
             {
-                let mut registered_users = self.registered_users.lock().unwrap();
+                let mut registered_users = self.registered_users.lock().await;
                 // Removing each outdated user in a loop is more efficient than retaining non-outdated users
                 // because retaining would loop over all the available users which is always more than the outdated ones.
                 for outdated_user in outdated_users.iter() {
                     registered_users.remove(outdated_user);
                 }
             }
-            self.dbm.lock().unwrap().batch_remove_users(&outdated_users);
+            self.dbm.batch_remove_users(&outdated_users).await;
         }
 
         // Update last known block height
@@ -401,9 +395,8 @@ mod tests {
             // Add the appointment to the database. This is normally done by the Watcher.
             gatekeeper
                 .dbm
-                .lock()
-                .unwrap()
                 .store_appointment(uuid, &appointment)
+                .await
                 .unwrap();
         }
 
@@ -458,7 +451,7 @@ mod tests {
         let receipt = gatekeeper.add_update_user(user_id).unwrap();
         // The data should have been also added to the database
         assert_eq!(
-            gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap(),
+            gatekeeper.dbm.load_user(user_id).await.unwrap(),
             UserInfo::new(
                 receipt.available_slots(),
                 receipt.subscription_start(),
@@ -481,7 +474,7 @@ mod tests {
 
         // Data in the database should have been updated too
         assert_eq!(
-            gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap(),
+            gatekeeper.dbm.load_user(user_id).await.unwrap(),
             UserInfo::new(
                 updated_receipt.available_slots(),
                 updated_receipt.subscription_start(),
@@ -505,7 +498,7 @@ mod tests {
 
         // Data in the database remains untouched
         assert_eq!(
-            gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap(),
+            gatekeeper.dbm.load_user(user_id).await.unwrap(),
             UserInfo::new(
                 updated_receipt.available_slots(),
                 updated_receipt.subscription_start(),
@@ -540,9 +533,8 @@ mod tests {
         // Simulate the watcher adding the appointment in the database.
         gatekeeper
             .dbm
-            .lock()
-            .unwrap()
             .store_appointment(uuid, &appointment)
+            .await
             .unwrap();
 
         let (_, user_locators) = gatekeeper.get_user_info(user_id).unwrap();
@@ -550,7 +542,7 @@ mod tests {
         assert_eq!(slots_before, available_slots + 1);
 
         // Slots should have been updated in the database too.
-        let mut loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        let mut loaded_user = gatekeeper.dbm.load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, available_slots);
 
         // Adding the exact same appointment should leave the slots count unchanged.
@@ -563,7 +555,7 @@ mod tests {
         assert!(user_locators.contains(&appointment.locator()));
         assert_eq!(updated_slot_count, available_slots);
 
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
 
         // If we add an update to an existing appointment with a bigger data blob (modulo ENCRYPTED_BLOB_MAX_SIZE), additional slots should be taken
@@ -575,16 +567,15 @@ mod tests {
         // Simulate the watcher updating the appointment in the database.
         gatekeeper
             .dbm
-            .lock()
-            .unwrap()
             .update_appointment(uuid, &bigger_appointment)
+            .await
             .unwrap();
 
         let (_, user_locators) = gatekeeper.get_user_info(user_id).unwrap();
         assert!(user_locators.contains(&appointment.locator()));
         assert_eq!(updated_slot_count, available_slots - 1);
 
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
 
         // Adding back a smaller update (modulo ENCRYPTED_BLOB_MAX_SIZE) should reduce the count
@@ -594,16 +585,15 @@ mod tests {
         // Simulate the watcher updating the appointment in the database.
         gatekeeper
             .dbm
-            .lock()
-            .unwrap()
             .update_appointment(uuid, &appointment)
+            .await
             .unwrap();
 
         let (_, user_locators) = gatekeeper.get_user_info(user_id).unwrap();
         assert!(user_locators.contains(&appointment.locator()));
         assert_eq!(updated_slot_count, available_slots);
 
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
 
         // Adding an appointment with a different uuid should not count as an update
@@ -614,16 +604,15 @@ mod tests {
         // Simulate the watcher adding the appointment in the database.
         gatekeeper
             .dbm
-            .lock()
-            .unwrap()
             .store_appointment(uuid, &appointment)
+            .await
             .unwrap();
 
         let (_, user_locators) = gatekeeper.get_user_info(user_id).unwrap();
         assert!(user_locators.contains(&appointment.locator()));
         assert_eq!(updated_slot_count, available_slots - 1);
 
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
 
         // Finally, trying to add an appointment when the user has no enough slots should fail
@@ -641,7 +630,7 @@ mod tests {
         ));
 
         // The entry in the database should remain unchanged in this case
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
     }
 
@@ -721,9 +710,8 @@ mod tests {
                 // Add the appointment to the database. This is normally done by the Watcher.
                 gatekeeper
                     .dbm
-                    .lock()
-                    .unwrap()
                     .store_appointment(uuid, &appointment)
+                    .await
                     .unwrap();
                 if i % 2 == 0 {
                     uuids_to_delete.push(uuid);
@@ -734,12 +722,11 @@ mod tests {
                 if i % 5 == 0 {
                     gatekeeper
                         .dbm
-                        .lock()
-                        .unwrap()
                         .store_tracker(
                             uuid,
                             &get_random_tracker(user_id, ConfirmationStatus::ConfirmedIn(42)),
                         )
+                        .await
                         .unwrap();
                     trackers.push(uuid);
                 }
@@ -751,17 +738,17 @@ mod tests {
         gatekeeper.delete_appointments(uuids_to_delete.clone(), false);
 
         for uuid in uuids_to_delete.clone() {
-            assert!(!gatekeeper.dbm.lock().unwrap().appointment_exists(uuid));
+            assert!(!gatekeeper.dbm.appointment_exists(uuid).await);
         }
         for uuid in rest {
-            assert!(gatekeeper.dbm.lock().unwrap().appointment_exists(uuid));
+            assert!(gatekeeper.dbm.appointment_exists(uuid).await);
         }
         for uuid in trackers {
             if uuids_to_delete.contains(&uuid) {
                 // The tracker should be deleted as well.
-                assert!(!gatekeeper.dbm.lock().unwrap().tracker_exists(uuid));
+                assert!(!gatekeeper.dbm.tracker_exists(uuid).await);
             } else {
-                assert!(gatekeeper.dbm.lock().unwrap().tracker_exists(uuid));
+                assert!(gatekeeper.dbm.tracker_exists(uuid).await);
             }
         }
 
@@ -795,9 +782,8 @@ mod tests {
                 // Add the appointment to the database. This is normally done by the Watcher.
                 gatekeeper
                     .dbm
-                    .lock()
-                    .unwrap()
                     .store_appointment(uuid, &appointment)
+                    .await
                     .unwrap();
                 if i % 2 == 0 {
                     // We don't reduce the remaining slots for the appointments which are
@@ -814,12 +800,11 @@ mod tests {
                 if i % 5 == 0 {
                     gatekeeper
                         .dbm
-                        .lock()
-                        .unwrap()
                         .store_tracker(
                             uuid,
                             &get_random_tracker(user_id, ConfirmationStatus::ConfirmedIn(42)),
                         )
+                        .await
                         .unwrap();
                     trackers.push(uuid);
                 }
@@ -831,17 +816,17 @@ mod tests {
         gatekeeper.delete_appointments(uuids_to_delete.clone(), true);
 
         for uuid in uuids_to_delete.clone() {
-            assert!(!gatekeeper.dbm.lock().unwrap().appointment_exists(uuid));
+            assert!(!gatekeeper.dbm.appointment_exists(uuid).await);
         }
         for uuid in rest {
-            assert!(gatekeeper.dbm.lock().unwrap().appointment_exists(uuid));
+            assert!(gatekeeper.dbm.appointment_exists(uuid).await);
         }
         for uuid in trackers {
             if uuids_to_delete.contains(&uuid) {
                 // The tracker should be deleted as well.
-                assert!(!gatekeeper.dbm.lock().unwrap().tracker_exists(uuid));
+                assert!(!gatekeeper.dbm.tracker_exists(uuid).await);
             } else {
-                assert!(gatekeeper.dbm.lock().unwrap().tracker_exists(uuid));
+                assert!(gatekeeper.dbm.tracker_exists(uuid).await);
             }
         }
 
@@ -884,7 +869,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .contains_key(user_id));
-            assert!(gatekeeper.dbm.lock().unwrap().load_user(*user_id).is_none());
+            assert!(gatekeeper.dbm.load_user(*user_id).await.is_none());
         }
 
         // Check that the last_known_block_header has been properly updated

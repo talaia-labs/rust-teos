@@ -4,7 +4,7 @@
 use crate::dbm::DBM;
 
 use std::marker::{Send, Sync};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use bitcoin::{Block, BlockHeader};
 use lightning::chain;
@@ -51,7 +51,7 @@ enum BlockListenerAction {
 /// blocks received from [UnboundedReceiver] in the background.
 pub struct AsyncBlockListener<L: AsyncListen> {
     listener: L,
-    dbm: Arc<Mutex<DBM>>,
+    dbm: Arc<DBM>,
     rx: UnboundedReceiver<BlockListenerAction>,
 }
 
@@ -62,7 +62,7 @@ impl<L: AsyncListen + 'static> AsyncBlockListener<L> {
     /// listener are forwarded to the [AsyncListen] listener.
     ///
     /// The [AsyncListen] listener will be actively listening for actions in a background tokio task.
-    pub fn wrap_listener(listener: L, dbm: Arc<Mutex<DBM>>) -> SyncBlockListener {
+    pub fn wrap_listener(listener: L, dbm: Arc<DBM>) -> SyncBlockListener {
         let (tx, rx) = unbounded_channel();
         let actor = AsyncBlockListener { listener, dbm, rx };
         actor.run_actor_in_bg();
@@ -79,9 +79,8 @@ impl<L: AsyncListen + 'static> AsyncBlockListener<L> {
                         self.listener.block_connected(&block, height).await;
                         // We can update the last known block after all the listeners have received it.
                         self.dbm
-                            .lock()
-                            .unwrap()
                             .store_last_known_block(&block.block_hash())
+                            .await
                             .unwrap();
                     }
                     BlockListenerAction::BlockDisconnected(header, height) => {

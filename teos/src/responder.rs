@@ -130,7 +130,7 @@ pub struct Responder {
     /// A [Gatekeeper] instance. Data regarding users is requested to it.
     gatekeeper: Arc<Gatekeeper>,
     /// A [DBM] (database manager) instance. Used to persist tracker data into disk.
-    dbm: Arc<Mutex<DBM>>,
+    dbm: Arc<DBM>,
     /// A list of all the reorged trackers that might need to be republished after reorg resolution.
     reorged_trackers: Mutex<HashSet<UUID>>,
 }
@@ -142,7 +142,7 @@ impl Responder {
         last_known_block_height: u32,
         carrier: Carrier,
         gatekeeper: Arc<Gatekeeper>,
-        dbm: Arc<Mutex<DBM>>,
+        dbm: Arc<DBM>,
     ) -> Self {
         Responder {
             carrier: Mutex::new(carrier),
@@ -154,13 +154,14 @@ impl Responder {
     }
 
     /// Returns whether the [Responder] has been created from scratch (fresh) or from backed-up data.
-    pub fn is_fresh(&self) -> bool {
-        self.get_trackers_count() == 0
+    pub async fn is_fresh(&self) -> bool {
+        self.get_trackers_count().await == 0
     }
 
     /// Gets the total number of trackers in the [Responder].
-    pub(crate) fn get_trackers_count(&self) -> usize {
-        self.dbm.lock().unwrap().get_trackers_count()
+    pub(crate) async fn get_trackers_count(&self) -> usize {
+        // replace with a pull from the database.
+        self.dbm.get_trackers_count().await
     }
 
     /// Checks whether the [Responder] has gone through a reorg and some transactions should to be resent.
@@ -172,27 +173,29 @@ impl Responder {
     ///
     /// Breaches can either be added to the [Responder] in the form of a [TransactionTracker] if the [penalty transaction](Breach::penalty_tx)
     /// is accepted by the `bitcoind` or rejected otherwise.
-    pub(crate) fn handle_breach(
+    pub(crate) async fn handle_breach(
         &self,
         uuid: UUID,
         breach: Breach,
         user_id: UserId,
     ) -> ConfirmationStatus {
-        let mut carrier = self.carrier.lock().unwrap();
-        let tx_index = self.tx_index.lock().unwrap();
+        let status = {
+            let mut carrier = self.carrier.lock().unwrap();
+            let tx_index = self.tx_index.lock().unwrap();
 
-        // Check whether the transaction is in mempool or part of our internal txindex. Send it to our node otherwise.
-        let status = if let Some(block_hash) = tx_index.get(&breach.penalty_tx.txid()) {
-            ConfirmationStatus::ConfirmedIn(tx_index.get_height(block_hash).unwrap() as u32)
-        } else if carrier.in_mempool(&breach.penalty_tx.txid()) {
-            // If it's in mempool we assume it was just included
-            ConfirmationStatus::InMempoolSince(carrier.block_height())
-        } else {
-            carrier.send_transaction(&breach.penalty_tx)
+            // Check whether the transaction is in mempool or part of our internal txindex. Send it to our node otherwise.
+            if let Some(block_hash) = tx_index.get(&breach.penalty_tx.txid()) {
+                ConfirmationStatus::ConfirmedIn(tx_index.get_height(block_hash).unwrap() as u32)
+            } else if carrier.in_mempool(&breach.penalty_tx.txid()) {
+                // If it's in mempool we assume it was just included
+                ConfirmationStatus::InMempoolSince(carrier.block_height())
+            } else {
+                carrier.send_transaction(&breach.penalty_tx)
+            }
         };
 
         if status.accepted() {
-            self.add_tracker(uuid, breach, user_id, status);
+            self.add_tracker(uuid, breach, user_id, status).await;
         }
 
         status
@@ -206,7 +209,7 @@ impl Responder {
     ///
     /// Some transaction may already be confirmed by the time the tower tries to send them to the network. If that's the case,
     /// the [Responder] will simply continue tracking the job until its completion.
-    pub(crate) fn add_tracker(
+    pub(crate) async fn add_tracker(
         &self,
         uuid: UUID,
         breach: Breach,
@@ -215,9 +218,8 @@ impl Responder {
     ) {
         if self
             .dbm
-            .lock()
-            .unwrap()
             .store_tracker(uuid, &TransactionTracker::new(breach, user_id, status))
+            .await
             .is_ok()
         {
             log::info!("New tracker added (uuid={uuid})");
@@ -229,8 +231,8 @@ impl Responder {
     }
 
     /// Checks whether a given tracker can be found in the [Responder].
-    pub(crate) fn has_tracker(&self, uuid: UUID) -> bool {
-        self.dbm.lock().unwrap().tracker_exists(uuid)
+    pub(crate) async fn has_tracker(&self, uuid: UUID) -> bool {
+        self.dbm.tracker_exists(uuid).await
     }
 
     /// Checks the confirmation count for the [TransactionTracker]s.
@@ -238,21 +240,25 @@ impl Responder {
     /// For unconfirmed transactions, it checks whether they have been confirmed or keep missing confirmations.
     /// For confirmed transactions, nothing is done until they are completed (confirmation count reaches [IRREVOCABLY_RESOLVED](constants::IRREVOCABLY_RESOLVED))
     /// Returns the set of completed trackers or [None] if none were completed.
-    fn check_confirmations(&self, txids: HashSet<Txid>, current_height: u32) -> Option<Vec<UUID>> {
+    async fn check_confirmations(
+        &self,
+        txids: HashSet<Txid>,
+        current_height: u32,
+    ) -> Option<Vec<UUID>> {
         let mut completed_trackers = Vec::new();
-        let mut reorged_trackers = self.reorged_trackers.lock().unwrap();
-        let dbm = self.dbm.lock().unwrap();
 
-        for (uuid, penalty_summary) in dbm.load_penalties_summaries() {
+        for (uuid, penalty_summary) in self.dbm.load_penalties_summaries().await {
             if txids.contains(&penalty_summary.penalty_txid) {
                 // First confirmation was received
-                dbm.update_tracker_status(uuid, &ConfirmationStatus::ConfirmedIn(current_height))
+                self.dbm
+                    .update_tracker_status(uuid, &ConfirmationStatus::ConfirmedIn(current_height))
+                    .await
                     .unwrap();
                 // Remove that uuid from reorged trackers if it was confirmed.
-                reorged_trackers.remove(&uuid);
+                self.reorged_trackers.lock().unwrap().remove(&uuid);
             // TODO: We won't need this check when we persist the correct tracker status
             // in the DB after migrations are supported.
-            } else if reorged_trackers.contains(&uuid) {
+            } else if self.reorged_trackers.lock().unwrap().contains(&uuid) {
                 // Don't consider reorged trackers since they have wrong DB status.
                 continue;
             } else if let ConfirmationStatus::ConfirmedIn(h) = penalty_summary.status {
@@ -282,19 +288,22 @@ impl Responder {
     /// It tries to publish the dispute and penalty transactions of reorged trackers to the blockchain.
     ///
     /// Returns a vector of rejected trackers during rebroadcast if any were rejected, [None] otherwise.
-    fn handle_reorged_txs(&self, height: u32) -> Option<Vec<UUID>> {
+    async fn handle_reorged_txs(&self, height: u32) -> Option<Vec<UUID>> {
         // NOTE: We are draining the reorged trackers set, meaning that we won't try sending these disputes again.
         let reorged_trackers: Vec<UUID> = self.reorged_trackers.lock().unwrap().drain().collect();
-        let mut carrier = self.carrier.lock().unwrap();
-        let dbm = self.dbm.lock().unwrap();
 
         let mut rejected = Vec::new();
         // Republish all the dispute transactions of the reorged trackers.
         for uuid in reorged_trackers {
-            let tracker = dbm.load_tracker(uuid).unwrap();
+            let tracker = self.dbm.load_tracker(uuid).await.unwrap();
             let dispute_txid = tracker.dispute_tx.txid();
             // Try to publish the dispute transaction.
-            let should_publish_penalty = match carrier.send_transaction(&tracker.dispute_tx) {
+            let should_publish_penalty = match self
+                .carrier
+                .lock()
+                .unwrap()
+                .send_transaction(&tracker.dispute_tx)
+            {
                 ConfirmationStatus::InMempoolSince(_) => {
                     log::info!(
                         "Reorged dispute tx (txid={}) is in the mempool now",
@@ -325,15 +334,20 @@ impl Responder {
 
             if should_publish_penalty {
                 // Try to rebroadcast the penalty tx.
-                if let ConfirmationStatus::Rejected(_) =
-                    carrier.send_transaction(&tracker.penalty_tx)
-                {
+                let status = self
+                    .carrier
+                    .lock()
+                    .unwrap()
+                    .send_transaction(&tracker.penalty_tx);
+                if let ConfirmationStatus::Rejected(_) = status {
                     rejected.push(uuid)
                 } else {
                     // The penalty might actually be confirmed (ConfirmationStatus::IrrevocablyResolved) since bitcoind
                     // is fully synced with the stronger chain already, but we won't know which block was it confirmed in.
                     // We should see the tracker appear in the blockchain in the next couple of connected blocks.
-                    dbm.update_tracker_status(uuid, &ConfirmationStatus::InMempoolSince(height))
+                    self.dbm
+                        .update_tracker_status(uuid, &ConfirmationStatus::InMempoolSince(height))
+                        .await
                         .unwrap()
                 }
             } else {
@@ -350,9 +364,7 @@ impl Responder {
     /// fess and needs to be bumped, but there is not much we can do until anchors).
     ///
     /// Returns a vector of rejected trackers during rebroadcast if any were rejected, [None] otherwise.
-    fn rebroadcast_stale_txs(&self, height: u32) -> Option<Vec<UUID>> {
-        let dbm = self.dbm.lock().unwrap();
-        let mut carrier = self.carrier.lock().unwrap();
+    async fn rebroadcast_stale_txs(&self, height: u32) -> Option<Vec<UUID>> {
         let mut rejected = Vec::new();
 
         // Retry sending trackers which have been in the mempool since more than `CONFIRMATIONS_BEFORE_RETRY` blocks.
@@ -361,17 +373,23 @@ impl Responder {
         // NOTE: Ideally this will only pull UUIDs which have been in mempool since `CONFIRMATIONS_BEFORE_RETRY`, but
         // might also return ones which have been there for a longer period. This can only happen if the tower missed
         // a couple of block connections due to a force update.
-        for uuid in dbm
+        for uuid in self
+            .dbm
             .load_trackers_with_confirmation_status(stale_confirmation_status)
+            .await
             .unwrap()
         {
-            let tracker = dbm.load_tracker(uuid).unwrap();
+            let tracker = self.dbm.load_tracker(uuid).await.unwrap();
             log::warn!(
                 "Penalty transaction has missed many confirmations: {}",
                 tracker.penalty_tx.txid()
             );
             // Rebroadcast the penalty transaction.
-            let status = carrier.send_transaction(&tracker.penalty_tx);
+            let status = self
+                .carrier
+                .lock()
+                .unwrap()
+                .send_transaction(&tracker.penalty_tx);
             if let ConfirmationStatus::Rejected(_) = status {
                 rejected.push(uuid);
             } else {
@@ -379,7 +397,7 @@ impl Responder {
                 // Sending it will yield `ConfirmationStatus::IrrevocablyResolved` which would panic here.
                 // We might want to replace `ConfirmationStatus::IrrevocablyResolved` variant with
                 // `ConfirmationStatus::ConfirmedIn(height - IRREVOCABLY_RESOLVED)
-                dbm.update_tracker_status(uuid, &status).unwrap();
+                self.dbm.update_tracker_status(uuid, &status).await.unwrap();
             }
         }
 
@@ -412,8 +430,11 @@ impl AsyncListen for Responder {
         self.tx_index.lock().unwrap().update(block.header, &txs);
 
         // Delete trackers completed at this height
-        if let Some(trackers) = self.check_confirmations(txs.keys().cloned().collect(), height) {
-            self.gatekeeper.delete_appointments(trackers, true);
+        if let Some(trackers) = self
+            .check_confirmations(txs.keys().cloned().collect(), height)
+            .await
+        {
+            self.gatekeeper.delete_appointments(trackers, true).await;
         }
 
         let mut trackers_to_delete = Vec::new();
@@ -421,19 +442,20 @@ impl AsyncListen for Responder {
         // We will need to update those trackers that have been reorged.
         if self.coming_from_reorg() {
             // Handle reorged transactions. This clears `self.reorged_trackers`.
-            if let Some(trackers) = self.handle_reorged_txs(height) {
+            if let Some(trackers) = self.handle_reorged_txs(height).await {
                 trackers_to_delete.extend(trackers);
             }
         }
 
         // Rebroadcast those transactions that need to
-        if let Some(trackers) = self.rebroadcast_stale_txs(height) {
+        if let Some(trackers) = self.rebroadcast_stale_txs(height).await {
             trackers_to_delete.extend(trackers);
         }
 
         if !trackers_to_delete.is_empty() {
             self.gatekeeper
-                .delete_appointments(trackers_to_delete, false);
+                .delete_appointments(trackers_to_delete, false)
+                .await;
         }
 
         // Remove all receipts created in this block
@@ -453,13 +475,15 @@ impl AsyncListen for Responder {
         // TODO: Not only confirmed trackers need to be marked as reorged, but trackers that hasn't confirmed but their
         // dispute did confirm in the reorged block. We can pull dispute txids of non confirmed penalties and get their
         // confirmation block from our tx_index.
-        self.reorged_trackers.lock().unwrap().extend(
-            self.dbm
-                .lock()
-                .unwrap()
-                .load_trackers_with_confirmation_status(ConfirmationStatus::ConfirmedIn(height))
-                .unwrap(),
-        );
+        let reorged_trackers = self
+            .dbm
+            .load_trackers_with_confirmation_status(ConfirmationStatus::ConfirmedIn(height))
+            .await
+            .unwrap();
+        self.reorged_trackers
+            .lock()
+            .unwrap()
+            .extend(reorged_trackers);
     }
 }
 
@@ -506,8 +530,8 @@ mod tests {
     impl Eq for Responder {}
 
     impl Responder {
-        pub(crate) fn get_trackers(&self) -> HashMap<UUID, TransactionTracker> {
-            self.dbm.lock().unwrap().load_trackers(None)
+        pub(crate) async fn get_trackers(&self) -> HashMap<UUID, TransactionTracker> {
+            self.dbm.load_trackers(None).await
         }
 
         pub(crate) fn get_carrier(&self) -> &Mutex<Carrier> {
@@ -522,16 +546,15 @@ mod tests {
             tracker
         }
 
-        pub(crate) fn add_dummy_tracker(&self, tracker: &TransactionTracker) {
+        pub(crate) async fn add_dummy_tracker(&self, tracker: &TransactionTracker) {
             let (_, appointment) = generate_dummy_appointment_with_user(
                 tracker.user_id,
                 Some(&tracker.dispute_tx.txid()),
             );
-            store_appointment_and_its_user(&self.dbm.lock().unwrap(), &appointment);
+            store_appointment_and_its_user(&self.dbm, &appointment).await;
             self.dbm
-                .lock()
-                .unwrap()
                 .store_tracker(appointment.uuid(), tracker)
+                .await
                 .unwrap();
         }
 
@@ -539,7 +562,7 @@ mod tests {
             let appointment = generate_dummy_appointment(None);
             let (uuid, user_id) = (appointment.uuid(), appointment.user_id);
             // Store the appointment and the user to the DB.
-            store_appointment_and_its_user(&self.dbm.lock().unwrap(), &appointment);
+            store_appointment_and_its_user(&self.dbm, &appointment).await;
             (user_id, uuid)
         }
     }
@@ -547,7 +570,7 @@ mod tests {
     async fn create_responder(
         chain: &mut Blockchain,
         gatekeeper: Arc<Gatekeeper>,
-        dbm: Arc<Mutex<DBM>>,
+        dbm: Arc<DBM>,
         query: MockedServerQuery,
     ) -> (Responder, BitcoindStopper) {
         let height = if chain.tip().height < IRREVOCABLY_RESOLVED {
@@ -568,7 +591,7 @@ mod tests {
     async fn init_responder_with_chain_and_dbm(
         mocked_query: MockedServerQuery,
         chain: &mut Blockchain,
-        dbm: Arc<Mutex<DBM>>,
+        dbm: Arc<DBM>,
     ) -> (Responder, BitcoindStopper) {
         let gk = Gatekeeper::new(
             chain.get_block_count(),
@@ -581,7 +604,7 @@ mod tests {
     }
 
     async fn init_responder(mocked_query: MockedServerQuery) -> (Responder, BitcoindStopper) {
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(DBM::test_db().await);
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
         init_responder_with_chain_and_dbm(mocked_query, &mut chain, dbm).await
     }
@@ -624,7 +647,7 @@ mod tests {
     async fn test_responder_new() {
         // A fresh responder has no associated data
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(DBM::test_db().await);
         let (responder, _s) =
             init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm.clone())
                 .await;
@@ -662,7 +685,7 @@ mod tests {
             responder.handle_breach(uuid, breach, user_id),
             ConfirmationStatus::InMempoolSince(start_height)
         );
-        let tracker = responder.dbm.lock().unwrap().load_tracker(uuid).unwrap();
+        let tracker = responder.dbm.load_tracker(uuid).await.unwrap();
         assert_eq!(
             tracker.status,
             ConfirmationStatus::InMempoolSince(start_height)
@@ -676,10 +699,7 @@ mod tests {
             ConfirmationStatus::InMempoolSince(start_height)
         );
         // Getting the tracker should return the old one.
-        assert_eq!(
-            tracker,
-            responder.dbm.lock().unwrap().load_tracker(uuid).unwrap()
-        );
+        assert_eq!(tracker, responder.dbm.load_tracker(uuid).await.unwrap());
     }
 
     #[tokio::test]
@@ -694,7 +714,7 @@ mod tests {
             responder.handle_breach(uuid, breach, user_id),
             ConfirmationStatus::InMempoolSince(start_height)
         );
-        let tracker = responder.dbm.lock().unwrap().load_tracker(uuid).unwrap();
+        let tracker = responder.dbm.load_tracker(uuid).await.unwrap();
         assert_eq!(
             tracker.status,
             ConfirmationStatus::InMempoolSince(start_height)
@@ -729,7 +749,7 @@ mod tests {
             responder.handle_breach(uuid, breach, user_id),
             ConfirmationStatus::ConfirmedIn(target_height)
         );
-        let tracker = responder.dbm.lock().unwrap().load_tracker(uuid).unwrap();
+        let tracker = responder.dbm.load_tracker(uuid).await.unwrap();
         assert_eq!(
             tracker.status,
             ConfirmationStatus::ConfirmedIn(target_height)
@@ -770,7 +790,7 @@ mod tests {
 
         // Check that the data has been added to the responder.
         assert_eq!(
-            responder.dbm.lock().unwrap().load_tracker(uuid).unwrap(),
+            responder.dbm.load_tracker(uuid).await.unwrap(),
             TransactionTracker::new(
                 breach,
                 user_id,
@@ -790,7 +810,7 @@ mod tests {
         );
 
         assert_eq!(
-            responder.dbm.lock().unwrap().load_tracker(uuid).unwrap(),
+            responder.dbm.load_tracker(uuid).await.unwrap(),
             TransactionTracker::new(
                 breach.clone(),
                 user_id,
@@ -808,7 +828,7 @@ mod tests {
         );
 
         assert_eq!(
-            responder.dbm.lock().unwrap().load_tracker(uuid).unwrap(),
+            responder.dbm.load_tracker(uuid).await.unwrap(),
             TransactionTracker::new(
                 breach,
                 user_id,
@@ -851,7 +871,7 @@ mod tests {
         let (user_id, uuid) = responder.store_dummy_appointment_to_db();
 
         // Data should not be there before adding it
-        assert!(responder.dbm.lock().unwrap().load_tracker(uuid).is_none());
+        assert!(responder.dbm.load_tracker(uuid).await.is_none());
 
         // Data should be there now
         let breach = get_random_breach();
@@ -862,7 +882,7 @@ mod tests {
             ConfirmationStatus::InMempoolSince(start_height),
         );
         assert_eq!(
-            responder.dbm.lock().unwrap().load_tracker(uuid).unwrap(),
+            responder.dbm.load_tracker(uuid).await.unwrap(),
             TransactionTracker::new(
                 breach,
                 user_id,
@@ -872,7 +892,7 @@ mod tests {
 
         // After deleting the data it should be gone
         responder.gatekeeper.delete_appointments(vec![uuid], false);
-        assert!(responder.dbm.lock().unwrap().load_tracker(uuid).is_none());
+        assert!(responder.dbm.load_tracker(uuid).await.is_none());
     }
 
     #[tokio::test]
@@ -943,13 +963,7 @@ mod tests {
         // The ones in mempool should still be there (at the same height)
         for uuid in in_mempool {
             assert_eq!(
-                responder
-                    .dbm
-                    .lock()
-                    .unwrap()
-                    .load_tracker(uuid)
-                    .unwrap()
-                    .status,
+                responder.dbm.load_tracker(uuid).await.unwrap().status,
                 ConfirmationStatus::InMempoolSince(21)
             );
         }
@@ -957,13 +971,7 @@ mod tests {
         // The ones that just got confirmed should have been flagged so (at this height)
         for uuid in just_confirmed {
             assert_eq!(
-                responder
-                    .dbm
-                    .lock()
-                    .unwrap()
-                    .load_tracker(uuid)
-                    .unwrap()
-                    .status,
+                responder.dbm.load_tracker(uuid).await.unwrap().status,
                 ConfirmationStatus::ConfirmedIn(target_height)
             );
         }
@@ -971,13 +979,7 @@ mod tests {
         // The ones that were already confirmed but have not reached the end should remain the same
         for uuid in confirmed {
             assert_eq!(
-                responder
-                    .dbm
-                    .lock()
-                    .unwrap()
-                    .load_tracker(uuid)
-                    .unwrap()
-                    .status,
+                responder.dbm.load_tracker(uuid).await.unwrap().status,
                 ConfirmationStatus::ConfirmedIn(42)
             );
         }
@@ -1004,13 +1006,7 @@ mod tests {
         // And all the reorged trackers should have in mempool since `height` status.
         for uuid in trackers {
             assert_eq!(
-                responder
-                    .dbm
-                    .lock()
-                    .unwrap()
-                    .load_tracker(uuid)
-                    .unwrap()
-                    .status,
+                responder.dbm.load_tracker(uuid).await.unwrap().status,
                 ConfirmationStatus::InMempoolSince(height)
             );
         }
@@ -1043,13 +1039,7 @@ mod tests {
         // And all the reorged trackers statuses should be untouched.
         for uuid in trackers {
             assert_eq!(
-                responder
-                    .dbm
-                    .lock()
-                    .unwrap()
-                    .load_tracker(uuid)
-                    .unwrap()
-                    .status,
+                responder.dbm.load_tracker(uuid).await.unwrap().status,
                 ConfirmationStatus::ConfirmedIn(42)
             );
         }
@@ -1076,13 +1066,7 @@ mod tests {
         assert!(responder.rebroadcast_stale_txs(height).is_none());
 
         for (uuid, former_status) in statues {
-            let status = responder
-                .dbm
-                .lock()
-                .unwrap()
-                .load_tracker(uuid)
-                .unwrap()
-                .status;
+            let status = responder.dbm.load_tracker(uuid).await.unwrap().status;
             if let ConfirmationStatus::InMempoolSince(h) = former_status {
                 if height - h >= CONFIRMATIONS_BEFORE_RETRY as u32 {
                     // Transactions which stayed for more than `CONFIRMATIONS_BEFORE_RETRY` should have been rebroadcasted.
@@ -1134,13 +1118,7 @@ mod tests {
         assert_eq!(should_reject, rejected);
 
         for (uuid, former_status) in statues {
-            let status = responder
-                .dbm
-                .lock()
-                .unwrap()
-                .load_tracker(uuid)
-                .unwrap()
-                .status;
+            let status = responder.dbm.load_tracker(uuid).await.unwrap().status;
             // All tracker statues shouldn't change since the submitted ones were all rejected.
             assert_eq!(status, former_status);
         }
@@ -1148,11 +1126,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_connected() {
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let start_height = START_HEIGHT * 2;
         let mut chain = Blockchain::default().with_height(start_height);
-        let (responder, _s) =
-            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm).await;
+        let (responder, _s) = init_responder_with_chain_and_dbm(
+            MockedServerQuery::Regular,
+            &mut chain,
+            Arc::new(DBM::test_db().await),
+        )
+        .await;
 
         // block_connected is used to keep track of the confirmation received (or missed) by the trackers the Responder
         // is keeping track of.
@@ -1190,9 +1171,8 @@ mod tests {
                 .unwrap();
             responder
                 .dbm
-                .lock()
-                .unwrap()
                 .store_appointment(uuid, &appointment)
+                .await
                 .unwrap();
 
             // Trackers complete in the next block.
@@ -1217,9 +1197,8 @@ mod tests {
                     .unwrap();
                 responder
                     .dbm
-                    .lock()
-                    .unwrap()
                     .store_appointment(uuid, &appointment)
+                    .await
                     .unwrap();
 
                 let breach = Breach::new(dispute_tx, get_random_tx());
@@ -1253,9 +1232,8 @@ mod tests {
                 .unwrap();
             responder
                 .dbm
-                .lock()
-                .unwrap()
                 .store_appointment(uuid, &appointment)
+                .await
                 .unwrap();
 
             let breach = Breach::new(dispute_tx, get_random_tx());
@@ -1289,9 +1267,8 @@ mod tests {
                 .unwrap();
             responder
                 .dbm
-                .lock()
-                .unwrap()
                 .store_appointment(uuid, &appointment)
+                .await
                 .unwrap();
 
             let breach = Breach::new(dispute_tx, get_random_tx());
@@ -1344,12 +1321,7 @@ mod tests {
         // COMPLETED TRACKERS CHECKS
         // Data should have been removed
         for tracker in completed_trackers {
-            assert!(responder
-                .dbm
-                .lock()
-                .unwrap()
-                .load_tracker(tracker.uuid())
-                .is_none());
+            assert!(responder.dbm.load_tracker(tracker.uuid()).await.is_none());
             let (_, user_locators) = responder.gatekeeper.get_user_info(tracker.user_id).unwrap();
             assert!(!user_locators.contains(&tracker.locator()));
         }
@@ -1357,12 +1329,7 @@ mod tests {
         // OUTDATED TRACKERS CHECKS
         // Data should have been removed (tracker not found nor the user)
         for tracker in outdated_trackers {
-            assert!(responder
-                .dbm
-                .lock()
-                .unwrap()
-                .load_tracker(tracker.uuid())
-                .is_none());
+            assert!(responder.dbm.load_tracker(tracker.uuid()).await.is_none());
             assert!(responder
                 .gatekeeper
                 .get_user_info(tracker.user_id)
@@ -1375,9 +1342,8 @@ mod tests {
             assert_eq!(
                 responder
                     .dbm
-                    .lock()
-                    .unwrap()
                     .load_tracker(tracker.uuid())
+                    .await
                     .unwrap()
                     .status,
                 ConfirmationStatus::ConfirmedIn(target_block_height)
@@ -1387,9 +1353,8 @@ mod tests {
             assert_eq!(
                 responder
                     .dbm
-                    .lock()
-                    .unwrap()
                     .load_tracker(tracker.uuid())
+                    .await
                     .unwrap()
                     .status,
                 ConfirmationStatus::InMempoolSince(target_block_height - 1)
@@ -1401,9 +1366,8 @@ mod tests {
             assert_eq!(
                 responder
                     .dbm
-                    .lock()
-                    .unwrap()
                     .load_tracker(tracker.uuid())
+                    .await
                     .unwrap()
                     .status,
                 ConfirmationStatus::InMempoolSince(target_block_height),
@@ -1413,10 +1377,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_disconnected() {
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
-        let (responder, _s) =
-            init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm).await;
+        let (responder, _s) = init_responder_with_chain_and_dbm(
+            MockedServerQuery::Regular,
+            &mut chain,
+            Arc::new(DBM::test_db().await),
+        )
+        .await;
 
         // Add user to the database
         let user_id = get_random_user_id();
@@ -1432,9 +1399,8 @@ mod tests {
                 generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
             responder
                 .dbm
-                .lock()
-                .unwrap()
                 .store_appointment(uuid, &appointment)
+                .await
                 .unwrap();
 
             let breach = Breach::new(dispute_tx, get_random_tx());
@@ -1450,7 +1416,9 @@ mod tests {
         // Check that trackers are flagged as reorged if the height they were included at gets disconnected
         for (i, uuid) in block_range.clone().zip(reorged.iter()).rev() {
             // The header doesn't really matter, just the height
-            responder.block_disconnected(&chain.tip().header, i as u32).await;
+            responder
+                .block_disconnected(&chain.tip().header, i as u32)
+                .await;
             // Check that the proper tracker gets reorged at the proper height
             assert!(responder.reorged_trackers.lock().unwrap().contains(uuid));
             // Check that the carrier block_height has been updated

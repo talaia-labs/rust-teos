@@ -82,7 +82,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
             )
         })?;
 
-        match self.watcher.register(user_id) {
+        match self.watcher.register(user_id).await {
             Ok(receipt) => Ok(Response::new(common_msgs::RegisterResponse {
                 user_id: req_data.user_id,
                 available_slots: receipt.available_slots(),
@@ -116,6 +116,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
         match self
             .watcher
             .add_appointment(appointment, req_data.signature)
+            .await
         {
             Ok((receipt, available_slots, subscription_expiry)) => {
                 Ok(Response::new(common_msgs::AddAppointmentResponse {
@@ -153,7 +154,11 @@ impl PublicTowerServices for Arc<InternalAPI> {
         let req_data = request.into_inner();
         let locator = Locator::from_slice(&req_data.locator).unwrap();
 
-        match self.watcher.get_appointment(locator, &req_data.signature) {
+        match self
+            .watcher
+            .get_appointment(locator, &req_data.signature)
+            .await
+        {
             Ok(info) => {
                 let (appointment_data, status) = match info {
                     AppointmentInfo::Appointment(appointment) => (
@@ -207,6 +212,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
         let (subscription_info, locators) = self
             .watcher
             .get_subscription_info(&request.into_inner().signature)
+            .await
             .map_err(|e| match e {
                 GetSubscriptionInfoFailure::AuthenticationFailure => Status::new(
                     Code::Unauthenticated,
@@ -244,7 +250,12 @@ impl PrivateTowerServices for Arc<InternalAPI> {
 
         let mut all_appointments = Vec::new();
 
-        for (_, appointment) in self.watcher.get_all_watcher_appointments().into_iter() {
+        for (_, appointment) in self
+            .watcher
+            .get_all_watcher_appointments()
+            .await
+            .into_iter()
+        {
             all_appointments.push(common_msgs::AppointmentData {
                 appointment_data: Some(
                     common_msgs::appointment_data::AppointmentData::Appointment(
@@ -254,7 +265,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             })
         }
 
-        for (_, tracker) in self.watcher.get_all_responder_trackers().into_iter() {
+        for (_, tracker) in self.watcher.get_all_responder_trackers().await.into_iter() {
             all_appointments.push(common_msgs::AppointmentData {
                 appointment_data: Some(common_msgs::appointment_data::AppointmentData::Tracker(
                     tracker.into(),
@@ -291,6 +302,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         for (_, appointment) in self
             .watcher
             .get_watcher_appointments_with_locator(locator)
+            .await
             .into_iter()
         {
             matching_appointments.push(common_msgs::AppointmentData {
@@ -305,6 +317,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         for (_, tracker) in self
             .watcher
             .get_responder_trackers_with_locator(locator)
+            .await
             .into_iter()
         {
             matching_appointments.push(common_msgs::AppointmentData {
@@ -336,9 +349,9 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         Ok(Response::new(msgs::GetTowerInfoResponse {
             tower_id: self.watcher.tower_id.to_vec(),
             addresses: self.get_addresses().clone(),
-            n_registered_users: self.watcher.get_registered_users_count() as u32,
-            n_watcher_appointments: self.watcher.get_appointments_count() as u32,
-            n_responder_trackers: self.watcher.get_trackers_count() as u32,
+            n_registered_users: self.watcher.get_registered_users_count().await as u32,
+            n_watcher_appointments: self.watcher.get_appointments_count().await as u32,
+            n_responder_trackers: self.watcher.get_trackers_count().await as u32,
             bitcoind_reachable: self.check_service_unavailable().is_ok(),
         }))
     }
@@ -359,6 +372,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         let user_ids = self
             .watcher
             .get_user_ids()
+            .await
             .iter()
             .map(|x| x.to_vec())
             .collect();
@@ -386,7 +400,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             )
         })?;
 
-        match self.watcher.get_user_info(user_id) {
+        match self.watcher.get_user_info(user_id).await {
             Some((info, locators)) => Ok(Response::new(msgs::GetUserResponse {
                 available_slots: info.available_slots,
                 subscription_expiry: info.subscription_expiry,
