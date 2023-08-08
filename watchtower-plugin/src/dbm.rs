@@ -512,7 +512,6 @@ impl DBM {
             .prepare("SELECT locator FROM accepted_appointments WHERE tower_id = ?")
             .unwrap();
         let mut rows = stmt.query([tower_id.to_vec()]).unwrap();
-
         while let Ok(Some(row)) = rows.next() {
             let locator = Locators::from_slice(&row.get::<_, Vec<u8>>(0).unwrap()).unwrap();
             accepted_appointments.push(locator);

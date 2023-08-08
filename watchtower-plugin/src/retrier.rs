@@ -1364,7 +1364,6 @@ mod tests {
                 } else {
                     get_dummy_add_appointment_response(appointment2.locator, &appointment2_receipt)
                 };
-
                 json!(response).to_string().into()
             })
             .expect(2)

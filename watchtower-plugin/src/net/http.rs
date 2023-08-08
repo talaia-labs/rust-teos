@@ -218,7 +218,6 @@ pub async fn send_appointment(
         appointment: Some(appointment.clone().into()),
         signature: signature.to_owned(),
     };
-
     match process_post_response(
         post_request(
             tower_net_addr,

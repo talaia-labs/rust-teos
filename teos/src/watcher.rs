@@ -176,7 +176,6 @@ impl Watcher {
     /// charge of managing users.
     pub(crate) fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let mut receipt = self.gatekeeper.add_update_user(user_id)?;
-
         #[cfg(feature = "accountable")]
         receipt.sign(&self.signing_key);
 
@@ -269,14 +268,12 @@ impl Watcher {
             .gatekeeper
             .authenticate_user(&appointment.to_vec(), &user_signature)
             .map_err(|_| AddAppointmentFailure::AuthenticationFailure)?;
-
         let (has_subscription_expired, expiry) =
             self.gatekeeper.has_subscription_expired(user_id).unwrap();
 
         if has_subscription_expired {
             return Err(AddAppointmentFailure::SubscriptionExpired(expiry));
         }
-
         let extended_appointment = ExtendedAppointment::new(
             appointment,
             user_id,
@@ -284,7 +281,6 @@ impl Watcher {
             self.last_known_block_height.load(Ordering::Acquire),
         );
         let uuid = UUID::new(extended_appointment.locator(), user_id);
-
         if self.responder.has_tracker(uuid) {
             log::info!("Tracker for {uuid} already found in Responder");
             return Err(AddAppointmentFailure::AlreadyTriggered);

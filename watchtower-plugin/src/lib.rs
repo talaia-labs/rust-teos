@@ -533,7 +533,6 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             );
-
             assert!(tower_info.status.is_reachable());
             #[cfg(feature = "accountable")]
             assert!(tower_info.misbehaving_proof.is_none());

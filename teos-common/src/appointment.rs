@@ -27,7 +27,6 @@ impl Locators {
         let locator_data: [u8; LOCATOR_LEN] = data[..LOCATOR_LEN]
             .try_into()
             .map_err(|_| "Conversion to Locator data failed")?;
-
         let locator = Locator(locator_data);
         Ok(Self {
             data: locator_data,
