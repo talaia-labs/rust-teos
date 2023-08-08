@@ -10,18 +10,18 @@
  */
 
 use std::convert::TryInto;
-use std::io::{ Error, ErrorKind };
+use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use bitcoin::base64;
-use bitcoin::hash_types::{ BlockHash, Txid };
+use bitcoin::hash_types::{BlockHash, Txid};
 use bitcoin::hashes::hex::ToHex;
-use bitcoin::{ Block, Transaction };
+use bitcoin::{Block, Transaction};
 use lightning::util::ser::Writeable;
-use lightning_block_sync::http::{ HttpEndpoint, JsonResponse };
+use lightning_block_sync::http::{HttpEndpoint, JsonResponse};
 use lightning_block_sync::rpc::RpcClient;
-use lightning_block_sync::{ AsyncBlockSourceResult, BlockHeaderData, BlockSource };
+use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
 
 /// A simple implementation of a bitcoind client (`bitcoin-cli`) with the minimal functionality required by the tower.
 pub struct BitcoindClient<'a> {
@@ -42,7 +42,7 @@ impl BlockSource for &BitcoindClient<'_> {
     fn get_header<'a>(
         &'a self,
         header_hash: &'a BlockHash,
-        height_hint: Option<u32>
+        height_hint: Option<u32>,
     ) -> AsyncBlockSourceResult<'a, BlockHeaderData> {
         Box::pin(async move {
             let rpc = self.bitcoind_rpc_client.lock().await;
@@ -76,7 +76,7 @@ impl<'a> BitcoindClient<'a> {
         port: u16,
         rpc_user: &'a str,
         rpc_password: &'a str,
-        teos_network: &'a str
+        teos_network: &'a str,
     ) -> std::io::Result<BitcoindClient<'a>> {
         let http_endpoint = HttpEndpoint::for_host(host.to_owned()).with_port(port);
         let rpc_credentials = base64::encode(&format!("{rpc_user}:{rpc_password}"));
@@ -117,10 +117,11 @@ impl<'a> BitcoindClient<'a> {
 
     /// Gets the hash of the chain tip and its height.
     pub async fn get_best_block_hash_and_height(
-        &self
+        &self,
     ) -> Result<(BlockHash, Option<u32>), std::io::Error> {
         let rpc = self.bitcoind_rpc_client.lock().await;
-        rpc.call_method::<(BlockHash, Option<u32>)>("getblockchaininfo", &[]).await
+        rpc.call_method::<(BlockHash, Option<u32>)>("getblockchaininfo", &[])
+            .await
     }
 
     /// Sends a transaction to the network.
@@ -128,7 +129,8 @@ impl<'a> BitcoindClient<'a> {
         let rpc = self.bitcoind_rpc_client.lock().await;
 
         let raw_tx_json = serde_json::json!(raw_tx.encode().to_hex());
-        rpc.call_method::<Txid>("sendrawtransaction", &[raw_tx_json]).await
+        rpc.call_method::<Txid>("sendrawtransaction", &[raw_tx_json])
+            .await
     }
 
     /// Gets a transaction given its id.
@@ -136,7 +138,8 @@ impl<'a> BitcoindClient<'a> {
         let rpc = self.bitcoind_rpc_client.lock().await;
 
         let txid_hex = serde_json::json!(txid.encode().to_hex());
-        rpc.call_method::<Transaction>("getrawtransaction", &[txid_hex]).await
+        rpc.call_method::<Transaction>("getrawtransaction", &[txid_hex])
+            .await
     }
 
     /// Gets bitcoind's network.
@@ -152,7 +155,9 @@ impl<'a> BitcoindClient<'a> {
 
         // Ask the RPC client for the network bitcoind is running on.
         let rpc = self.bitcoind_rpc_client.lock().await;
-        let btc_network = rpc.call_method::<BtcNetwork>("getblockchaininfo", &[]).await?;
+        let btc_network = rpc
+            .call_method::<BtcNetwork>("getblockchaininfo", &[])
+            .await?;
 
         Ok(btc_network.0)
     }

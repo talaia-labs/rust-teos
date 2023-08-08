@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use bitcoin::secp256k1::SecretKey;
 
-use crate::{ cryptography, UserId };
+use crate::{cryptography, UserId};
 
 /// Proof that a user has registered with a tower. This serves two purposes:
 ///
@@ -34,7 +34,7 @@ impl RegistrationReceipt {
         user_id: UserId,
         available_slots: u32,
         subscription_start: u32,
-        subscription_expiry: u32
+        subscription_expiry: u32,
     ) -> Self {
         RegistrationReceipt {
             user_id,
@@ -49,7 +49,7 @@ impl RegistrationReceipt {
         available_slots: u32,
         subscription_start: u32,
         subscription_expiry: u32,
-        signature: String
+        signature: String,
     ) -> Self {
         RegistrationReceipt {
             user_id,

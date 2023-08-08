@@ -17,7 +17,7 @@ pub struct Locator([u8; LOCATOR_LEN]);
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct Locators {
     data: [u8; LOCATOR_LEN],
-    pub locator: Locator
+    pub locator: Locator,
 }
 impl Locators {
     pub fn from_slice(data: &[u8]) -> Result<Self, &'static str> {

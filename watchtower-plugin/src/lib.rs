@@ -228,10 +228,8 @@ impl TowerInfo {
         available_slots: u32,
         subscription_start: u32,
         subscription_expiry: u32,
-        #[cfg(feature = "accountable")]
-        appointments: HashMap<Locator, String>,
-        #[cfg(not(feature = "accountable"))]
-        appointments: Vec<Locators>,
+        #[cfg(feature = "accountable")] appointments: HashMap<Locator, String>,
+        #[cfg(not(feature = "accountable"))] appointments: Vec<Locators>,
         pending_appointments: Vec<Appointment>,
         invalid_appointments: Vec<Appointment>,
     ) -> Self {

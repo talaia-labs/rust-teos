@@ -53,8 +53,8 @@ struct AppointmentInners {
 }
 
 struct LocatorInners {
-   arg1: String,
-   arg2: u32,
+    arg1: String,
+    arg2: u32,
 }
 
 pub fn serialize_appointments<S>(v: &Vec<Appointment>, s: S) -> Result<S::Ok, S::Error>
@@ -79,10 +79,7 @@ where
 {
     let mut map = s.serialize_map(Some(v.len()))?;
     for a in v {
-        map.serialize_entry(
-            &hex::encode(a.locator),
-            "None",
-        )?;
+        map.serialize_entry(&hex::encode(a.locator), "None")?;
     }
     map.end()
 }

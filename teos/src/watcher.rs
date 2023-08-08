@@ -15,10 +15,10 @@ use lightning_block_sync::poll::ValidatedBlock;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
-#[cfg(feature = "accountable")]
-use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 #[cfg(not(feature = "accountable"))]
 use teos_common::receipts::RegistrationReceipt;
+#[cfg(feature = "accountable")]
+use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
 use crate::dbm::DBM;
@@ -179,10 +179,10 @@ impl Watcher {
 
         #[cfg(feature = "accountable")]
         receipt.sign(&self.signing_key);
-    
+
         Ok(receipt)
     }
-    
+
     /// Adds a new [Appointment] to the tower.
     ///
     /// Appointments are only added provided:
@@ -200,9 +200,7 @@ impl Watcher {
         &self,
         appointment: Appointment,
         user_signature: String,
-    ) -> 
-    Result<(AppointmentReceipt, u32, u32), AddAppointmentFailure>
-     {
+    ) -> Result<(AppointmentReceipt, u32, u32), AddAppointmentFailure> {
         let user_id = self
             .gatekeeper
             .authenticate_user(&appointment.to_vec(), &user_signature)
@@ -266,9 +264,7 @@ impl Watcher {
         &self,
         appointment: Appointment,
         user_signature: String,
-    ) -> 
-    Result<(u32, u32), AddAppointmentFailure>
-     {
+    ) -> Result<(u32, u32), AddAppointmentFailure> {
         let user_id = self
             .gatekeeper
             .authenticate_user(&appointment.to_vec(), &user_signature)
@@ -898,8 +894,7 @@ mod tests {
         slots: u32,
         expected_slots: u32,
         expiry: u32,
-        #[cfg(feature = "accountable")]
-        receipt: AppointmentReceipt,
+        #[cfg(feature = "accountable")] receipt: AppointmentReceipt,
         expected_user_signature: &str,
         tower_id: TowerId,
     ) {
@@ -912,7 +907,7 @@ mod tests {
         #[cfg(feature = "accountable")]
         let recovered_pk =
             cryptography::recover_pk(&receipt.to_vec(), &receipt.signature().unwrap()).unwrap();
-            #[cfg(feature = "accountable")]
+        #[cfg(feature = "accountable")]
         assert_eq!(TowerId(recovered_pk), tower_id);
     }
 

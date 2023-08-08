@@ -5,7 +5,7 @@ use teos_common::receipts::AppointmentReceipt;
 #[cfg(feature = "accountable")]
 pub fn get_dummy_add_appointment_response(
     locator: Locator,
-    receipt: &AppointmentReceipt
+    receipt: &AppointmentReceipt,
 ) -> common_msgs::AddAppointmentResponse {
     common_msgs::AddAppointmentResponse {
         locator: locator.to_vec(),
@@ -16,9 +16,7 @@ pub fn get_dummy_add_appointment_response(
     }
 }
 #[cfg(not(feature = "accountable"))]
-pub fn get_dummy_add_appointment_response(
-    locator: Locator
-) -> common_msgs::AddAppointmentResponse {
+pub fn get_dummy_add_appointment_response(locator: Locator) -> common_msgs::AddAppointmentResponse {
     common_msgs::AddAppointmentResponse {
         locator: locator.to_vec(),
         start_block: 0,

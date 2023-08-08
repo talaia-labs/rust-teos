@@ -9,10 +9,10 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
 use teos_common::dbm::Error as DBError;
-#[cfg(feature = "accountable")]
-use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 #[cfg(not(feature = "accountable"))]
 use teos_common::receipts::RegistrationReceipt;
+#[cfg(feature = "accountable")]
+use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
 use crate::dbm::DBM;
@@ -334,20 +334,18 @@ mod tests {
     use super::*;
 
     use tempdir::TempDir;
-    use tokio::sync::mpsc::unbounded_channel;
     #[cfg(feature = "accountable")]
     use teos_common::test_utils::{
-        generate_random_appointment, 
-        get_random_appointment_receipt,
+        generate_random_appointment, get_random_appointment_receipt,
         get_random_registration_receipt, get_random_user_id,
         get_registration_receipt_from_previous,
     };
     #[cfg(not(feature = "accountable"))]
     use teos_common::test_utils::{
-        generate_random_appointment, 
-        get_random_registration_receipt, get_random_user_id,
+        generate_random_appointment, get_random_registration_receipt, get_random_user_id,
         get_registration_receipt_from_previous,
     };
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[tokio::test]
     async fn test_add_update_load_tower() {

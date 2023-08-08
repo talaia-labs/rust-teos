@@ -6,10 +6,10 @@ use teos_common::cryptography;
 use teos_common::net::http::Endpoint;
 use teos_common::net::NetAddr;
 use teos_common::protos as common_msgs;
-#[cfg(feature = "accountable")]
-use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 #[cfg(not(feature = "accountable"))]
 use teos_common::receipts::RegistrationReceipt;
+#[cfg(feature = "accountable")]
+use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
 use crate::net::ProxyInfo;
@@ -101,7 +101,6 @@ pub async fn register(
     log::info!("Registering in the Eye of Satoshi (tower_id={tower_id})");
     process_post_response(
         post_request(
-            
             tower_net_addr,
             Endpoint::Register,
             &common_msgs::RegisterRequest {
@@ -110,7 +109,6 @@ pub async fn register(
             proxy,
         )
         .await,
-        
     )
     .await
     .map(|r: common_msgs::RegisterResponse| {
@@ -118,9 +116,8 @@ pub async fn register(
             user_id,
             r.available_slots,
             r.subscription_start,
-            r.subscription_expiry
+            r.subscription_expiry,
         )
-        
     })
 }
 
@@ -132,9 +129,7 @@ pub async fn add_appointment(
     proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
-) -> 
-Result<(u32, AppointmentReceipt), AddAppointmentError> 
- {
+) -> Result<(u32, AppointmentReceipt), AddAppointmentError> {
     log::debug!(
         "Sending appointment {} to tower {tower_id}",
         appointment.locator
@@ -153,13 +148,12 @@ pub async fn add_appointment(
     proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
-) -> 
-Result<u32, AddAppointmentError> {
+) -> Result<u32, AddAppointmentError> {
     log::debug!(
         "Sending appointment {} to tower {tower_id}",
         appointment.locator
     );
-        let response =
+    let response =
         send_appointment(tower_id, tower_net_addr, proxy, appointment, signature).await?;
     log::debug!("Appointment accepted by {tower_id}");
     log::debug!("Remaining slots: {}", response.available_slots);
@@ -173,11 +167,10 @@ pub async fn send_appointment(
     proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
-) -> 
-Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointmentError>  {
+) -> Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointmentError> {
     let request_data = common_msgs::AddAppointmentRequest {
         appointment: Some(appointment.clone().into()),
-        signature: signature.to_owned()
+        signature: signature.to_owned(),
     };
 
     match process_post_response(
@@ -202,8 +195,7 @@ Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointment
             );
             if recovered_id == tower_id {
                 Ok((r, receipt))
-            } 
-            else {
+            } else {
                 Err(AddAppointmentError::SignatureError(MisbehaviorProof::new(
                     appointment.locator,
                     receipt,
@@ -221,11 +213,10 @@ pub async fn send_appointment(
     proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
-) -> 
-Result<(common_msgs::AddAppointmentResponse), AddAppointmentError> {
+) -> Result<(common_msgs::AddAppointmentResponse), AddAppointmentError> {
     let request_data = common_msgs::AddAppointmentRequest {
         appointment: Some(appointment.clone().into()),
-        signature: signature.to_owned()
+        signature: signature.to_owned(),
     };
 
     match process_post_response(
@@ -239,9 +230,7 @@ Result<(common_msgs::AddAppointmentResponse), AddAppointmentError> {
     )
     .await?
     {
-        ApiResponse::Response::<common_msgs::AddAppointmentResponse>(r) => {
-            Ok(r)
-        }
+        ApiResponse::Response::<common_msgs::AddAppointmentResponse>(r) => Ok(r),
         ApiResponse::Error(e) => Err(AddAppointmentError::ApiError(e)),
     }
 }
@@ -331,7 +320,7 @@ pub async fn process_post_response<T: DeserializeOwned>(
 mod tests {
     use super::*;
     use serde_json::json;
-    
+
     use crate::test_utils::get_dummy_add_appointment_response;
     #[cfg(feature = "accountable")]
     use teos_common::test_utils::{
@@ -340,8 +329,7 @@ mod tests {
     };
     #[cfg(not(feature = "accountable"))]
     use teos_common::test_utils::{
-        generate_random_appointment,
-        get_random_registration_receipt, get_random_user_id,
+        generate_random_appointment, get_random_registration_receipt, get_random_user_id,
     };
     mod request_error {
         use super::*;
@@ -440,9 +428,8 @@ mod tests {
         #[cfg(feature = "accountable")]
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &appointment_receipt);
-            #[cfg(not(feature = "accountable"))]
-            let add_appointment_response =
-            get_dummy_add_appointment_response(appointment.locator);
+        #[cfg(not(feature = "accountable"))]
+        let add_appointment_response = get_dummy_add_appointment_response(appointment.locator);
 
         let mut server = mockito::Server::new_async().await;
         let api_mock = server
@@ -462,16 +449,16 @@ mod tests {
         )
         .await
         .unwrap();
-    #[cfg(not(feature = "accountable"))]
-    let (response) = add_appointment(
-        TowerId(tower_pk),
-        &NetAddr::new(server.url()),
-        &None,
-        &appointment,
-        "None"
-    )
-    .await
-    .unwrap();
+        #[cfg(not(feature = "accountable"))]
+        let (response) = add_appointment(
+            TowerId(tower_pk),
+            &NetAddr::new(server.url()),
+            &None,
+            &appointment,
+            "None",
+        )
+        .await
+        .unwrap();
 
         api_mock.assert_async().await;
         assert_eq!(response, add_appointment_response.available_slots);
@@ -488,9 +475,8 @@ mod tests {
         #[cfg(feature = "accountable")]
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &appointment_receipt);
-            #[cfg(not(feature = "accountable"))]
-            let add_appointment_response =
-            get_dummy_add_appointment_response(appointment.locator);
+        #[cfg(not(feature = "accountable"))]
+        let add_appointment_response = get_dummy_add_appointment_response(appointment.locator);
 
         let mut server = mockito::Server::new_async().await;
         let api_mock = server
@@ -510,16 +496,16 @@ mod tests {
         )
         .await
         .unwrap();
-    #[cfg(not(feature = "accountable"))]
-    let (response) = send_appointment(
-        TowerId(tower_pk),
-        &NetAddr::new(server.url()),
-        &None,
-        &appointment,
-        "None",
-    )
-    .await
-    .unwrap();
+        #[cfg(not(feature = "accountable"))]
+        let (response) = send_appointment(
+            TowerId(tower_pk),
+            &NetAddr::new(server.url()),
+            &None,
+            &appointment,
+            "None",
+        )
+        .await
+        .unwrap();
 
         api_mock.assert_async().await;
         assert_eq!(response, add_appointment_response);
@@ -537,9 +523,8 @@ mod tests {
         #[cfg(feature = "accountable")]
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &appointment_receipt);
-            #[cfg(not(feature = "accountable"))]
-            let add_appointment_response =
-            get_dummy_add_appointment_response(appointment.locator);
+        #[cfg(not(feature = "accountable"))]
+        let add_appointment_response = get_dummy_add_appointment_response(appointment.locator);
 
         let mut server = mockito::Server::new_async().await;
         let api_mock = server

@@ -1,16 +1,16 @@
-use serde::{ Deserialize, Serialize };
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::error::Error;
 use std::net::SocketAddr;
 use tokio::time::Duration;
 use tonic::transport::Channel;
-use triggered::{ Listener, Trigger };
-use warp::{ http::StatusCode, reject, reply, Filter, Rejection, Reply };
+use triggered::{Listener, Trigger};
+use warp::{http::StatusCode, reject, reply, Filter, Rejection, Reply};
 
 use teos_common::appointment::LOCATOR_LEN;
 use teos_common::net::http::Endpoint;
 use teos_common::protos as common_msgs;
-use teos_common::{ errors, USER_ID_LEN };
+use teos_common::{errors, USER_ID_LEN};
 
 use crate::protos::public_tower_services_client::PublicTowerServicesClient;
 
@@ -35,27 +35,31 @@ impl ApiError {
     }
 
     fn missing_field(field_name: &str) -> Rejection {
-        reject::custom(Self::new(format!("missing field `{field_name}`"), errors::MISSING_FIELD))
+        reject::custom(Self::new(
+            format!("missing field `{field_name}`"),
+            errors::MISSING_FIELD,
+        ))
     }
 
     fn empty_field(field_name: &str) -> Rejection {
-        reject::custom(Self::new(format!("`{field_name}` field is empty"), errors::EMPTY_FIELD))
+        reject::custom(Self::new(
+            format!("`{field_name}` field is empty"),
+            errors::EMPTY_FIELD,
+        ))
     }
 
     fn wrong_field_length(field_name: &str, field_size: usize, expected_size: usize) -> Rejection {
-        reject::custom(
-            Self::new(
-                format!(
-                    "Wrong `{field_name}` field size. Expected {expected_size}, received {field_size}"
-                ),
-                errors::WRONG_FIELD_SIZE
-            )
-        )
+        reject::custom(Self::new(
+            format!(
+                "Wrong `{field_name}` field size. Expected {expected_size}, received {field_size}"
+            ),
+            errors::WRONG_FIELD_SIZE,
+        ))
     }
 }
 
 fn with_grpc(
-    grpc_endpoint: PublicTowerServicesClient<Channel>
+    grpc_endpoint: PublicTowerServicesClient<Channel>,
 ) -> impl Filter<Extract = (PublicTowerServicesClient<Channel>,), Error = Infallible> + Clone {
     warp::any().map(move || grpc_endpoint.clone())
 }
@@ -88,7 +92,7 @@ fn match_status(s: &tonic::Status) -> (StatusCode, u8) {
 }
 
 fn parse_grpc_response<T: serde::Serialize>(
-    result: Result<tonic::Response<T>, tonic::Status>
+    result: Result<tonic::Response<T>, tonic::Status>,
 ) -> (reply::Json, StatusCode) {
     match result {
         Ok(r) => {
@@ -101,7 +105,10 @@ fn parse_grpc_response<T: serde::Serialize>(
             let (status_code, error_code) = match_status(&s);
             log::debug!("Request failed, error_code={error_code}");
             log::debug!("Response: {}", serde_json::json!(s.message()));
-            (reply::json(&ApiError::new(s.message().into(), error_code)), status_code)
+            (
+                reply::json(&ApiError::new(s.message().into(), error_code)),
+                status_code,
+            )
         }
     }
 }
@@ -109,7 +116,7 @@ fn parse_grpc_response<T: serde::Serialize>(
 async fn register(
     req: common_msgs::RegisterRequest,
     addr: Option<std::net::SocketAddr>,
-    mut grpc_conn: PublicTowerServicesClient<Channel>
+    mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
     log::debug!(
         "Received a register request from {}",
@@ -121,7 +128,11 @@ async fn register(
         return Err(ApiError::empty_field("user_id"));
     }
     if user_id.len() != USER_ID_LEN {
-        return Err(ApiError::wrong_field_length("user_id", user_id.len(), USER_ID_LEN));
+        return Err(ApiError::wrong_field_length(
+            "user_id",
+            user_id.len(),
+            USER_ID_LEN,
+        ));
     }
 
     let (body, status) = parse_grpc_response(grpc_conn.register(req).await);
@@ -131,7 +142,7 @@ async fn register(
 async fn add_appointment(
     req: common_msgs::AddAppointmentRequest,
     addr: Option<std::net::SocketAddr>,
-    mut grpc_conn: PublicTowerServicesClient<Channel>
+    mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
     log::debug!(
         "Received an add_appointment request from {}",
@@ -143,7 +154,11 @@ async fn add_appointment(
             return Err(ApiError::empty_field("locator"));
         }
         if a.locator.len() != LOCATOR_LEN {
-            return Err(ApiError::wrong_field_length("locator", a.locator.len(), LOCATOR_LEN));
+            return Err(ApiError::wrong_field_length(
+                "locator",
+                a.locator.len(),
+                LOCATOR_LEN,
+            ));
         }
     } else {
         return Err(ApiError::missing_field("appointment"));
@@ -159,7 +174,7 @@ async fn add_appointment(
 async fn get_appointment(
     req: common_msgs::GetAppointmentRequest,
     addr: Option<std::net::SocketAddr>,
-    mut grpc_conn: PublicTowerServicesClient<Channel>
+    mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
     log::debug!(
         "Received an get_appointment request from {}",
@@ -170,7 +185,11 @@ async fn get_appointment(
         return Err(ApiError::empty_field("locator"));
     }
     if req.locator.len() != LOCATOR_LEN {
-        return Err(ApiError::wrong_field_length("locator", req.locator.len(), LOCATOR_LEN));
+        return Err(ApiError::wrong_field_length(
+            "locator",
+            req.locator.len(),
+            LOCATOR_LEN,
+        ));
     }
     if req.signature.is_empty() {
         return Err(ApiError::empty_field("signature"));
@@ -183,7 +202,7 @@ async fn get_appointment(
 async fn get_subscription_info(
     req: common_msgs::GetSubscriptionInfoRequest,
     addr: Option<std::net::SocketAddr>,
-    mut grpc_conn: PublicTowerServicesClient<Channel>
+    mut grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> std::result::Result<impl Reply, Rejection> {
     log::debug!(
         "Received an get_subscription_info request from {}",
@@ -207,44 +226,40 @@ async fn ping(addr: Option<SocketAddr>) -> Result<impl Reply, Rejection> {
 }
 
 fn router(
-    grpc_conn: PublicTowerServicesClient<Channel>
+    grpc_conn: PublicTowerServicesClient<Channel>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let register = warp
-        ::post()
+    let register = warp::post()
         .and(warp::path(Endpoint::Register.to_string()))
         .and(warp::body::content_length_limit(REGISTER_BODY_LEN).and(warp::body::json()))
         .and(warp::addr::remote())
         .and(with_grpc(grpc_conn.clone()))
         .and_then(register);
 
-    let add_appointment = warp
-        ::post()
+    let add_appointment = warp::post()
         .and(warp::path(Endpoint::AddAppointment.to_string()))
         .and(warp::body::content_length_limit(ADD_APPOINTMENT_BODY_LEN).and(warp::body::json()))
         .and(warp::addr::remote())
         .and(with_grpc(grpc_conn.clone()))
         .and_then(add_appointment);
 
-    let get_appointment = warp
-        ::post()
+    let get_appointment = warp::post()
         .and(warp::path(Endpoint::GetAppointment.to_string()))
         .and(warp::body::content_length_limit(GET_APPOINTMENT_BODY_LEN).and(warp::body::json()))
         .and(warp::addr::remote())
         .and(with_grpc(grpc_conn.clone()))
         .and_then(get_appointment);
 
-    let get_subscription_info = warp
-        ::post()
+    let get_subscription_info = warp::post()
         .and(warp::path(Endpoint::GetSubscriptionInfo.to_string()))
         .and(
-            warp::body::content_length_limit(GET_SUBSCRIPTION_INFO_BODY_LEN).and(warp::body::json())
+            warp::body::content_length_limit(GET_SUBSCRIPTION_INFO_BODY_LEN)
+                .and(warp::body::json()),
         )
         .and(warp::addr::remote())
         .and(with_grpc(grpc_conn))
         .and_then(get_subscription_info);
 
-    let ping = warp
-        ::get()
+    let ping = warp::get()
         .and(warp::path(Endpoint::Ping.to_string()))
         .and(warp::addr::remote())
         .and_then(ping);
@@ -275,18 +290,15 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
             } else {
                 errors::INVALID_REQUEST_FORMAT
             };
-            Ok(
-                reply::with_status(
-                    reply::json(&(ApiError { error, error_code })),
-                    StatusCode::BAD_REQUEST
-                )
-            )
+            Ok(reply::with_status(
+                reply::json(&(ApiError { error, error_code })),
+                StatusCode::BAD_REQUEST,
+            ))
         }
-        None =>
-            match err.find::<ApiError>() {
-                Some(x) => Ok(reply::with_status(reply::json(x), StatusCode::BAD_REQUEST)),
-                None => Err(err),
-            }
+        None => match err.find::<ApiError>() {
+            Some(x) => Ok(reply::with_status(reply::json(x), StatusCode::BAD_REQUEST)),
+            None => Err(err),
+        },
     }
 }
 
@@ -294,7 +306,7 @@ pub async fn serve(
     http_bind: SocketAddr,
     grpc_bind: SocketAddr,
     service_ready: Trigger,
-    shutdown_signal: Listener
+    shutdown_signal: Listener,
 ) {
     let grpc_conn = loop {
         match PublicTowerServicesClient::connect(format!("http://{grpc_bind}")).await {
@@ -307,9 +319,8 @@ pub async fn serve(
             }
         }
     };
-    let (_, server) = warp
-        ::serve(router(grpc_conn))
-        .bind_with_graceful_shutdown(http_bind, shutdown_signal);
+    let (_, server) =
+        warp::serve(router(grpc_conn)).bind_with_graceful_shutdown(http_bind, shutdown_signal);
     service_ready.trigger();
     server.await
 }
@@ -326,7 +337,7 @@ mod test_helpers {
 
     use crate::api::internal::InternalAPI;
     use crate::protos::public_tower_services_server::PublicTowerServicesServer;
-    use crate::test_utils::{ create_api_with_config, ApiConfig, BitcoindStopper };
+    use crate::test_utils::{create_api_with_config, ApiConfig, BitcoindStopper};
 
     pub(crate) enum RequestBody<'a> {
         Jsonify(&'a str),
@@ -336,7 +347,7 @@ mod test_helpers {
     }
 
     pub(crate) async fn run_tower_in_background_with_config(
-        api_config: ApiConfig
+        api_config: ApiConfig,
     ) -> (SocketAddr, Arc<InternalAPI>, BitcoindStopper) {
         let (internal_rpc_api, bitcoind_stopper) = create_api_with_config(api_config).await;
         let cloned = internal_rpc_api.clone();
@@ -347,7 +358,8 @@ mod test_helpers {
         tokio::spawn(async move {
             Server::builder()
                 .add_service(PublicTowerServicesServer::new(internal_rpc_api))
-                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)).await
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
                 .unwrap();
         });
 
@@ -355,9 +367,8 @@ mod test_helpers {
     }
 
     pub(crate) async fn run_tower_in_background() -> (SocketAddr, BitcoindStopper) {
-        let (sock_addr, _, bitcoind_stopper) = run_tower_in_background_with_config(
-            ApiConfig::default()
-        ).await;
+        let (sock_addr, _, bitcoind_stopper) =
+            run_tower_in_background_with_config(ApiConfig::default()).await;
 
         (sock_addr, bitcoind_stopper)
     }
@@ -365,49 +376,65 @@ mod test_helpers {
     pub(crate) async fn check_api_error(
         endpoint: Endpoint,
         body: RequestBody<'_>,
-        server_addr: SocketAddr
+        server_addr: SocketAddr,
     ) -> (ApiError, StatusCode) {
-        let grpc_conn = PublicTowerServicesClient::connect(
-            format!("http://{}:{}", server_addr.ip(), server_addr.port())
-        ).await.unwrap();
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
 
         let req = match body {
-            RequestBody::Json(j) =>
-                warp::test::request().method("POST").path(&endpoint.path()).json(&j),
-            RequestBody::DoNotJsonify(j) =>
-                warp::test::request().method("POST").path(&endpoint.path()).json(&j),
-            RequestBody::Jsonify(j) =>
-                warp::test
-                    ::request()
-                    .method("POST")
-                    .path(&endpoint.path())
-                    .json(&serde_json::from_str::<Value>(j).unwrap()),
-            RequestBody::Body(b) =>
-                warp::test::request().method("POST").path(&endpoint.path()).body(b),
+            RequestBody::Json(j) => warp::test::request()
+                .method("POST")
+                .path(&endpoint.path())
+                .json(&j),
+            RequestBody::DoNotJsonify(j) => warp::test::request()
+                .method("POST")
+                .path(&endpoint.path())
+                .json(&j),
+            RequestBody::Jsonify(j) => warp::test::request()
+                .method("POST")
+                .path(&endpoint.path())
+                .json(&serde_json::from_str::<Value>(j).unwrap()),
+            RequestBody::Body(b) => warp::test::request()
+                .method("POST")
+                .path(&endpoint.path())
+                .body(b),
         };
 
         let res = req.reply(&router(grpc_conn)).await;
-        (serde_json::from_slice::<ApiError>(res.body()).unwrap(), res.status())
+        (
+            serde_json::from_slice::<ApiError>(res.body()).unwrap(),
+            res.status(),
+        )
     }
 
     pub(crate) async fn request_to_api<B, T>(
         endpoint: Endpoint,
         body: B,
-        server_addr: SocketAddr
-    )
-        -> Result<T, serde_json::Error>
-        where B: Serialize, T: DeserializeOwned
+        server_addr: SocketAddr,
+    ) -> Result<T, serde_json::Error>
+    where
+        B: Serialize,
+        T: DeserializeOwned,
     {
-        let grpc_conn = PublicTowerServicesClient::connect(
-            format!("http://{}:{}", server_addr.ip(), server_addr.port())
-        ).await.unwrap();
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
 
-        let res = warp::test
-            ::request()
+        let res = warp::test::request()
             .method("POST")
             .path(&endpoint.path())
             .json(&serde_json::json!(body))
-            .reply(&router(grpc_conn)).await;
+            .reply(&router(grpc_conn))
+            .await;
 
         serde_json::from_slice::<T>(res.body())
     }
@@ -415,7 +442,7 @@ mod test_helpers {
 
 #[cfg(test)]
 mod tests_failures {
-    use super::test_helpers::{ check_api_error, run_tower_in_background, RequestBody };
+    use super::test_helpers::{check_api_error, run_tower_in_background, RequestBody};
     use super::*;
 
     use teos_common::test_utils::get_random_user_id;
@@ -423,11 +450,8 @@ mod tests_failures {
     #[tokio::test]
     async fn test_no_json_request_body() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let (api_error, status) = check_api_error(
-            Endpoint::Register,
-            RequestBody::Body(""),
-            server_addr
-        ).await;
+        let (api_error, status) =
+            check_api_error(Endpoint::Register, RequestBody::Body(""), server_addr).await;
         assert!(api_error.error.contains("EOF while parsing"));
         assert_eq!(api_error.error_code, errors::INVALID_REQUEST_FORMAT);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -439,8 +463,9 @@ mod tests_failures {
         let (api_error, status) = check_api_error(
             Endpoint::Register,
             RequestBody::DoNotJsonify(""),
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
         assert!(api_error.error.contains("expected struct"));
         assert_eq!(api_error.error_code, errors::WRONG_FIELD_TYPE);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -452,8 +477,9 @@ mod tests_failures {
         let (api_error, status) = check_api_error(
             Endpoint::Register,
             RequestBody::Jsonify(r#"{}"#),
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
         assert!(api_error.error.contains("missing field"));
         assert_eq!(api_error.error_code, errors::MISSING_FIELD);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -465,8 +491,9 @@ mod tests_failures {
         let (api_error, status) = check_api_error(
             Endpoint::Register,
             RequestBody::Jsonify(r#"{"user_id": ""}"#),
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
         assert!(api_error.error.contains("field is empty"));
         assert_eq!(api_error.error_code, errors::EMPTY_FIELD);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -478,8 +505,9 @@ mod tests_failures {
         let (api_error, status) = check_api_error(
             Endpoint::Register,
             RequestBody::Jsonify(r#"{"user_id": "a"}"#),
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
         assert!(api_error.error.contains("Odd number of digits"));
         assert_eq!(api_error.error_code, errors::WRONG_FIELD_FORMAT);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -507,8 +535,9 @@ mod tests_failures {
         let (api_error, status) = check_api_error(
             Endpoint::Register,
             RequestBody::Jsonify(r#"{"user_id": "aa"}"#),
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
 
         assert!(api_error.error.contains("Wrong `user_id` field size"));
         assert_eq!(api_error.error_code, errors::WRONG_FIELD_SIZE);
@@ -521,8 +550,9 @@ mod tests_failures {
         let (api_error, status) = check_api_error(
             Endpoint::Register,
             RequestBody::DoNotJsonify(r#"{"user_id": 1}"#),
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
         assert!(api_error.error.contains("invalid type"));
         assert_eq!(api_error.error_code, errors::WRONG_FIELD_TYPE);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -535,8 +565,9 @@ mod tests_failures {
         let (api_error, status) = check_api_error(
             Endpoint::AddAppointment,
             RequestBody::Jsonify(r#"{"signature": "aa"}"#),
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
         assert!(api_error.error.contains("missing field"));
         assert_eq!(api_error.error_code, errors::MISSING_FIELD);
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -547,15 +578,19 @@ mod tests_failures {
     #[tokio::test]
     async fn test_empty_request_body() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let grpc_conn = PublicTowerServicesClient::connect(
-            format!("http://{}:{}", server_addr.ip(), server_addr.port())
-        ).await.unwrap();
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
 
-        let res = warp::test
-            ::request()
+        let res = warp::test::request()
             .method("POST")
             .path(&Endpoint::Register.path())
-            .reply(&router(grpc_conn)).await;
+            .reply(&router(grpc_conn))
+            .await;
 
         assert_eq!(res.status(), StatusCode::LENGTH_REQUIRED);
     }
@@ -563,16 +598,20 @@ mod tests_failures {
     #[tokio::test]
     async fn test_payload_too_large() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let grpc_conn = PublicTowerServicesClient::connect(
-            format!("http://{}:{}", server_addr.ip(), server_addr.port())
-        ).await.unwrap();
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
 
-        let res = warp::test
-            ::request()
+        let res = warp::test::request()
             .method("POST")
             .path(&Endpoint::Register.path())
             .json(&format!("{}{}", get_random_user_id(), get_random_user_id()))
-            .reply(&router(grpc_conn)).await;
+            .reply(&router(grpc_conn))
+            .await;
 
         assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
@@ -580,11 +619,19 @@ mod tests_failures {
     #[tokio::test]
     async fn test_wrong_endpoint() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let grpc_conn = PublicTowerServicesClient::connect(
-            format!("http://{}:{}", server_addr.ip(), server_addr.port())
-        ).await.unwrap();
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
 
-        let res = warp::test::request().method("POST").json(&"").reply(&router(grpc_conn)).await;
+        let res = warp::test::request()
+            .method("POST")
+            .json(&"")
+            .reply(&router(grpc_conn))
+            .await;
 
         assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
@@ -592,11 +639,18 @@ mod tests_failures {
     #[tokio::test]
     async fn test_wrong_method() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let grpc_conn = PublicTowerServicesClient::connect(
-            format!("http://{}:{}", server_addr.ip(), server_addr.port())
-        ).await.unwrap();
+        let grpc_conn = PublicTowerServicesClient::connect(format!(
+            "http://{}:{}",
+            server_addr.ip(),
+            server_addr.port()
+        ))
+        .await
+        .unwrap();
 
-        let res = warp::test::request().json(&"").reply(&router(grpc_conn)).await;
+        let res = warp::test::request()
+            .json(&"")
+            .reply(&router(grpc_conn))
+            .await;
 
         assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
@@ -605,41 +659,36 @@ mod tests_failures {
 #[cfg(test)]
 mod tests_methods {
     use super::test_helpers::{
-        check_api_error,
-        request_to_api,
-        run_tower_in_background,
-        run_tower_in_background_with_config,
-        RequestBody,
+        check_api_error, request_to_api, run_tower_in_background,
+        run_tower_in_background_with_config, RequestBody,
     };
     use super::*;
 
     use crate::extended_appointment::UUID;
-    use crate::test_utils::{ generate_dummy_appointment, ApiConfig, DURATION, SLOTS };
+    use crate::test_utils::{generate_dummy_appointment, ApiConfig, DURATION, SLOTS};
 
     use teos_common::test_utils::get_random_user_id;
-    use teos_common::{ cryptography, UserId };
+    use teos_common::{cryptography, UserId};
 
     #[tokio::test]
     async fn test_register() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let response = request_to_api::<
-            common_msgs::RegisterRequest,
-            common_msgs::RegisterResponse
-        >(
-            Endpoint::Register,
-            common_msgs::RegisterRequest {
-                user_id: get_random_user_id().to_vec(),
-            },
-            server_addr
-        ).await;
+        let response =
+            request_to_api::<common_msgs::RegisterRequest, common_msgs::RegisterResponse>(
+                Endpoint::Register,
+                common_msgs::RegisterRequest {
+                    user_id: get_random_user_id().to_vec(),
+                },
+                server_addr,
+            )
+            .await;
         assert!(matches!(response, Ok(common_msgs::RegisterResponse { .. })));
     }
 
     #[tokio::test]
     async fn test_register_max_slots() {
-        let (server_addr, _, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(u32::MAX, DURATION)
-        ).await;
+        let (server_addr, _, _s) =
+            run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
         let user_id = get_random_user_id();
 
         // Register once, this should go trough and set slots to the limit
@@ -648,20 +697,21 @@ mod tests_methods {
             common_msgs::RegisterRequest {
                 user_id: user_id.to_vec(),
             },
-            server_addr
-        ).await.unwrap();
+            server_addr,
+        )
+        .await
+        .unwrap();
 
         // Register again to get additional slots, this should fail
         assert_eq!(
             check_api_error(
                 Endpoint::Register,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::RegisterRequest {
-                        user_id: user_id.to_vec(),
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
+                    user_id: user_id.to_vec(),
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
                 ApiError::new(
                     "Subscription maximum slots count reached".into(),
@@ -675,23 +725,26 @@ mod tests_methods {
     #[tokio::test]
     async fn test_register_service_unavailable() {
         let (server_addr, _, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()
-        ).await;
+            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+        )
+        .await;
         let user_id = get_random_user_id();
 
         // Register with bitcoind down
         assert_eq!(
             check_api_error(
                 Endpoint::Register,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::RegisterRequest {
-                        user_id: user_id.to_vec(),
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
+                    user_id: user_id.to_vec(),
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
-                ApiError::new("Service currently unavailable".into(), errors::SERVICE_UNAVAILABLE),
+                ApiError::new(
+                    "Service currently unavailable".into(),
+                    errors::SERVICE_UNAVAILABLE
+                ),
                 StatusCode::SERVICE_UNAVAILABLE,
             )
         );
@@ -708,8 +761,10 @@ mod tests_methods {
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
-            server_addr
-        ).await.unwrap();
+            server_addr,
+        )
+        .await
+        .unwrap();
 
         // Then try to add an appointment
         let appointment = generate_dummy_appointment(None).inner;
@@ -717,17 +772,21 @@ mod tests_methods {
 
         let response = request_to_api::<
             common_msgs::AddAppointmentRequest,
-            common_msgs::AddAppointmentResponse
+            common_msgs::AddAppointmentResponse,
         >(
             Endpoint::AddAppointment,
             common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.into()),
                 signature,
             },
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
 
-        assert!(matches!(response, Ok(common_msgs::AddAppointmentResponse { .. })));
+        assert!(matches!(
+            response,
+            Ok(common_msgs::AddAppointmentResponse { .. })
+        ));
     }
 
     #[tokio::test]
@@ -740,14 +799,13 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 Endpoint::AddAppointment,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::AddAppointmentRequest {
-                        appointment: Some(appointment.into()),
-                        signature,
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::AddAppointmentRequest {
+                    appointment: Some(appointment.into()),
+                    signature,
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
                 ApiError::new(
                     "Invalid signature or user does not have enough slots available".into(),
@@ -761,9 +819,8 @@ mod tests_methods {
     #[tokio::test]
     async fn test_add_appointment_already_triggered() {
         // Get the InternalAPI so we can mess with the inner state
-        let (server_addr, internal_api, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(u32::MAX, DURATION)
-        ).await;
+        let (server_addr, internal_api, _s) =
+            run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
 
         // Register
         let (user_sk, user_pk) = cryptography::get_random_keypair();
@@ -772,8 +829,10 @@ mod tests_methods {
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
-            server_addr
-        ).await.unwrap();
+            server_addr,
+        )
+        .await
+        .unwrap();
 
         // Add the appointment to the Responder so it counts as triggered
         let appointment = generate_dummy_appointment(None).inner;
@@ -786,14 +845,13 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 Endpoint::AddAppointment,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::AddAppointmentRequest {
-                        appointment: Some(appointment.into()),
-                        signature,
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::AddAppointmentRequest {
+                    appointment: Some(appointment.into()),
+                    signature,
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
                 ApiError::new(
                     "The provided appointment has already been triggered".into(),
@@ -807,8 +865,9 @@ mod tests_methods {
     #[tokio::test]
     async fn test_add_appointment_service_unavailable() {
         let (server_addr, _, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()
-        ).await;
+            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+        )
+        .await;
         let (user_sk, _) = cryptography::get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
         let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
@@ -816,16 +875,18 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 Endpoint::AddAppointment,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::AddAppointmentRequest {
-                        appointment: Some(appointment.into()),
-                        signature,
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::AddAppointmentRequest {
+                    appointment: Some(appointment.into()),
+                    signature,
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
-                ApiError::new("Service currently unavailable".into(), errors::SERVICE_UNAVAILABLE),
+                ApiError::new(
+                    "Service currently unavailable".into(),
+                    errors::SERVICE_UNAVAILABLE
+                ),
                 StatusCode::SERVICE_UNAVAILABLE,
             )
         );
@@ -842,8 +903,10 @@ mod tests_methods {
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
-            server_addr
-        ).await.unwrap();
+            server_addr,
+        )
+        .await
+        .unwrap();
 
         // Add an appointment
         let appointment = generate_dummy_appointment(None).inner;
@@ -855,25 +918,33 @@ mod tests_methods {
                 appointment: Some(appointment.clone().into()),
                 signature,
             },
-            server_addr
-        ).await.unwrap();
+            server_addr,
+        )
+        .await
+        .unwrap();
 
         // Get it back
         let response = request_to_api::<
             common_msgs::GetAppointmentRequest,
-            common_msgs::GetAppointmentResponse
+            common_msgs::GetAppointmentResponse,
         >(
             Endpoint::GetAppointment,
             common_msgs::GetAppointmentRequest {
                 locator: appointment.locator.to_vec(),
-                signature: cryptography
-                    ::sign(format!("get appointment {}", appointment.locator).as_bytes(), &user_sk)
-                    .unwrap(),
+                signature: cryptography::sign(
+                    format!("get appointment {}", appointment.locator).as_bytes(),
+                    &user_sk,
+                )
+                .unwrap(),
             },
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
 
-        assert!(matches!(response, Ok(common_msgs::GetAppointmentResponse { .. })));
+        assert!(matches!(
+            response,
+            Ok(common_msgs::GetAppointmentResponse { .. })
+        ));
     }
 
     #[tokio::test]
@@ -888,19 +959,17 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 Endpoint::GetAppointment,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::GetAppointmentRequest {
-                        locator: appointment.locator.to_vec(),
-                        signature: cryptography
-                            ::sign(
-                                format!("get appointment {}", appointment.locator).as_bytes(),
-                                &user_sk
-                            )
-                            .unwrap(),
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
+                    locator: appointment.locator.to_vec(),
+                    signature: cryptography::sign(
+                        format!("get appointment {}", appointment.locator).as_bytes(),
+                        &user_sk
+                    )
+                    .unwrap(),
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
                 ApiError::new(
                     "User cannot be authenticated".into(),
@@ -922,8 +991,10 @@ mod tests_methods {
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
-            server_addr
-        ).await.unwrap();
+            server_addr,
+        )
+        .await
+        .unwrap();
 
         // Appointment hasn't been added
         let appointment = generate_dummy_appointment(None).inner;
@@ -931,21 +1002,22 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 Endpoint::GetAppointment,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::GetAppointmentRequest {
-                        locator: appointment.locator.to_vec(),
-                        signature: cryptography
-                            ::sign(
-                                format!("get appointment {}", appointment.locator).as_bytes(),
-                                &user_sk
-                            )
-                            .unwrap(),
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
+                    locator: appointment.locator.to_vec(),
+                    signature: cryptography::sign(
+                        format!("get appointment {}", appointment.locator).as_bytes(),
+                        &user_sk
+                    )
+                    .unwrap(),
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
-                ApiError::new("Appointment not found".into(), errors::APPOINTMENT_NOT_FOUND),
+                ApiError::new(
+                    "Appointment not found".into(),
+                    errors::APPOINTMENT_NOT_FOUND
+                ),
                 StatusCode::NOT_FOUND,
             )
         );
@@ -954,8 +1026,9 @@ mod tests_methods {
     #[tokio::test]
     async fn test_get_appointment_service_unavailable() {
         let (server_addr, _, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()
-        ).await;
+            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+        )
+        .await;
 
         // Appointment hasn't been added
         let (user_sk, _) = cryptography::get_random_keypair();
@@ -964,21 +1037,22 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 Endpoint::GetAppointment,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::GetAppointmentRequest {
-                        locator: appointment.locator.to_vec(),
-                        signature: cryptography
-                            ::sign(
-                                format!("get appointment {}", appointment.locator).as_bytes(),
-                                &user_sk
-                            )
-                            .unwrap(),
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::GetAppointmentRequest {
+                    locator: appointment.locator.to_vec(),
+                    signature: cryptography::sign(
+                        format!("get appointment {}", appointment.locator).as_bytes(),
+                        &user_sk
+                    )
+                    .unwrap(),
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
-                ApiError::new("Service currently unavailable".into(), errors::SERVICE_UNAVAILABLE),
+                ApiError::new(
+                    "Service currently unavailable".into(),
+                    errors::SERVICE_UNAVAILABLE
+                ),
                 StatusCode::SERVICE_UNAVAILABLE,
             )
         );
@@ -995,24 +1069,29 @@ mod tests_methods {
             common_msgs::RegisterRequest {
                 user_id: user_pk.serialize().to_vec(),
             },
-            server_addr
-        ).await.unwrap();
+            server_addr,
+        )
+        .await
+        .unwrap();
 
         // Get the subscription info
         let response = request_to_api::<
             common_msgs::GetSubscriptionInfoRequest,
-            common_msgs::GetSubscriptionInfoResponse
+            common_msgs::GetSubscriptionInfoResponse,
         >(
             Endpoint::GetSubscriptionInfo,
             common_msgs::GetSubscriptionInfoRequest {
-                signature: cryptography
-                    ::sign("get subscription info".as_bytes(), &user_sk)
+                signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
                     .unwrap(),
             },
-            server_addr
-        ).await;
+            server_addr,
+        )
+        .await;
 
-        assert!(matches!(response, Ok(common_msgs::GetSubscriptionInfoResponse { .. })));
+        assert!(matches!(
+            response,
+            Ok(common_msgs::GetSubscriptionInfoResponse { .. })
+        ));
     }
 
     #[tokio::test]
@@ -1025,15 +1104,13 @@ mod tests_methods {
         assert_eq!(
             check_api_error(
                 Endpoint::GetSubscriptionInfo,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
-                        signature: cryptography
-                            ::sign("get subscription info".as_bytes(), &user_sk)
-                            .unwrap(),
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
+                    signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
+                        .unwrap(),
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
                 ApiError::new(
                     "User not found. Have you registered?".into(),
@@ -1048,23 +1125,25 @@ mod tests_methods {
     async fn test_get_subscription_info_service_unavailable() {
         let (user_sk, _) = cryptography::get_random_keypair();
         let (server_addr, _, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()
-        ).await;
+            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+        )
+        .await;
 
         assert_eq!(
             check_api_error(
                 Endpoint::GetSubscriptionInfo,
-                RequestBody::Json(
-                    serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
-                        signature: cryptography
-                            ::sign("get subscription info".as_bytes(), &user_sk)
-                            .unwrap(),
-                    })
-                ),
+                RequestBody::Json(serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
+                    signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
+                        .unwrap(),
+                })),
                 server_addr
-            ).await,
+            )
+            .await,
             (
-                ApiError::new("Service currently unavailable".into(), errors::SERVICE_UNAVAILABLE),
+                ApiError::new(
+                    "Service currently unavailable".into(),
+                    errors::SERVICE_UNAVAILABLE
+                ),
                 StatusCode::SERVICE_UNAVAILABLE,
             )
         );
