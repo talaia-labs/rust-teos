@@ -25,6 +25,5 @@ lightning = "0.0.108"
 
 [build-dependencies]
 tonic-build = "0.6"
-
 [features]
 accountable = []

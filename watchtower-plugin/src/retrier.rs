@@ -1224,7 +1224,6 @@ mod tests {
                 let body = serde_json
                     ::from_slice::<AddAppointmentRequest>(request.body().unwrap())
                     .unwrap();
-                
                 let response = if body.appointment.unwrap().locator == appointment.locator.to_vec() {
                     get_dummy_add_appointment_response(appointment.locator, &appointment_receipt)
                 } else {

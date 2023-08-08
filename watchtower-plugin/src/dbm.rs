@@ -160,7 +160,6 @@ impl DBM {
     ///
     /// This function MUST be guarded against inserting duplicate (tower_id, subscription_expiry) pairs.
     /// This is currently done in WTClient::add_update_tower.
-
     pub fn store_tower_record(
         &mut self,
         tower_id: TowerId,
@@ -261,7 +260,6 @@ impl DBM {
                 let available_slots: u32 = row.get(1).unwrap();
                 let subscription_start: u32 = row.get(2).unwrap();
                 let subscription_expiry: u32 = row.get(3).unwrap();
-                
                 Ok(
                     TowerInfo::new(
                         net_addr,
@@ -314,7 +312,6 @@ impl DBM {
 
             Ok(RegistrationReceipt::with_signature(user_id, slots, start, expiry, signature))
         }).ok()
-      
     }
     #[cfg(not(feature = "accountable"))]
     pub fn load_registration_receipt(
@@ -510,10 +507,8 @@ impl DBM {
 
         while let Ok(Some(row)) = rows.next() {
             let locator = Locators::from_slice(&row.get::<_, Vec<u8>>(0).unwrap()).unwrap();
-
             accepted_appointments.push(locator);
         }
-
         accepted_appointments
     }
 

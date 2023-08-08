@@ -174,7 +174,6 @@ impl Watcher {
 
     /// Registers a new user within the [Watcher]. This request is passed to the [Gatekeeper], who is in
     /// charge of managing users.
-   
     pub(crate) fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
         let mut receipt = self.gatekeeper.add_update_user(user_id)?;
 
@@ -184,7 +183,6 @@ impl Watcher {
         Ok(receipt)
     }
     
-
     /// Adds a new [Appointment] to the tower.
     ///
     /// Appointments are only added provided:
@@ -203,9 +201,7 @@ impl Watcher {
         appointment: Appointment,
         user_signature: String,
     ) -> 
-    
     Result<(AppointmentReceipt, u32, u32), AddAppointmentFailure>
-    
      {
         let user_id = self
             .gatekeeper
@@ -271,7 +267,6 @@ impl Watcher {
         appointment: Appointment,
         user_signature: String,
     ) -> 
-    
     Result<(u32, u32), AddAppointmentFailure>
      {
         let user_id = self
@@ -292,19 +287,16 @@ impl Watcher {
             user_signature,
             self.last_known_block_height.load(Ordering::Acquire),
         );
-
         let uuid = UUID::new(extended_appointment.locator(), user_id);
 
         if self.responder.has_tracker(uuid) {
             log::info!("Tracker for {uuid} already found in Responder");
             return Err(AddAppointmentFailure::AlreadyTriggered);
         }
-
         let available_slots = self
             .gatekeeper
             .add_update_appointment(user_id, uuid, &extended_appointment)
             .map_err(|_| AddAppointmentFailure::NotEnoughSlots)?;
-
         // FIXME: There's an edge case here if store_triggered_appointment is called and bitcoind is unreachable.
         // This will hang, the request will timeout but be accepted. However, the user will not be handed the receipt.
         // This could be fixed adding a thread to take care of storing while the main thread returns the receipt.
@@ -324,7 +316,6 @@ impl Watcher {
                 self.store_appointment(uuid, &extended_appointment);
             }
         };
-        
         Ok((available_slots, expiry))
     }
     /// Stores an appointment in the [Watcher] memory and into the database (or updates it if it already exists).
@@ -1100,7 +1091,6 @@ mod tests {
 
         // The appointment should have been accepted, slots should have been decreased, and data should have been deleted from
         // the Watcher's memory. Moreover, a new tracker should be found in the Responder
-    
         assert_eq!(watcher.appointments.lock().unwrap().len(), 3);
         assert!(!watcher
             .locator_uuid_map

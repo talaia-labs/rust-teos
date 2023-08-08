@@ -73,7 +73,6 @@ where
     }
     map.end()
 }
-
 pub fn serialize_locators<S>(v: &Vec<Locators>, s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,

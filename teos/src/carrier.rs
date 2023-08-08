@@ -1,15 +1,18 @@
 //! Logic related to the Carrier, the component in charge or sending/requesting transaction data from/to `bitcoind`.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{ Arc, Condvar, Mutex };
 
 use crate::responder::ConfirmationStatus;
-use crate::{errors, rpc_errors};
+use crate::{ errors, rpc_errors };
 
-use bitcoin::{Transaction, Txid};
+use bitcoin::{ Transaction, Txid };
 use bitcoincore_rpc::{
-    jsonrpc::error::Error::Rpc as RpcError, jsonrpc::error::Error::Transport as TransportError,
-    Client as BitcoindClient, Error::JsonRpc as JsonRpcError, RpcApi,
+    jsonrpc::error::Error::Rpc as RpcError,
+    jsonrpc::error::Error::Transport as TransportError,
+    Client as BitcoindClient,
+    Error::JsonRpc as JsonRpcError,
+    RpcApi,
 };
 
 /// Component in charge of the interaction with Bitcoind by sending / querying transactions via RPC.
@@ -31,7 +34,7 @@ impl Carrier {
     pub fn new(
         bitcoin_cli: Arc<BitcoindClient>,
         bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
-        last_known_block_height: u32,
+        last_known_block_height: u32
     ) -> Self {
         Carrier {
             bitcoin_cli,
@@ -50,13 +53,13 @@ impl Carrier {
     /// growing unbounded.
     pub(crate) fn clear_receipts(&mut self) {
         if !self.issued_receipts.is_empty() {
-            self.issued_receipts = HashMap::new()
+            self.issued_receipts = HashMap::new();
         }
     }
 
     /// Updates the last known block height by the [Carrier].
     pub(crate) fn update_height(&mut self, height: u32) {
-        self.block_height = height
+        self.block_height = height;
     }
 
     /// Hangs the process until bitcoind is reachable. If bitcoind is already reachable it just passes trough.
@@ -93,39 +96,42 @@ impl Carrier {
                 log::info!("Transaction successfully delivered: {}", tx.txid());
                 ConfirmationStatus::InMempoolSince(self.block_height)
             }
-            Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
-                // Since we're pushing a raw transaction to the network we can face several rejections
-                rpc_errors::RPC_VERIFY_REJECTED => {
-                    log::error!("Transaction couldn't be broadcast. {rpcerr:?}");
-                    ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED)
-                }
-                rpc_errors::RPC_VERIFY_ERROR => {
-                    log::error!("Transaction couldn't be broadcast. {rpcerr:?}");
-                    ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
-                }
-                rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {
-                    log::info!(
-                        "Transaction was confirmed long ago, not keeping track of it: {}",
-                        tx.txid()
-                    );
+            Err(JsonRpcError(RpcError(rpcerr))) =>
+                match rpcerr.code {
+                    // Since we're pushing a raw transaction to the network we can face several rejections
+                    rpc_errors::RPC_VERIFY_REJECTED => {
+                        log::error!("Transaction couldn't be broadcast. {rpcerr:?}");
+                        ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED)
+                    }
+                    rpc_errors::RPC_VERIFY_ERROR => {
+                        log::error!("Transaction couldn't be broadcast. {rpcerr:?}");
+                        ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
+                    }
+                    rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {
+                        log::info!(
+                            "Transaction was confirmed long ago, not keeping track of it: {}",
+                            tx.txid()
+                        );
 
-                    // Given we are not using txindex, if a transaction bounces we cannot get its confirmation count. However, [send_transaction] is guarded by
-                    // checking whether the transaction id can be found in the [Responder]'s [TxIndex], meaning that if the transaction bounces it was confirmed long
-                    // ago (> IRREVOCABLY_RESOLVED), so we don't need to worry about it.
-                    ConfirmationStatus::IrrevocablyResolved
+                        // Given we are not using txindex, if a transaction bounces we cannot get its confirmation count. However, [send_transaction] is guarded by
+                        // checking whether the transaction id can be found in the [Responder]'s [TxIndex], meaning that if the transaction bounces it was confirmed long
+                        // ago (> IRREVOCABLY_RESOLVED), so we don't need to worry about it.
+                        ConfirmationStatus::IrrevocablyResolved
+                    }
+                    rpc_errors::RPC_DESERIALIZATION_ERROR => {
+                        // Adding this here just for completeness. We should never end up here. The Carrier only sends txs handed by the Responder,
+                        // who receives them from the Watcher, who checks that the tx can be properly deserialized.
+                        log::info!("Transaction cannot be deserialized: {}", tx.txid());
+                        ConfirmationStatus::Rejected(rpc_errors::RPC_DESERIALIZATION_ERROR)
+                    }
+                    _ => {
+                        // If something else happens (unlikely but possible) log it so we can treat it in future releases.
+                        log::error!(
+                            "Unexpected rpc error when calling sendrawtransaction: {rpcerr:?}"
+                        );
+                        ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION)
+                    }
                 }
-                rpc_errors::RPC_DESERIALIZATION_ERROR => {
-                    // Adding this here just for completeness. We should never end up here. The Carrier only sends txs handed by the Responder,
-                    // who receives them from the Watcher, who checks that the tx can be properly deserialized.
-                    log::info!("Transaction cannot be deserialized: {}", tx.txid());
-                    ConfirmationStatus::Rejected(rpc_errors::RPC_DESERIALIZATION_ERROR)
-                }
-                _ => {
-                    // If something else happens (unlikely but possible) log it so we can treat it in future releases.
-                    log::error!("Unexpected rpc error when calling sendrawtransaction: {rpcerr:?}");
-                    ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION)
-                }
-            },
             Err(JsonRpcError(TransportError(_))) => {
                 // Connection refused, bitcoind is down.
                 log::error!("Connection lost with bitcoind, retrying request when possible");
@@ -154,17 +160,18 @@ impl Carrier {
 
         match self.bitcoin_cli.get_raw_transaction_info(txid, None) {
             Ok(tx) => tx.blockhash.is_none(),
-            Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
-                rpc_errors::RPC_INVALID_ADDRESS_OR_KEY => {
-                    log::info!("Transaction not found in mempool: {txid}");
-                    false
+            Err(JsonRpcError(RpcError(rpcerr))) =>
+                match rpcerr.code {
+                    rpc_errors::RPC_INVALID_ADDRESS_OR_KEY => {
+                        log::info!("Transaction not found in mempool: {txid}");
+                        false
+                    }
+                    e => {
+                        // DISCUSS: This could result in a silent error with unknown consequences
+                        log::error!("Unexpected error code when calling getrawtransaction: {e}");
+                        false
+                    }
                 }
-                e => {
-                    // DISCUSS: This could result in a silent error with unknown consequences
-                    log::error!("Unexpected error code when calling getrawtransaction: {e}");
-                    false
-                }
-            },
             Err(JsonRpcError(TransportError(_))) => {
                 // Connection refused, bitcoind is down.
                 log::error!("Connection lost with bitcoind, retrying request when possible");
@@ -186,8 +193,8 @@ mod tests {
     use super::*;
     use std::thread;
 
-    use crate::test_utils::{get_random_tx, start_server, BitcoindMock, MockOptions, START_HEIGHT};
-    use teos_common::test_utils::{TXID_HEX, TX_HEX};
+    use crate::test_utils::{ get_random_tx, start_server, BitcoindMock, MockOptions, START_HEIGHT };
+    use teos_common::test_utils::{ TXID_HEX, TX_HEX };
 
     use bitcoin::consensus;
     use bitcoin::hashes::hex::FromHex;
@@ -218,7 +225,7 @@ mod tests {
         for i in 0..10 {
             carrier.issued_receipts.insert(
                 get_random_tx().txid(),
-                ConfirmationStatus::ConfirmedIn(start_height - i),
+                ConfirmationStatus::ConfirmedIn(start_height - i)
             );
         }
 
@@ -266,9 +273,9 @@ mod tests {
 
     #[test]
     fn test_send_transaction_verify_rejected() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::with_error(
-            rpc_errors::RPC_VERIFY_REJECTED as i64,
-        ));
+        let bitcoind_mock = BitcoindMock::new(
+            MockOptions::with_error(rpc_errors::RPC_VERIFY_REJECTED as i64)
+        );
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
@@ -278,10 +285,7 @@ mod tests {
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
-        assert_eq!(
-            r,
-            ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED)
-        );
+        assert_eq!(r, ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED));
 
         // Check the receipt is on the cache
         assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
@@ -289,8 +293,9 @@ mod tests {
 
     #[test]
     fn test_send_transaction_verify_error() {
-        let bitcoind_mock =
-            BitcoindMock::new(MockOptions::with_error(rpc_errors::RPC_VERIFY_ERROR as i64));
+        let bitcoind_mock = BitcoindMock::new(
+            MockOptions::with_error(rpc_errors::RPC_VERIFY_ERROR as i64)
+        );
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
@@ -300,10 +305,7 @@ mod tests {
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
-        assert_eq!(
-            r,
-            ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
-        );
+        assert_eq!(r, ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR));
 
         // Check the receipt is on the cache
         assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
@@ -311,9 +313,9 @@ mod tests {
 
     #[test]
     fn test_send_transaction_verify_already_in_chain() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::with_error(
-            rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN as i64,
-        ));
+        let bitcoind_mock = BitcoindMock::new(
+            MockOptions::with_error(rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN as i64)
+        );
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
@@ -331,8 +333,9 @@ mod tests {
 
     #[test]
     fn test_send_transaction_unexpected_error() {
-        let bitcoind_mock =
-            BitcoindMock::new(MockOptions::with_error(rpc_errors::RPC_MISC_ERROR as i64));
+        let bitcoind_mock = BitcoindMock::new(
+            MockOptions::with_error(rpc_errors::RPC_MISC_ERROR as i64)
+        );
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
@@ -342,10 +345,7 @@ mod tests {
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
-        assert_eq!(
-            r,
-            ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION)
-        );
+        assert_eq!(r, ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION));
 
         // Check the receipt is on the cache
         assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
@@ -374,10 +374,7 @@ mod tests {
         carrier.send_transaction(&tx);
 
         // Check the request has hanged for ~delay
-        assert_eq!(
-            (std::time::Instant::now() - before).as_secs(),
-            delay.as_secs()
-        );
+        assert_eq!((std::time::Instant::now() - before).as_secs(), delay.as_secs());
     }
 
     #[test]
@@ -408,9 +405,9 @@ mod tests {
 
     #[test]
     fn test_not_in_mempool_via_error() {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::with_error(
-            rpc_errors::RPC_INVALID_ADDRESS_OR_KEY as i64,
-        ));
+        let bitcoind_mock = BitcoindMock::new(
+            MockOptions::with_error(rpc_errors::RPC_INVALID_ADDRESS_OR_KEY as i64)
+        );
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
@@ -423,8 +420,9 @@ mod tests {
 
     #[test]
     fn test_in_mempool_unexpected_error() {
-        let bitcoind_mock =
-            BitcoindMock::new(MockOptions::with_error(rpc_errors::RPC_MISC_ERROR as i64));
+        let bitcoind_mock = BitcoindMock::new(
+            MockOptions::with_error(rpc_errors::RPC_MISC_ERROR as i64)
+        );
         let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
@@ -458,9 +456,6 @@ mod tests {
         carrier.in_mempool(&txid);
 
         // Check the request has hanged for ~delay
-        assert_eq!(
-            (std::time::Instant::now() - before).as_secs(),
-            delay.as_secs()
-        );
+        assert_eq!((std::time::Instant::now() - before).as_secs(), delay.as_secs());
     }
 }

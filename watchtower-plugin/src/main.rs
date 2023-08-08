@@ -450,7 +450,6 @@ async fn on_commitment_revocation(
                                 send_to_retrier(&state, tower_id, appointment.locator);
                             }
                         }
-                        
                         AddAppointmentError::ApiError(e) =>
                             match e.error_code {
                                 errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR => {
@@ -466,7 +465,6 @@ async fn on_commitment_revocation(
                                     state.add_pending_appointment(tower_id, &appointment);
                                     send_to_retrier(&state, tower_id, appointment.locator);
                                 }
-
                                 _ => {
                                     log::warn!(
                                         "{tower_id} rejected the appointment. Error: {}, error_code: {}",
@@ -488,7 +486,6 @@ async fn on_commitment_revocation(
                         }
                     }
             };
-            
         }
         else if 
         status.is_misbehaving() {
@@ -502,7 +499,6 @@ async fn on_commitment_revocation(
             } else {
                 log::warn!("{tower_id} is {status}. Adding {} to pending", appointment.locator);
             }
-
             let mut state = plugin.state().lock().unwrap();
             state.add_pending_appointment(tower_id, &appointment);
 
@@ -537,7 +533,6 @@ async fn on_commitment_revocation(
                                 send_to_retrier(&state, tower_id, appointment.locator);
                             }
                         }
-                        
                         AddAppointmentError::ApiError(e) =>
                             match e.error_code {
                                 errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR => {
@@ -553,7 +548,6 @@ async fn on_commitment_revocation(
                                     state.add_pending_appointment(tower_id, &appointment);
                                     send_to_retrier(&state, tower_id, appointment.locator);
                                 }
-
                                 _ => {
                                     log::warn!(
                                         "{tower_id} rejected the appointment. Error: {}, error_code: {}",
@@ -569,7 +563,6 @@ async fn on_commitment_revocation(
                             }
                     }
             };
-            
         }
     else {
             if status.is_subscription_error() {
@@ -662,7 +655,6 @@ async fn main() -> Result<(), Error> {
         .rpcmethod(constants::RPC_RETRY_TOWER, constants::RPC_RETRY_TOWER_DESC, retry_tower)
         .rpcmethod(constants::RPC_ABANDON_TOWER, constants::RPC_ABANDON_TOWER_DESC, abandon_tower)
         .hook(constants::HOOK_COMMITMENT_REVOCATION, on_commitment_revocation);
-
         #[cfg(not(feature = "accountable"))]
         let builder = Builder::new(stdin(), stdout())
         .option(
