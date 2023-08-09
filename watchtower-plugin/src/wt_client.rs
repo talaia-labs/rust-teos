@@ -503,7 +503,10 @@ mod tests {
         let mut wt_client =
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
-        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+            #[cfg(feature = "accountable")]
+            let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+            #[cfg(not(feature = "accountable"))]
+            let tower_pk = cryptography::get_random_public_key();
         let tower_id = TowerId(tower_pk);
         #[cfg(feature = "accountable")]
         let locator = generate_random_appointment(None).locator;
@@ -819,8 +822,10 @@ mod tests {
         let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let mut wt_client =
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
-
+            #[cfg(feature = "accountable")]
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        #[cfg(not(feature = "accountable"))]
+        let tower_pk = cryptography::get_random_public_key();
         let tower_id = TowerId(tower_pk);
 
         // If we call this on an unknown tower it will simply do nothing
@@ -866,7 +871,10 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let receipt = get_random_registration_receipt();
+        #[cfg(feature = "accountable")]
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        #[cfg(not(feature = "accountable"))]
+        let tower_pk = cryptography::get_random_public_key();
         let tower_id = TowerId(tower_pk);
         let tower_info = TowerInfo::empty(
             "talaia.watch".to_owned(),
@@ -928,9 +936,15 @@ mod tests {
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
         let receipt = get_random_registration_receipt();
+        #[cfg(feature = "accountable")]
         let (tower1_sk, tower1_pk) = cryptography::get_random_keypair();
+        #[cfg(not(feature = "accountable"))]
+        let tower1_pk = cryptography::get_random_public_key();
         let tower1_id = TowerId(tower1_pk);
+        #[cfg(feature = "accountable")]
         let (tower2_sk, tower2_pk) = cryptography::get_random_keypair();
+        #[cfg(not(feature = "accountable"))]
+        let tower2_pk = cryptography::get_random_public_key();
         let tower2_id = TowerId(tower2_pk);
 
         wt_client

@@ -97,6 +97,16 @@ pub fn get_random_keypair() -> (SecretKey, PublicKey) {
         }
     }
 }
+#[cfg(not(feature = "accountable"))]
+pub fn get_random_public_key() -> PublicKey {
+    let raw_sk = get_random_bytes(32);
+
+    loop {
+        if let Ok(sk) = SecretKey::from_slice(&raw_sk) {
+            return PublicKey::from_secret_key(&Secp256k1::new(), &sk);
+        }
+    }
+}
 
 
 
