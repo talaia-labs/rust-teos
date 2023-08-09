@@ -7,6 +7,7 @@ use rand::Rng;
 
 use bitcoin::consensus;
 use bitcoin::hashes::Hash;
+#[cfg(feature = "accountable")]
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::Txid;
 
@@ -28,7 +29,13 @@ where
     let mut rng = rand::thread_rng();
     rng.gen()
 }
+#[cfg(feature = "accountable")]
+pub fn get_random_user_id() -> UserId {
+    let (_, pk) = cryptography::get_random_keypair();
 
+    UserId(pk)
+}
+#[cfg(not(feature = "accountable"))]
 pub fn get_random_user_id() -> UserId {
     let (_, pk) = cryptography::get_random_keypair();
 
@@ -56,6 +63,7 @@ pub fn generate_random_appointment(dispute_txid: Option<&Txid>) -> Appointment {
 }
 
 pub fn get_random_registration_receipt() -> RegistrationReceipt {
+    #[cfg(feature = "accountable")]
     let (sk, _) = cryptography::get_random_keypair();
     let start = get_random_int();
     let mut receipt =
@@ -67,6 +75,7 @@ pub fn get_random_registration_receipt() -> RegistrationReceipt {
 }
 
 pub fn get_registration_receipt_from_previous(r: &RegistrationReceipt) -> RegistrationReceipt {
+    #[cfg(feature = "accountable")]
     let (sk, _) = cryptography::get_random_keypair();
     let mut receipt = RegistrationReceipt::new(
         r.user_id(),

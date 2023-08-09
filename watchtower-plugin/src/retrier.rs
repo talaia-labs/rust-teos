@@ -622,6 +622,7 @@ mod tests {
 
     use teos_common::errors;
     use teos_common::net::http::Endpoint;
+    #[cfg(feature = "accountable")]
     use teos_common::protos::AddAppointmentRequest;
     use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
     use teos_common::test_utils::{
@@ -835,6 +836,7 @@ mod tests {
         // Add a proper server and check that the auto-retry works
         // Prepare the mock response
         let mut server = mockito::Server::new_async().await;
+        #[cfg(feature = "accountable")]
         let mut add_appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42,
@@ -1026,6 +1028,7 @@ mod tests {
             .add_pending_appointment(tower_id, &appointment);
 
         // Prepare the mock response
+        #[cfg(feature = "accountable")]
         let mut add_appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42,
@@ -1033,6 +1036,7 @@ mod tests {
         // Sign with a random key so it counts as misbehaving
         #[cfg(not(feature = "accountable"))]
         // Prepare the mock response
+        #[cfg(feature = "accountable")]
         let mut add_appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42,
@@ -1175,7 +1179,7 @@ mod tests {
         let mut re_registration_receipt =
             get_registration_receipt_from_previous(&registration_receipt);
         re_registration_receipt.sign(&tower_sk);
-
+        #[cfg(feature = "accountable")]
         let mut add_appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42,
@@ -1534,7 +1538,9 @@ mod tests {
             .await;
 
         // Since we are retrying manually, we need to add the data to pending appointments manually too
+        #[cfg(feature = "accountable")]
         let retrier = Retrier::new(wt_client, tower_id, HashSet::from([appointment.locator]));
+        #[cfg(feature = "accountable")]
         let r = retrier.run().await;
         #[cfg(feature = "accountable")]
         assert!(matches!(

@@ -87,6 +87,7 @@ pub fn get_random_bytes(size: usize) -> Vec<u8> {
 }
 
 /// Gets a key pair generated in a pseudorandom way.
+
 pub fn get_random_keypair() -> (SecretKey, PublicKey) {
     let raw_sk = get_random_bytes(32);
 
@@ -96,6 +97,8 @@ pub fn get_random_keypair() -> (SecretKey, PublicKey) {
         }
     }
 }
+
+
 
 #[cfg(test)]
 mod tests {

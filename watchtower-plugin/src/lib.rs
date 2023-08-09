@@ -1,4 +1,7 @@
+#[cfg(feature = "accountable")]
 use std::collections::{HashMap, HashSet};
+#[cfg(not(feature = "accountable"))]
+use std::collections::HashSet;
 use std::fmt;
 
 use serde::Serialize;
@@ -7,6 +10,7 @@ use teos_common::appointment::{Appointment, Locator, Locators};
 use teos_common::net::NetAddr;
 #[cfg(feature = "accountable")]
 use teos_common::receipts::AppointmentReceipt;
+#[cfg(feature = "accountable")]
 use teos_common::TowerId;
 
 pub mod constants;
@@ -464,7 +468,7 @@ mod tests {
 
     mod tower_info {
         use super::*;
-
+        #[cfg(feature = "accountable")]
         use teos_common::test_utils::{generate_random_appointment, get_random_user_id};
         #[cfg(feature = "accountable")]
         impl TowerInfo {
@@ -522,7 +526,7 @@ mod tests {
             #[cfg(feature = "accountable")]
             assert!(tower_info.misbehaving_proof.is_none());
         }
-        #[cfg(not(feature = "accountable"))]
+        #[cfg(feature = "accountable")]
         fn test_new() {
             let tower_info = TowerInfo::new(
                 "addr".to_owned(),

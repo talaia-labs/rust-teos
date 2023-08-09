@@ -1,10 +1,12 @@
 use bitcoin::consensus::encode;
 use bitcoin::Transaction;
-
+#[cfg(feature = "accountable")]
 use teos_common::appointment::{Appointment, Locator, Locators};
-
+#[cfg(not(feature = "accountable"))]
+use teos_common::appointment::{Appointment, Locators};
 use hex::FromHex;
 use serde::{de, ser::SerializeMap, Deserializer, Serialize, Serializer};
+#[cfg(feature = "accountable")]
 use std::collections::HashMap;
 
 pub fn deserialize_tx<'de, D>(deserializer: D) -> Result<Transaction, D::Error>
@@ -34,7 +36,7 @@ where
 
     deserializer.deserialize_any(TransactionVisitor)
 }
-
+#[cfg(feature = "accountable")]
 pub fn serialize_receipts<S>(hm: &HashMap<Locator, String>, s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -51,7 +53,7 @@ struct AppointmentInners {
     encrypted_blob: String,
     to_self_delay: u32,
 }
-
+#[cfg(feature = "accountable")]
 struct LocatorInners {
     arg1: String,
     arg2: u32,

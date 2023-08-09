@@ -40,12 +40,12 @@ fn to_cln_error(e: RequestError) -> Error {
 
 /// Sends fresh data to a retrier as long as is does not exist, or it does and its running.
 fn send_to_retrier(state: &MutexGuard<WTClient>, tower_id: TowerId, locator: Locator) {
-    if (if let Some(status) = state.get_retrier_status(&tower_id) {
+    if if let Some(status) = state.get_retrier_status(&tower_id) {
         // A retrier in the retriers map can only be running or idle
         status.is_running()
     } else {
         true
-    }) {
+    } {
         state
             .unreachable_towers
             .send((tower_id, RevocationData::Fresh(locator)))

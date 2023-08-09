@@ -429,6 +429,7 @@ mod tests {
         ));
 
         // Decrease the slots count (simulate exhaustion) and update with more than the current count it should work
+        #[cfg(feature = "accountable")]
         let locator = generate_random_appointment(None).locator;
         #[cfg(feature = "accountable")]
         wt_client.add_appointment_receipt(
@@ -504,7 +505,7 @@ mod tests {
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-
+        #[cfg(feature = "accountable")]
         let locator = generate_random_appointment(None).locator;
         let registration_receipt = get_random_registration_receipt();
         #[cfg(feature = "accountable")]
@@ -823,6 +824,7 @@ mod tests {
         let tower_id = TowerId(tower_pk);
 
         // If we call this on an unknown tower it will simply do nothing
+        #[cfg(feature = "accountable")]
         let appointment = generate_random_appointment(None);
         #[cfg(feature = "accountable")]
         let receipt = get_random_appointment_receipt(tower_sk);
@@ -847,6 +849,7 @@ mod tests {
         assert!(tower_summary.unwrap().status.is_misbehaving());
 
         // Check data in DB
+        #[cfg(feature = "accountable")]
         let loaded_info = wt_client.load_tower_info(tower_id).unwrap();
         #[cfg(feature = "accountable")]
         assert!(loaded_info.status.is_misbehaving());
@@ -893,6 +896,7 @@ mod tests {
             .unwrap();
 
         let locator = generate_random_appointment(None).locator;
+        #[cfg(feature = "accountable")]
         let registration_receipt = get_random_registration_receipt();
         #[cfg(feature = "accountable")]
         let appointment_receipt = get_random_appointment_receipt(tower_sk);
@@ -937,6 +941,7 @@ mod tests {
             .unwrap();
 
         let locator = generate_random_appointment(None).locator;
+        #[cfg(feature = "accountable")]
         let registration_receipt = get_random_registration_receipt();
         #[cfg(feature = "accountable")]
         let appointment_receipt_1 = get_random_appointment_receipt(tower1_sk);

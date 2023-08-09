@@ -190,7 +190,6 @@ impl DBM {
                 ]
             )
             .map_err(Error::Unknown)?;
-        let data2: Option<Vec<u8>> = None;
         #[cfg(not(feature = "accountable"))]
         tx
             .execute(
@@ -1050,7 +1049,9 @@ mod tests {
         #[cfg(feature = "accountable")]
         let mut receipts = HashMap::new();
         for _ in 0..5 {
+            #[cfg(feature = "accountable")]
             let appointment = generate_random_appointment(None);
+            #[cfg(feature = "accountable")]
             let user_signature = "user_signature";
             #[cfg(feature = "accountable")]
             let appointment_receipt = AppointmentReceipt::with_signature(
@@ -1082,6 +1083,7 @@ mod tests {
     fn test_load_appointment_receipt() {
         let mut dbm = DBM::in_memory().unwrap();
         let tower_id = get_random_user_id();
+        #[cfg(feature = "accountable")]
         let appointment = generate_random_appointment(None);
 
         // If there is no appointment receipt for the given (locator, tower_id) pair, Error::NotFound is returned
@@ -1102,6 +1104,7 @@ mod tests {
             .is_none());
 
         // Add both
+        #[cfg(feature = "accountable")]
         let tower_summary = TowerSummary::new(
             net_addr.to_owned(),
             receipt.available_slots(),
@@ -1140,6 +1143,7 @@ mod tests {
         let net_addr = "talaia.watch";
 
         let receipt = get_random_registration_receipt();
+        #[cfg(feature = "accountable")]
         let tower_summary = TowerSummary::new(
             net_addr.to_owned(),
             receipt.available_slots(),
@@ -1150,6 +1154,7 @@ mod tests {
             .unwrap();
 
         // Create all types of appointments and store them in the db.
+        #[cfg(feature = "accountable")]
         let user_signature = "user_signature";
         let mut receipts = HashSet::new();
         let mut pending_appointments = HashSet::new();
@@ -1435,6 +1440,7 @@ mod tests {
         );
 
         // Store a misbehaving proof and load it back
+        #[cfg(feature = "accountable")]
         let appointment = generate_random_appointment(None);
         #[cfg(feature = "accountable")]
         let appointment_receipt = AppointmentReceipt::with_signature(
@@ -1456,6 +1462,7 @@ mod tests {
 
     #[test]
     fn test_store_load_non_existing_misbehaving_proof() {
+        #[cfg(feature = "accountable")]
         let dbm = DBM::in_memory().unwrap();
         #[cfg(feature = "accountable")]
         assert!(dbm.load_misbehaving_proof(get_random_user_id()).is_none());
@@ -1484,6 +1491,7 @@ mod tests {
         );
 
         // // Store a misbehaving proof check
+        #[cfg(feature = "accountable")]
         let appointment = generate_random_appointment(None);
         #[cfg(feature = "accountable")]
         let appointment_receipt = AppointmentReceipt::with_signature(
@@ -1505,6 +1513,7 @@ mod tests {
 
     #[test]
     fn test_exists_misbehaving_proof_false() {
+        #[cfg(feature = "accountable")]
         let dbm = DBM::in_memory().unwrap();
         #[cfg(feature = "accountable")]
         assert!(!dbm.exists_misbehaving_proof(get_random_user_id()));
