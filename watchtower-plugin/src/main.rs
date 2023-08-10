@@ -82,7 +82,7 @@ async fn register(
 
     let tower_net_addr = {
         if !host.starts_with("http://") {
-            host = format!("http://{host}");
+            host = format!("http://{host}")
         }
         NetAddr::new(format!("{host}:{port}"))
     };
@@ -98,6 +98,7 @@ async fn register(
             }
             to_cln_error(e)
         })?;
+
     #[cfg(feature = "accountable")]
     if !receipt.verify(&tower_id) {
         return Err(anyhow!(
@@ -109,16 +110,11 @@ async fn register(
         .state()
         .lock()
         .unwrap()
-        .add_update_tower(tower_id, tower_net_addr.net_addr(), &receipt)
-        .map_err(|e| {
+        .add_update_tower(tower_id, tower_net_addr.net_addr(), &receipt).map_err(|e| {
             if e.is_expiry() {
-                anyhow!(
-                    "Registration receipt contains a subscription expiry that is not higher than the one we are currently registered for"
-                )
+                anyhow!("Registration receipt contains a subscription expiry that is not higher than the one we are currently registered for")
             } else {
-                anyhow!(
-                    "Registration receipt does not contain more slots than the ones we are currently registered for"
-                )
+                anyhow!("Registration receipt does not contain more slots than the ones we are currently registered for")
             }
         })?;
 
@@ -158,14 +154,14 @@ async fn get_subscription_info(
 ) -> Result<serde_json::Value, Error> {
     let tower_id = TowerId::try_from(v).map_err(|x| anyhow!(x))?;
 
-    let (user_sk, tower_net_addr, proxy) = ({
+    let (user_sk, tower_net_addr, proxy) = {
         let state = plugin.state().lock().unwrap();
         if let Some(info) = state.towers.get(&tower_id) {
             Ok((state.user_sk, info.net_addr.clone(), state.proxy.clone()))
         } else {
             Err(anyhow!("Unknown tower id: {tower_id}"))
         }
-    })?;
+    }?;
 
     let signature = cryptography::sign("get subscription info".as_bytes(), &user_sk).unwrap();
 
@@ -173,7 +169,7 @@ async fn get_subscription_info(
         post_request(
             &tower_net_addr,
             Endpoint::GetSubscriptionInfo,
-            &(common_msgs::GetSubscriptionInfoRequest { signature }),
+            &common_msgs::GetSubscriptionInfoRequest { signature },
             &proxy,
         )
         .await,
@@ -200,14 +196,14 @@ async fn get_appointment(
 ) -> Result<serde_json::Value, Error> {
     let params = GetAppointmentParams::try_from(v).map_err(|x| anyhow!(x))?;
 
-    let (user_sk, tower_net_addr, proxy) = ({
+    let (user_sk, tower_net_addr, proxy) = {
         let state = plugin.state().lock().unwrap();
         if let Some(info) = state.towers.get(&params.tower_id) {
             Ok((state.user_sk, info.net_addr.clone(), state.proxy.clone()))
         } else {
             Err(anyhow!("Unknown tower id: {}", params.tower_id))
         }
-    })?;
+    }?;
 
     let signature = cryptography::sign(
         format!("get appointment {}", params.locator).as_bytes(),
@@ -219,10 +215,10 @@ async fn get_appointment(
         post_request(
             &tower_net_addr,
             Endpoint::GetAppointment,
-            &(common_msgs::GetAppointmentRequest {
+            &common_msgs::GetAppointmentRequest {
                 locator: params.locator.to_vec(),
                 signature,
-            }),
+            },
             &proxy,
         )
         .await,
@@ -297,7 +293,7 @@ async fn get_tower_info(
         ))
     } else {
         Err(anyhow!(
-            "Cannot find {tower_id} within the known towers. Have you registered?"
+            "Cannot find {tower_id} within the known towers. Have you registered?",
         ))
     }
 }
@@ -375,7 +371,7 @@ async fn retry_tower(
                 .map_err(|e| anyhow!(e))?;
         } else {
             return Err(anyhow!(
-                "Tower status must be unreachable or have a subscription issue to manually retry"
+                "Tower status must be unreachable or have a subscription issue to manually retry",
             ));
         }
     } else {
@@ -473,14 +469,15 @@ async fn on_commitment_revocation(
                     AddAppointmentError::ApiError(e) => match e.error_code {
                         errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR => {
                             log::warn!(
-                                        "There is a subscription issue with {tower_id}. Adding {} to pending",
-                                        appointment.locator
-                                    );
+                                "There is a subscription issue with {tower_id}. Adding {} to pending",
+                                appointment.locator
+                            );
                             let mut state = plugin.state().lock().unwrap();
                             state.set_tower_status(tower_id, TowerStatus::SubscriptionError);
                             state.add_pending_appointment(tower_id, &appointment);
                             send_to_retrier(&state, tower_id, appointment.locator);
                         }
+
                         _ => {
                             log::warn!(
                                 "{tower_id} rejected the appointment. Error: {}, error_code: {}",
@@ -495,19 +492,17 @@ async fn on_commitment_revocation(
                         }
                     },
                     AddAppointmentError::SignatureError(proof) => {
-                        log::warn!(
-                                "Cannot recover known tower_id from the appointment receipt. Flagging tower as misbehaving"
-                            );
+                        log::warn!("Cannot recover known tower_id from the appointment receipt. Flagging tower as misbehaving");
                         plugin
                             .state()
                             .lock()
                             .unwrap()
-                            .flag_misbehaving_tower(tower_id, proof);
+                            .flag_misbehaving_tower(tower_id, proof)
                     }
                 },
             };
         } else if status.is_misbehaving() {
-            log::warn!("{tower_id} is misbehaving. Not sending any further appointments");
+            log::warn!("{tower_id} is misbehaving. Not sending any further appointments",);
         } else {
             if status.is_subscription_error() {
                 log::warn!(
@@ -517,9 +512,10 @@ async fn on_commitment_revocation(
             } else {
                 log::warn!(
                     "{tower_id} is {status}. Adding {} to pending",
-                    appointment.locator
+                    appointment.locator,
                 );
             }
+
             let mut state = plugin.state().lock().unwrap();
             state.add_pending_appointment(tower_id, &appointment);
 
@@ -610,6 +606,7 @@ async fn main() -> Result<(), Error> {
         Ok(v) => PathBuf::from(v),
         Err(_) => home_dir().unwrap().join(constants::DEFAULT_TOWERS_DATA_DIR),
     };
+
     #[cfg(feature = "accountable")]
     let builder = Builder::new(stdin(), stdout())
         .option(ConfigOption::new(

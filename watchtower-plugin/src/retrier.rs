@@ -18,6 +18,7 @@ use crate::wt_client::{RevocationData, WTClient};
 use crate::TowerStatus;
 #[cfg(feature = "accountable")]
 use crate::{MisbehaviorProof, TowerStatus};
+
 const POLLING_TIME: u64 = 1;
 
 #[derive(Eq, PartialEq, Debug)]
@@ -41,14 +42,13 @@ impl Display for RetryError {
         }
     }
 }
+
 #[cfg(feature = "accountable")]
 impl RetryError {
     fn is_permanent(&self) -> bool {
         matches!(
             self,
-            RetryError::Subscription(_, true)
-                | (RetryError::Misbehaving(_))
-                | RetryError::Abandoned
+            RetryError::Subscription(_, true) | RetryError::Misbehaving(_) | RetryError::Abandoned
         )
     }
 }
@@ -118,9 +118,7 @@ impl RetryManager {
                     } else if let Some(retrier) = self.retriers.get(&tower_id) {
                         if retrier.is_idle() {
                             if !data.is_none() {
-                                log::error!(
-                                    "Data was send to an idle retier. This should have never happened. Please report! ({data:?})"
-                                );
+                                log::error!("Data was send to an idle retier. This should have never happened. Please report! ({data:?})");
                                 continue;
                             }
                             log::info!(
@@ -162,9 +160,9 @@ impl RetryManager {
                     for retrier in self.retriers.values() {
                         if retrier.should_start() {
                             self.start_retrying(retrier.clone());
-                            // Effectively this is the same as `if retrier.is_idle` plus returning for how long is true.
+                        // Effectively this is the same as `if retrier.is_idle` plus returning for how long is true.
                         } else if let Some(t) = retrier.get_elapsed_time() {
-                            if t > (self.auto_retry_delay as u64) {
+                            if t > self.auto_retry_delay as u64 {
                                 log::info!(
                                     "Finished idling. Flagging {} for retry",
                                     retrier.tower_id
@@ -188,9 +186,7 @@ impl RetryManager {
                     // Sleep to not waste a lot of CPU cycles.
                     tokio::time::sleep(Duration::from_secs(POLLING_TIME)).await;
                 }
-                Err(TryRecvError::Disconnected) => {
-                    break;
-                }
+                Err(TryRecvError::Disconnected) => break,
             }
         }
     }
@@ -215,7 +211,7 @@ impl RetryManager {
                 .lock()
                 .unwrap();
             for locator in locators {
-                log::debug!("Adding pending appointment {locator} to existing tower {tower_id}");
+                log::debug!("Adding pending appointment {locator} to existing tower {tower_id}",);
                 pending_appointments.insert(locator);
             }
         }
@@ -422,9 +418,7 @@ impl Retrier {
                         }
                         #[cfg(feature = "accountable")]
                         RetryError::Misbehaving(p) => {
-                            log::warn!(
-                                "Cannot recover known tower_id from the appointment receipt. Flagging tower as misbehaving"
-                            );
+                            log::warn!("Cannot recover known tower_id from the appointment receipt. Flagging tower as misbehaving");
                             self.wt_client
                                 .lock()
                                 .unwrap()
@@ -482,14 +476,7 @@ impl Retrier {
                 })?;
             #[cfg(feature = "accountable")]
             if !receipt.verify(&tower_id) {
-                return Err(
-                    Error::permanent(
-                        RetryError::Subscription(
-                            "Registration receipt contains bad signature. Are you using the right tower_id?".to_owned(),
-                            true
-                        )
-                    )
-                );
+                return Err(Error::permanent(RetryError::Subscription("Registration receipt contains bad signature. Are you using the right tower_id?".to_owned(), true)));
             }
             self.wt_client
                 .lock()
@@ -570,10 +557,10 @@ impl Retrier {
                                 }
                                 _ => {
                                     log::warn!(
-                                            "{tower_id} rejected the appointment. Error: {}, error_code: {}",
-                                            e.error,
-                                            e.error_code
-                                        );
+                                        "{tower_id} rejected the appointment. Error: {}, error_code: {}",
+                                        e.error,
+                                        e.error_code
+                                    );
                                     // We need to move the appointment from pending to invalid
                                     // Add it first to invalid and remove it from pending later so a cascade delete is not triggered
                                     self.pending_appointments.lock().unwrap().remove(&locator);
@@ -690,6 +677,7 @@ mod tests {
             .lock()
             .unwrap()
             .add_pending_appointment(tower_id, &appointment);
+
         #[cfg(not(feature = "accountable"))]
         // Prepare the mock response
         let mut add_appointment_receipt = AppointmentReceipt::new(
@@ -701,6 +689,7 @@ mod tests {
         #[cfg(feature = "accountable")]
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
+
         #[cfg(not(feature = "accountable"))]
         let add_appointment_response = get_dummy_add_appointment_response(appointment.locator);
         let api_mock = server
@@ -1179,6 +1168,7 @@ mod tests {
         let mut re_registration_receipt =
             get_registration_receipt_from_previous(&registration_receipt);
         re_registration_receipt.sign(&tower_sk);
+
         #[cfg(feature = "accountable")]
         let mut add_appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
@@ -1308,7 +1298,7 @@ mod tests {
         {
             // After the retriers gives up, it should go idling and flag the tower as unreachable
             tokio::time::sleep(Duration::from_secs_f64(
-                (MAX_ELAPSED_TIME as f64) + MAX_RUN_TIME,
+                MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME,
             ))
             .await;
             let state = wt_client.lock().unwrap();
@@ -1330,10 +1320,7 @@ mod tests {
             .unwrap();
 
         {
-            tokio::time::sleep(Duration::from_secs_f64(
-                (POLLING_TIME as f64) + MAX_RUN_TIME,
-            ))
-            .await;
+            tokio::time::sleep(Duration::from_secs_f64(POLLING_TIME as f64 + MAX_RUN_TIME)).await;
             let state = wt_client.lock().unwrap();
             assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
             let tower = state.towers.get(&tower_id).unwrap();
@@ -1354,6 +1341,7 @@ mod tests {
 
         // Mock a proper response
         let mut server = mockito::Server::new_async().await;
+
         #[cfg(feature = "accountable")]
         let api_mock = server
             .mock("POST", Endpoint::AddAppointment.path().as_str())
@@ -1362,6 +1350,7 @@ mod tests {
             .with_body_from_request(move |request| {
                 let body = serde_json::from_slice::<AddAppointmentRequest>(request.body().unwrap())
                     .unwrap();
+
                 let response = if body.appointment.unwrap().locator == appointment.locator.to_vec()
                 {
                     get_dummy_add_appointment_response(appointment.locator, &appointment_receipt)
@@ -1393,17 +1382,14 @@ mod tests {
                 .unwrap()
                 .pending_appointments
                 .len(),
-            2
+            2,
         );
 
         // Send a retry flag to the retrier to force a retry.
         tx.send((tower_id, RevocationData::None)).unwrap();
 
         // After retrying the pending pool has been emptied, meaning that both appointments went trough
-        tokio::time::sleep(Duration::from_secs_f64(
-            (POLLING_TIME as f64) + MAX_RUN_TIME,
-        ))
-        .await;
+        tokio::time::sleep(Duration::from_secs_f64(POLLING_TIME as f64 + MAX_RUN_TIME)).await;
         assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
         assert!(wt_client
             .lock()
@@ -1545,7 +1531,7 @@ mod tests {
         #[cfg(feature = "accountable")]
         assert!(matches!(
             r,
-            Err(Error::Permanent(RetryError::Misbehaving { .. }))
+            Err(Error::Permanent(RetryError::Misbehaving { .. },))
         ));
         api_mock.assert_async().await;
     }

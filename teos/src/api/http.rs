@@ -291,7 +291,7 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
                 errors::INVALID_REQUEST_FORMAT
             };
             Ok(reply::with_status(
-                reply::json(&(ApiError { error, error_code })),
+                reply::json(&ApiError { error, error_code }),
                 StatusCode::BAD_REQUEST,
             ))
         }
@@ -310,9 +310,7 @@ pub async fn serve(
 ) {
     let grpc_conn = loop {
         match PublicTowerServicesClient::connect(format!("http://{grpc_bind}")).await {
-            Ok(conn) => {
-                break conn;
-            }
+            Ok(conn) => break conn,
             Err(_) => {
                 log::error!("Cannot connect to the gRPC server. Retrying shortly");
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -516,13 +514,11 @@ mod tests_failures {
     #[tokio::test]
     async fn test_wrong_hex_encoding_character() {
         let (server_addr, _s) = run_tower_in_background().await;
-        let (api_error, status) = check_api_error(
-            Endpoint::Register,
-            RequestBody::Jsonify(
-                r#"{"user_id": "022fa2900ed7fc07b4e8ca3ea081e846245b0497944644aa78ea0b994ac22074dZ"}"#
-            ),
-            server_addr
-        ).await;
+        let (api_error, status) =
+        check_api_error(Endpoint::Register,
+        RequestBody::Jsonify(r#"{"user_id": "022fa2900ed7fc07b4e8ca3ea081e846245b0497944644aa78ea0b994ac22074dZ"}"#),
+        server_addr
+    ).await;
 
         assert!(api_error.error.contains("Invalid character"));
         assert_eq!(api_error.error_code, errors::WRONG_FIELD_FORMAT);
@@ -709,7 +705,7 @@ mod tests_methods {
                 RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
                     user_id: user_id.to_vec(),
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -717,7 +713,7 @@ mod tests_methods {
                     "Subscription maximum slots count reached".into(),
                     errors::REGISTRATION_RESOURCE_EXHAUSTED
                 ),
-                StatusCode::BAD_REQUEST,
+                StatusCode::BAD_REQUEST
             )
         );
     }
@@ -737,7 +733,7 @@ mod tests_methods {
                 RequestBody::Json(serde_json::json!(common_msgs::RegisterRequest {
                     user_id: user_id.to_vec(),
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -745,7 +741,7 @@ mod tests_methods {
                     "Service currently unavailable".into(),
                     errors::SERVICE_UNAVAILABLE
                 ),
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::SERVICE_UNAVAILABLE
             )
         );
     }
@@ -803,7 +799,7 @@ mod tests_methods {
                     appointment: Some(appointment.into()),
                     signature,
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -811,7 +807,7 @@ mod tests_methods {
                     "Invalid signature or user does not have enough slots available".into(),
                     errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
                 ),
-                StatusCode::UNAUTHORIZED,
+                StatusCode::UNAUTHORIZED
             )
         );
     }
@@ -849,7 +845,7 @@ mod tests_methods {
                     appointment: Some(appointment.into()),
                     signature,
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -857,7 +853,7 @@ mod tests_methods {
                     "The provided appointment has already been triggered".into(),
                     errors::APPOINTMENT_ALREADY_TRIGGERED
                 ),
-                StatusCode::BAD_REQUEST,
+                StatusCode::BAD_REQUEST
             )
         );
     }
@@ -879,7 +875,7 @@ mod tests_methods {
                     appointment: Some(appointment.into()),
                     signature,
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -887,7 +883,7 @@ mod tests_methods {
                     "Service currently unavailable".into(),
                     errors::SERVICE_UNAVAILABLE
                 ),
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::SERVICE_UNAVAILABLE
             )
         );
     }
@@ -963,11 +959,11 @@ mod tests_methods {
                     locator: appointment.locator.to_vec(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
-                        &user_sk
+                        &user_sk,
                     )
-                    .unwrap(),
+                    .unwrap()
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -975,7 +971,7 @@ mod tests_methods {
                     "User cannot be authenticated".into(),
                     errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
                 ),
-                StatusCode::UNAUTHORIZED,
+                StatusCode::UNAUTHORIZED
             )
         );
     }
@@ -1006,11 +1002,11 @@ mod tests_methods {
                     locator: appointment.locator.to_vec(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
-                        &user_sk
+                        &user_sk,
                     )
-                    .unwrap(),
+                    .unwrap()
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -1018,7 +1014,7 @@ mod tests_methods {
                     "Appointment not found".into(),
                     errors::APPOINTMENT_NOT_FOUND
                 ),
-                StatusCode::NOT_FOUND,
+                StatusCode::NOT_FOUND
             )
         );
     }
@@ -1041,11 +1037,11 @@ mod tests_methods {
                     locator: appointment.locator.to_vec(),
                     signature: cryptography::sign(
                         format!("get appointment {}", appointment.locator).as_bytes(),
-                        &user_sk
+                        &user_sk,
                     )
-                    .unwrap(),
+                    .unwrap()
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -1053,7 +1049,7 @@ mod tests_methods {
                     "Service currently unavailable".into(),
                     errors::SERVICE_UNAVAILABLE
                 ),
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::SERVICE_UNAVAILABLE
             )
         );
     }
@@ -1108,7 +1104,7 @@ mod tests_methods {
                     signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
                         .unwrap(),
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -1116,7 +1112,7 @@ mod tests_methods {
                     "User not found. Have you registered?".into(),
                     errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR
                 ),
-                StatusCode::UNAUTHORIZED,
+                StatusCode::UNAUTHORIZED
             )
         );
     }
@@ -1136,7 +1132,7 @@ mod tests_methods {
                     signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
                         .unwrap(),
                 })),
-                server_addr
+                server_addr,
             )
             .await,
             (
@@ -1144,7 +1140,7 @@ mod tests_methods {
                     "Service currently unavailable".into(),
                     errors::SERVICE_UNAVAILABLE
                 ),
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::SERVICE_UNAVAILABLE
             )
         );
     }

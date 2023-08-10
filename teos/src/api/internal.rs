@@ -80,6 +80,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
                 "Provided public key does not match expected format (33-byte compressed key)",
             )
         })?;
+
         match self.watcher.register(user_id) {
             Ok(receipt) => Ok(Response::new(common_msgs::RegisterResponse {
                 user_id: req_data.user_id,
@@ -263,7 +264,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
                         appointment.inner.into(),
                     ),
                 ),
-            });
+            })
         }
 
         for (_, tracker) in self.watcher.get_all_responder_trackers().into_iter() {
@@ -271,7 +272,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
                 appointment_data: Some(common_msgs::appointment_data::AppointmentData::Tracker(
                     tracker.into(),
                 )),
-            });
+            })
         }
 
         Ok(Response::new(msgs::GetAllAppointmentsResponse {
@@ -296,7 +297,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
         let locator = Locator::from_slice(&request.into_inner().locator).map_err(|_| {
             Status::new(
                 Code::InvalidArgument,
-                "The provided locator does not match the expected format (16-byte hexadecimal string)"
+                "The provided locator does not match the expected format (16-byte hexadecimal string)",
             )
         })?;
 
@@ -311,7 +312,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
                         appointment.inner.into(),
                     ),
                 ),
-            });
+            })
         }
 
         for (_, tracker) in self
@@ -323,7 +324,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
                 appointment_data: Some(common_msgs::appointment_data::AppointmentData::Tracker(
                     tracker.into(),
                 )),
-            });
+            })
         }
 
         Ok(Response::new(msgs::GetAppointmentsResponse {
@@ -739,10 +740,7 @@ mod tests_private_api {
             .into_inner();
 
         assert_eq!(response.available_slots, SLOTS);
-        assert_eq!(
-            response.subscription_expiry,
-            (START_HEIGHT as u32) + DURATION
-        );
+        assert_eq!(response.subscription_expiry, START_HEIGHT as u32 + DURATION);
         assert!(response.appointments.is_empty());
 
         // Add an appointment and check back
@@ -763,10 +761,7 @@ mod tests_private_api {
             .into_inner();
 
         assert_eq!(response.available_slots, SLOTS - 1);
-        assert_eq!(
-            response.subscription_expiry,
-            (START_HEIGHT as u32) + DURATION
-        );
+        assert_eq!(response.subscription_expiry, START_HEIGHT as u32 + DURATION);
         assert_eq!(response.appointments, Vec::from([uuid.to_vec()]));
     }
 
@@ -827,7 +822,7 @@ mod tests_public_api {
                 .unwrap()
                 .into_inner();
 
-            assert!(matches!(response, common_msgs::RegisterResponse { .. }));
+            assert!(matches!(response, common_msgs::RegisterResponse { .. }))
         }
     }
 
@@ -855,10 +850,7 @@ mod tests_public_api {
             {
                 Err(status) => {
                     assert_eq!(status.code(), Code::InvalidArgument);
-                    assert_eq!(
-                        status.message(),
-                        "Provided public key does not match expected format (33-byte compressed key)"
-                    );
+                    assert_eq!(status.message(), "Provided public key does not match expected format (33-byte compressed key)")
                 }
                 _ => panic!("Test should have returned Err"),
             }
@@ -1016,7 +1008,7 @@ mod tests_public_api {
         {
             Err(status) => {
                 assert_eq!(status.code(), Code::Unauthenticated);
-                assert!(status.message().starts_with("Your subscription expired at"))
+                assert!(status.message().starts_with("Your subscription expired at"),)
             }
             _ => panic!("Test should have returned Err"),
         }
@@ -1047,7 +1039,7 @@ mod tests_public_api {
                 assert_eq!(status.code(), Code::AlreadyExists);
                 assert!(status
                     .message()
-                    .starts_with("The provided appointment has already been triggered"))
+                    .starts_with("The provided appointment has already been triggered"),)
             }
             _ => panic!("Test should have returned Err"),
         }

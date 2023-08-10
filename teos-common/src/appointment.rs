@@ -40,15 +40,18 @@ impl Locators {
         }
     }
 }
+
 impl Locator {
     /// Creates a new [Locator].
     pub fn new(txid: Txid) -> Self {
         Locator(txid[..LOCATOR_LEN].try_into().unwrap())
     }
+
     /// Encodes a locator into its byte representation.
     pub fn to_vec(&self) -> Vec<u8> {
         self.0.to_vec()
     }
+
     /// Builds a locator from its byte representation.
     pub fn from_slice(data: &[u8]) -> Result<Self, TryFromSliceError> {
         data.try_into().map(Self)

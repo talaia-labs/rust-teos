@@ -334,6 +334,8 @@ mod tests {
     use super::*;
 
     use tempdir::TempDir;
+    use tokio::sync::mpsc::unbounded_channel;
+
     #[cfg(feature = "accountable")]
     use teos_common::test_utils::{
         generate_random_appointment, get_random_appointment_receipt,
@@ -345,7 +347,6 @@ mod tests {
         generate_random_appointment, get_random_registration_receipt, get_random_user_id,
         get_registration_receipt_from_previous,
     };
-    use tokio::sync::mpsc::unbounded_channel;
 
     #[tokio::test]
     async fn test_add_update_load_tower() {
@@ -503,11 +504,12 @@ mod tests {
         let mut wt_client =
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
 
-            #[cfg(feature = "accountable")]
-            let (tower_sk, tower_pk) = cryptography::get_random_keypair();
-            #[cfg(not(feature = "accountable"))]
-            let tower_pk = cryptography::get_random_public_key();
+        #[cfg(feature = "accountable")]
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        #[cfg(not(feature = "accountable"))]
+        let tower_pk = cryptography::get_random_public_key();
         let tower_id = TowerId(tower_pk);
+
         #[cfg(feature = "accountable")]
         let locator = generate_random_appointment(None).locator;
         let registration_receipt = get_random_registration_receipt();
@@ -822,7 +824,8 @@ mod tests {
         let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let mut wt_client =
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
-            #[cfg(feature = "accountable")]
+
+        #[cfg(feature = "accountable")]
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         #[cfg(not(feature = "accountable"))]
         let tower_pk = cryptography::get_random_public_key();
@@ -961,6 +964,7 @@ mod tests {
         let appointment_receipt_1 = get_random_appointment_receipt(tower1_sk);
         #[cfg(feature = "accountable")]
         let appointment_receipt_2 = get_random_appointment_receipt(tower2_sk);
+
         #[cfg(feature = "accountable")]
         wt_client.add_appointment_receipt(
             tower1_id,

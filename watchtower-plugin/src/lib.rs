@@ -1,7 +1,7 @@
-#[cfg(feature = "accountable")]
-use std::collections::{HashMap, HashSet};
 #[cfg(not(feature = "accountable"))]
 use std::collections::HashSet;
+#[cfg(feature = "accountable")]
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde::Serialize;
@@ -273,6 +273,7 @@ pub struct MisbehaviorProof {
     pub appointment_receipt: AppointmentReceipt,
     pub recovered_id: TowerId,
 }
+
 #[cfg(feature = "accountable")]
 impl MisbehaviorProof {
     /// Creates a new [MisbehavingProof] instance.
@@ -292,6 +293,7 @@ impl MisbehaviorProof {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[cfg(feature = "accountable")]
     const STATUSES: [TowerStatus; 5] = [
         TowerStatus::Reachable,
@@ -307,6 +309,7 @@ mod tests {
         TowerStatus::Unreachable,
         TowerStatus::SubscriptionError,
     ];
+
     const AVAILABLE_SLOTS: u32 = 21;
     const SUBSCRIPTION_START: u32 = 100;
     const SUBSCRIPTION_EXPIRY: u32 = SUBSCRIPTION_START + 42;
@@ -468,8 +471,10 @@ mod tests {
 
     mod tower_info {
         use super::*;
+
         #[cfg(feature = "accountable")]
         use teos_common::test_utils::{generate_random_appointment, get_random_user_id};
+
         #[cfg(feature = "accountable")]
         impl TowerInfo {
             pub fn empty(
@@ -555,6 +560,7 @@ mod tests {
             tower_info.status = TowerStatus::Unreachable;
             assert_eq!(unreachable_tower, tower_info);
         }
+
         #[cfg(feature = "accountable")]
         #[test]
         fn test_set_misbehaving_proof() {

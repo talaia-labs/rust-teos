@@ -4,6 +4,9 @@ version = "0.2.0"
 authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
 edition = "2018"
 
+[features]
+accountable = []
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -25,5 +28,3 @@ lightning = "0.0.108"
 
 [build-dependencies]
 tonic-build = "0.6"
-[features]
-accountable = []

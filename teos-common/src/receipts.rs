@@ -44,6 +44,7 @@ impl RegistrationReceipt {
             signature: None,
         }
     }
+
     pub fn with_signature(
         user_id: UserId,
         available_slots: u32,
@@ -89,10 +90,12 @@ impl RegistrationReceipt {
 
         ser
     }
+
     pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
         self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
     }
+
     pub fn verify(&self, id: &UserId) -> bool {
         if let Some(signature) = self.signature() {
             cryptography::verify(&self.to_vec(), &signature, &id.0)

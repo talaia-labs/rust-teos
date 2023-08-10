@@ -15,10 +15,9 @@ use lightning_block_sync::poll::ValidatedBlock;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
-#[cfg(not(feature = "accountable"))]
-use teos_common::receipts::RegistrationReceipt;
 #[cfg(feature = "accountable")]
-use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
+use teos_common::receipts::AppointmentReceipt;
+use teos_common::receipts::RegistrationReceipt;
 use teos_common::{TowerId, UserId};
 
 use crate::dbm::DBM;
@@ -250,11 +249,13 @@ impl Watcher {
                 self.store_appointment(uuid, &extended_appointment);
             }
         };
+
         let mut receipt = AppointmentReceipt::new(
             extended_appointment.user_signature,
             extended_appointment.start_block,
         );
         receipt.sign(&self.signing_key);
+
         Ok((receipt, available_slots, expiry))
     }
 
@@ -954,6 +955,7 @@ mod tests {
             receipt.subscription_expiry(),
             START_HEIGHT as u32 + DURATION
         );
+
         #[cfg(feature = "accountable")]
         assert!(cryptography::verify(
             &receipt.to_vec(),
@@ -994,6 +996,7 @@ mod tests {
             let (receipt, slots, expiry) = watcher
                 .add_appointment(appointment.clone(), user_sig.clone())
                 .unwrap();
+
             #[cfg(feature = "accountable")]
             assert_appointment_added(slots, SLOTS - 1, expiry, receipt, &user_sig, tower_id);
             #[cfg(not(feature = "accountable"))]
@@ -1014,8 +1017,10 @@ mod tests {
         let (receipt, slots, expiry) = watcher
             .add_appointment(appointment.clone(), user2_sig.clone())
             .unwrap();
+
         #[cfg(feature = "accountable")]
         assert_appointment_added(slots, SLOTS - 1, expiry, receipt, &user2_sig, tower_id);
+
         #[cfg(not(feature = "accountable"))]
         let (slots, expiry) = watcher
             .add_appointment(appointment.clone(), user2_sig.clone())
@@ -1056,6 +1061,7 @@ mod tests {
         );
         #[cfg(feature = "accountable")]
         let receipt = watcher.add_appointment(triggered_appointment.inner, signature);
+
         #[cfg(feature = "accountable")]
         assert!(matches!(
             receipt,

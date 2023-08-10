@@ -7,7 +7,7 @@
  *  Apache License, Version 2.0, (LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0) or
  *  MIT license (LICENSE-MIT or http://opensource.org/licenses/MIT)
  * at your option.
- */
+*/
 
 use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
@@ -95,14 +95,10 @@ impl<'a> BitcoindClient<'a> {
 
         // Assert teos runs on the same chain/network as bitcoind.
         if btc_network != teos_network {
-            Err(
-                Error::new(
-                    ErrorKind::InvalidInput,
-                    format!(
-                        "bitcoind is running on {btc_network} but teosd is set to run on {teos_network}"
-                    )
-                )
-            )
+            Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("bitcoind is running on {btc_network} but teosd is set to run on {teos_network}"),
+            ))
         } else {
             Ok(client)
         }

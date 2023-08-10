@@ -177,32 +177,16 @@ impl DBM {
         )
         .map_err(Error::Unknown)?;
         #[cfg(feature = "accountable")]
-        tx
-            .execute(
+        tx.execute(
                 "INSERT INTO registration_receipts (tower_id, available_slots, subscription_start, subscription_expiry, signature) 
                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    tower_id.to_vec(),
-                    receipt.available_slots(),
-                    receipt.subscription_start(),
-                    receipt.subscription_expiry(),
-                    receipt.signature()
-                ]
-            )
-            .map_err(Error::Unknown)?;
+                params![tower_id.to_vec(), receipt.available_slots(), receipt.subscription_start(), receipt.subscription_expiry(), receipt.signature()]).map_err( Error::Unknown)?;
         #[cfg(not(feature = "accountable"))]
-        tx
-            .execute(
-                "INSERT INTO nonaccountable_registration_receipts (tower_id, available_slots, subscription_start, subscription_expiry) 
-                        VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    tower_id.to_vec(),
-                    receipt.available_slots(),
-                    receipt.subscription_start(),
-                    receipt.subscription_expiry(),
-                ]
-            )
-            .map_err(Error::Unknown)?;
+        tx.execute(
+            "INSERT INTO nonaccountable_registration_receipts (tower_id, available_slots, subscription_start, subscription_expiry) 
+                    VALUES (?1, ?2, ?3, ?4)",
+                params![tower_id.to_vec(), receipt.available_slots(), receipt.subscription_start(), receipt.subscription_expiry()]).map_err(Error::Unknown)?;
+
         tx.commit().map_err(Error::Unknown)
     }
 
@@ -213,25 +197,24 @@ impl DBM {
     /// In the case that the tower has misbehaved, then a misbehaving proof is also attached to the record.
     pub fn load_tower_record(&self, tower_id: TowerId) -> Option<TowerInfo> {
         #[cfg(feature = "accountable")]
-        let mut stmt = self.connection
-            .prepare(
-                "SELECT t.net_addr, t.available_slots, r.subscription_start, r.subscription_expiry 
+        let mut stmt = self
+        .connection
+        .prepare("SELECT t.net_addr, t.available_slots, r.subscription_start, r.subscription_expiry 
                     FROM towers as t, registration_receipts as r 
                     WHERE t.tower_id = r.tower_id AND t.tower_id = ?1 AND r.subscription_expiry = (SELECT MAX(subscription_expiry) 
                         FROM registration_receipts 
-                        WHERE tower_id = ?1)"
-            )
-            .unwrap();
+                        WHERE tower_id = ?1)")
+        .unwrap();
         #[cfg(not(feature = "accountable"))]
-        let mut stmt = self.connection
-            .prepare(
-                "SELECT t.net_addr, t.available_slots, r.subscription_start, r.subscription_expiry 
+        let mut stmt = self.
+        connection
+        .prepare("SELECT t.net_addr, t.available_slots, r.subscription_start, r.subscription_expiry 
                     FROM towers as t, nonaccountable_registration_receipts as r 
                     WHERE t.tower_id = r.tower_id AND t.tower_id = ?1 AND r.subscription_expiry = (SELECT MAX(subscription_expiry) 
                         FROM nonaccountable_registration_receipts 
-                        WHERE tower_id = ?1)"
-            )
-            .unwrap();
+                        WHERE tower_id = ?1)")
+        .unwrap();
+
         #[cfg(feature = "accountable")]
         let mut tower = stmt
             .query_row([tower_id.to_vec()], |row| {
@@ -239,7 +222,6 @@ impl DBM {
                 let available_slots: u32 = row.get(1).unwrap();
                 let subscription_start: u32 = row.get(2).unwrap();
                 let subscription_expiry: u32 = row.get(3).unwrap();
-
                 Ok(TowerInfo::new(
                     net_addr,
                     available_slots,
@@ -269,6 +251,7 @@ impl DBM {
                 ))
             })
             .ok()?;
+
         #[cfg(feature = "accountable")]
         if let Some(proof) = self.load_misbehaving_proof(tower_id) {
             tower.status = TowerStatus::Misbehaving;
@@ -299,6 +282,7 @@ impl DBM {
                         WHERE tower_id = ?1)",
             )
             .unwrap();
+
         stmt.query_row([tower_id.to_vec()], |row| {
             let slots: u32 = row.get(0).unwrap();
             let start: u32 = row.get(1).unwrap();
@@ -349,30 +333,28 @@ impl DBM {
     pub fn load_towers(&self) -> HashMap<TowerId, TowerSummary> {
         let mut towers = HashMap::new();
         #[cfg(feature = "accountable")]
-        let mut stmt = self.connection
-            .prepare(
-                "SELECT tw.tower_id, tw.net_addr, tw.available_slots, rr.subscription_start, rr.subscription_expiry 
+        let mut stmt = self
+            .connection
+            .prepare("SELECT tw.tower_id, tw.net_addr, tw.available_slots, rr.subscription_start, rr.subscription_expiry 
                         FROM towers AS tw 
                         JOIN registration_receipts AS rr 
                         JOIN (SELECT tower_id, MAX(subscription_expiry) AS max_se 
                             FROM registration_receipts 
                             GROUP BY tower_id) AS max_rrs ON (tw.tower_id = rr.tower_id) 
                         AND (rr.tower_id = max_rrs.tower_id) 
-                        AND (rr.subscription_expiry = max_rrs.max_se)"
-            )
+                        AND (rr.subscription_expiry = max_rrs.max_se)")
             .unwrap();
         #[cfg(not(feature = "accountable"))]
-        let mut stmt = self.connection
-            .prepare(
-                "SELECT tw.tower_id, tw.net_addr, tw.available_slots, rr.subscription_start, rr.subscription_expiry 
+        let mut stmt = self
+        .connection
+        .prepare("SELECT tw.tower_id, tw.net_addr, tw.available_slots, rr.subscription_start, rr.subscription_expiry 
                         FROM towers AS tw 
                         JOIN nonaccountable_registration_receipts AS rr 
                         JOIN (SELECT tower_id, MAX(subscription_expiry) AS max_se 
                             FROM nonaccountable_registration_receipts 
                             GROUP BY tower_id) AS max_rrs ON (tw.tower_id = rr.tower_id) 
                         AND (rr.tower_id = max_rrs.tower_id) 
-                        AND (rr.subscription_expiry = max_rrs.max_se)"
-            )
+                        AND (rr.subscription_expiry = max_rrs.max_se)")
             .unwrap();
         let mut rows = stmt.query([]).unwrap();
 
@@ -392,6 +374,7 @@ impl DBM {
                 self.load_appointment_locators(tower_id, AppointmentStatus::Pending),
                 self.load_appointment_locators(tower_id, AppointmentStatus::Invalid),
             );
+
             #[cfg(feature = "accountable")]
             if self.exists_misbehaving_proof(tower_id) {
                 tower.status = TowerStatus::Misbehaving;
@@ -427,7 +410,7 @@ impl DBM {
                 receipt.start_block(),
                 receipt.user_signature(),
                 receipt.signature()
-            ]
+            ],
         )?;
         tx.execute(
             "UPDATE towers SET available_slots=?1 WHERE tower_id=?2",
@@ -435,6 +418,7 @@ impl DBM {
         )?;
         tx.commit()
     }
+
     #[cfg(not(feature = "accountable"))]
     pub fn store_accepted_appointments(
         &mut self,
@@ -454,6 +438,7 @@ impl DBM {
         )?;
         tx.commit()
     }
+
     /// Loads a given appointment receipt of a given tower from the database.
     #[cfg(feature = "accountable")]
     pub fn load_appointment_receipt(
@@ -461,10 +446,9 @@ impl DBM {
         tower_id: TowerId,
         locator: Locator,
     ) -> Option<AppointmentReceipt> {
-        let mut stmt = self.connection
-            .prepare(
-                "SELECT start_block, user_signature, tower_signature FROM appointment_receipts WHERE tower_id = ?1 and locator = ?2"
-            )
+        let mut stmt = self
+            .connection
+            .prepare("SELECT start_block, user_signature, tower_signature FROM appointment_receipts WHERE tower_id = ?1 and locator = ?2")
             .unwrap();
 
         stmt.query_row(params![tower_id.to_vec(), locator.to_vec()], |row| {
@@ -602,7 +586,7 @@ impl DBM {
         Self::store_appointment(&tx, appointment).ok();
         tx.execute(
             "INSERT INTO pending_appointments (locator, tower_id) VALUES (?1, ?2)",
-            params![appointment.locator.to_vec(), tower_id.to_vec()],
+            params![appointment.locator.to_vec(), tower_id.to_vec(),],
         )?;
 
         tx.commit()
@@ -650,7 +634,7 @@ impl DBM {
                 "DELETE FROM pending_appointments WHERE locator=?1 AND tower_id=?2",
                 params![locator.to_vec(), tower_id.to_vec()],
             )?;
-        }
+        };
         tx.commit()
     }
 
@@ -671,7 +655,7 @@ impl DBM {
         Self::store_appointment(&tx, appointment).ok();
         tx.execute(
             "INSERT INTO invalid_appointments (locator, tower_id) VALUES (?1, ?2)",
-            params![appointment.locator.to_vec(), tower_id.to_vec()],
+            params![appointment.locator.to_vec(), tower_id.to_vec(),],
         )?;
 
         tx.commit()
@@ -698,12 +682,9 @@ impl DBM {
         };
 
         let mut appointments = Vec::new();
-        let mut stmt = self.connection
-            .prepare(
-                &format!(
-                    "SELECT a.locator, a.encrypted_blob, a.to_self_delay FROM appointments as a, {table} as t WHERE a.locator = t.locator AND t.tower_id = ?"
-                )
-            )
+        let mut stmt = self
+            .connection
+            .prepare(&format!("SELECT a.locator, a.encrypted_blob, a.to_self_delay FROM appointments as a, {table} as t WHERE a.locator = t.locator AND t.tower_id = ?"))
             .unwrap();
         let mut rows = stmt.query([tower_id.to_vec()]).unwrap();
 
@@ -738,7 +719,7 @@ impl DBM {
                 proof.appointment_receipt.start_block(),
                 proof.appointment_receipt.user_signature(),
                 proof.appointment_receipt.signature()
-            ]
+            ],
         )?;
         tx.execute(
             "INSERT INTO misbehaving_proofs (tower_id, locator, recovered_id) VALUES (?1, ?2, ?3)",
@@ -1061,6 +1042,7 @@ mod tests {
             );
 
             tower_summary.available_slots -= 1;
+
             #[cfg(feature = "accountable")]
             dbm.store_appointment_receipt(
                 tower_id,
@@ -1075,6 +1057,7 @@ mod tests {
                 appointment_receipt.signature().unwrap(),
             );
         }
+
         #[cfg(feature = "accountable")]
         assert_eq!(dbm.load_appointment_receipts(tower_id), receipts);
     }
@@ -1098,6 +1081,7 @@ mod tests {
         let receipt = get_random_registration_receipt();
         dbm.store_tower_record(tower_id, net_addr, &receipt)
             .unwrap();
+
         #[cfg(feature = "accountable")]
         assert!(dbm
             .load_appointment_receipt(tower_id, appointment.locator)
@@ -1125,6 +1109,7 @@ mod tests {
             &appointment_receipt,
         )
         .unwrap();
+
         #[cfg(feature = "accountable")]
         assert_eq!(
             dbm.load_appointment_receipt(tower_id, appointment.locator)
@@ -1169,6 +1154,7 @@ mod tests {
             );
             let pending_appointment = generate_random_appointment(None);
             let invalid_appointment = generate_random_appointment(None);
+
             #[cfg(feature = "accountable")]
             dbm.store_appointment_receipt(
                 tower_id,
@@ -1448,12 +1434,14 @@ mod tests {
             42,
             "tower_signature".to_owned(),
         );
+
         #[cfg(feature = "accountable")]
         let proof = MisbehaviorProof::new(
             appointment.locator,
             appointment_receipt,
             get_random_user_id(),
         );
+
         #[cfg(feature = "accountable")]
         dbm.store_misbehaving_proof(tower_id, &proof).unwrap();
         #[cfg(feature = "accountable")]
@@ -1499,12 +1487,14 @@ mod tests {
             42,
             "tower_signature".to_owned(),
         );
+
         #[cfg(feature = "accountable")]
         let proof = MisbehaviorProof::new(
             appointment.locator,
             appointment_receipt,
             get_random_user_id(),
         );
+
         #[cfg(feature = "accountable")]
         dbm.store_misbehaving_proof(tower_id, &proof).unwrap();
         #[cfg(feature = "accountable")]

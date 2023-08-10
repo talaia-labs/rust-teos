@@ -50,13 +50,13 @@ impl Carrier {
     /// growing unbounded.
     pub(crate) fn clear_receipts(&mut self) {
         if !self.issued_receipts.is_empty() {
-            self.issued_receipts = HashMap::new();
+            self.issued_receipts = HashMap::new()
         }
     }
 
     /// Updates the last known block height by the [Carrier].
     pub(crate) fn update_height(&mut self, height: u32) {
-        self.block_height = height;
+        self.block_height = height
     }
 
     /// Hangs the process until bitcoind is reachable. If bitcoind is already reachable it just passes trough.

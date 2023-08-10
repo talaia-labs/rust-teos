@@ -138,9 +138,11 @@ pub async fn add_appointment(
         send_appointment(tower_id, tower_net_addr, proxy, appointment, signature).await?;
     log::debug!("Appointment accepted and signed by {tower_id}");
     log::debug!("Remaining slots: {}", response.available_slots);
-    log::debug!("Start block: {:?}", response.start_block);
+    log::debug!("Start block: {}", response.start_block);
+
     Ok((response.available_slots, receipt))
 }
+
 #[cfg(not(feature = "accountable"))]
 pub async fn add_appointment(
     tower_id: TowerId,
@@ -326,6 +328,7 @@ mod tests {
         generate_random_appointment, get_random_appointment_receipt,
         get_random_registration_receipt, get_random_user_id,
     };
+
     #[cfg(not(feature = "accountable"))]
     use teos_common::test_utils::{
         generate_random_appointment, get_random_registration_receipt, get_random_user_id,
@@ -422,6 +425,7 @@ mod tests {
         // in case there are no errors. All the error cases will be tested in `send_appointment`.
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let appointment = generate_random_appointment(None);
+
         #[cfg(feature = "accountable")]
         let appointment_receipt = get_random_appointment_receipt(tower_sk);
         #[cfg(feature = "accountable")]
@@ -438,6 +442,7 @@ mod tests {
             .with_body(json!(add_appointment_response).to_string())
             .create_async()
             .await;
+
         #[cfg(feature = "accountable")]
         let (response, receipt) = add_appointment(
             TowerId(tower_pk),
@@ -469,6 +474,7 @@ mod tests {
     async fn test_send_appointment() {
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let appointment = generate_random_appointment(None);
+
         #[cfg(feature = "accountable")]
         let appointment_receipt = get_random_appointment_receipt(tower_sk);
         #[cfg(feature = "accountable")]
@@ -485,6 +491,7 @@ mod tests {
             .with_body(json!(add_appointment_response).to_string())
             .create_async()
             .await;
+
         #[cfg(feature = "accountable")]
         let (response, receipt) = send_appointment(
             TowerId(tower_pk),

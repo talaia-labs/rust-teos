@@ -9,6 +9,9 @@ edition = "2018"
 name = "watchtower-client"
 path = "src/main.rs"
 
+[features]
+accountable = []
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -34,5 +37,3 @@ teos-common = { path = "../teos-common" }
 [dev-dependencies]
 mockito = "0.32.4"
 tempdir = "0.3.7"
-[features]
-accountable = []
