@@ -13,6 +13,12 @@ use teos::protos::private_tower_services_client::PrivateTowerServicesClient;
 use teos_common::appointment::Locator;
 use teos_common::UserId;
 
+/// Prints the cli error to standard error and exits the process
+fn handle_error<T: std::fmt::Display>(error: T) {
+    eprintln!("{}", error);
+    std::process::exit(1);
+}
+
 #[tokio::main]
 async fn main() {
     let opt = Opt::from_args();
@@ -80,10 +86,10 @@ async fn main() {
                         Ok(appointments) => {
                             println!("{}", pretty_json(&appointments.into_inner()).unwrap())
                         }
-                        Err(status) => println!("{}", status.message()),
+                        Err(status) => handle_error(status.message()),
                     }
                 }
-                Err(e) => println!("{e}"),
+                Err(e) => handle_error(e),
             };
         }
         Command::GetTowerInfo => {
@@ -106,10 +112,10 @@ async fn main() {
                         Ok(response) => {
                             println!("{}", pretty_json(&response.into_inner()).unwrap())
                         }
-                        Err(status) => println!("{}", status.message()),
+                        Err(status) => handle_error(status.message()),
                     }
                 }
-                Err(e) => println!("{e}"),
+                Err(e) => handle_error(e),
             };
         }
         Command::Stop => {
