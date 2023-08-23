@@ -700,11 +700,15 @@ impl chain::Listen for Watcher {
             for (uuid, breach) in valid_breaches {
                 log::info!("Notifying Responder and deleting appointment (uuid: {uuid})");
 
-                if let ConfirmationStatus::Rejected(_) = self.responder.handle_breach(
-                    uuid,
-                    breach,
-                    self.appointments.lock().unwrap()[&uuid].user_id,
-                ) {
+                if self
+                    .responder
+                    .handle_breach(
+                        uuid,
+                        breach,
+                        self.appointments.lock().unwrap()[&uuid].user_id,
+                    )
+                    .rejected()
+                {
                     appointments_to_delete.insert(uuid);
                 } else {
                     delivered_appointments.insert(uuid);
