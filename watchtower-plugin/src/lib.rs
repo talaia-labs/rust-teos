@@ -1,5 +1,6 @@
 #[cfg(feature = "accountable")]
 use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 
 use serde::Serialize;
