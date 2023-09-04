@@ -123,6 +123,7 @@ pub struct Watcher {
     /// The last known block height.
     last_known_block_height: AtomicU32,
     /// The tower signing key. Used to sign messages going to users.
+    /// #[cfg(feature = "accountable")]
     signing_key: SecretKey,
     /// The tower identifier.
     pub tower_id: TowerId,
@@ -174,7 +175,10 @@ impl Watcher {
     /// Registers a new user within the [Watcher]. This request is passed to the [Gatekeeper], who is in
     /// charge of managing users.
     pub(crate) fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
+        #[cfg(feature = "accountable")]
         let mut receipt = self.gatekeeper.add_update_user(user_id)?;
+        #[cfg(not(feature = "accountable"))]
+        let receipt = self.gatekeeper.add_update_user(user_id)?;
         #[cfg(feature = "accountable")]
         receipt.sign(&self.signing_key);
 
@@ -828,6 +832,7 @@ mod tests {
 
     use bitcoin::hash_types::Txid;
     use bitcoin::hashes::Hash;
+    #[cfg(feature = "accountable")]
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
 
     use lightning::chain::Listen;
@@ -891,8 +896,11 @@ mod tests {
         slots: u32,
         expected_slots: u32,
         expiry: u32,
-        #[cfg(feature = "accountable")] receipt: AppointmentReceipt,
+        #[cfg(feature = "accountable")] 
+        receipt: AppointmentReceipt,
+        #[cfg(feature = "accountable")]
         expected_user_signature: &str,
+        #[cfg(feature = "accountable")]
         tower_id: TowerId,
     ) {
         assert_eq!(slots, expected_slots);
@@ -943,6 +951,7 @@ mod tests {
         // sense and the signature verifies.
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let (watcher, _s) = init_watcher(&mut chain).await;
+        #[cfg(feature = "accountable")]
         let tower_pk = watcher.tower_id.0;
 
         let (_, user_pk) = get_random_keypair();
@@ -956,6 +965,8 @@ mod tests {
             START_HEIGHT as u32 + DURATION
         );
 
+        #[cfg(feature = "accountable")]
+        let tower_pk = watcher.tower_id.0;
         #[cfg(feature = "accountable")]
         assert!(cryptography::verify(
             &receipt.to_vec(),
@@ -979,7 +990,7 @@ mod tests {
         // In any of the cases where the appointment should be added to the Watcher, the appointment will be rejected if:
         //      - the user does not have enough slots (either to add or update)
         //      - the subscription has expired
-
+        #[cfg(feature = "accountable")]
         let tower_id = TowerId(PublicKey::from_secret_key(
             &Secp256k1::new(),
             &watcher.signing_key,
@@ -1004,7 +1015,7 @@ mod tests {
                 .add_appointment(appointment.clone(), user_sig.clone())
                 .unwrap();
             #[cfg(not(feature = "accountable"))]
-            assert_appointment_added(slots, SLOTS - 1, expiry, &user_sig, tower_id);
+            assert_appointment_added(slots, SLOTS - 1, expiry);
         }
 
         // Add the same appointment but for another user
@@ -1026,7 +1037,7 @@ mod tests {
             .add_appointment(appointment.clone(), user2_sig.clone())
             .unwrap();
         #[cfg(not(feature = "accountable"))]
-        assert_appointment_added(slots, SLOTS - 1, expiry, &user2_sig, tower_id);
+        assert_appointment_added(slots, SLOTS - 1, expiry);
         // There should be now two appointments in the Watcher and the same locator should have two different uuids
         assert_eq!(watcher.appointments.lock().unwrap().len(), 2);
         assert_eq!(
@@ -1072,6 +1083,7 @@ mod tests {
         let dispute_tx = tip_txs.last().unwrap();
         let (uuid, appointment_in_cache) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+            #[cfg(feature = "accountable")]
         let user_sig = cryptography::sign(&appointment_in_cache.inner.to_vec(), &user_sk).unwrap();
         #[cfg(feature = "accountable")]
         let (receipt, slots, expiry) = watcher
@@ -1084,7 +1096,7 @@ mod tests {
             .add_appointment(appointment.clone(), user2_sig.clone())
             .unwrap();
         #[cfg(not(feature = "accountable"))]
-        assert_appointment_added(slots, SLOTS - 1, expiry, &user2_sig, tower_id);
+        assert_appointment_added(slots, SLOTS - 1, expiry);
 
         // The appointment should have been accepted, slots should have been decreased, and data should have been deleted from
         // the Watcher's memory. Moreover, a new tracker should be found in the Responder
@@ -1106,6 +1118,7 @@ mod tests {
         let (uuid, mut invalid_appointment) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
         invalid_appointment.inner.encrypted_blob.reverse();
+        #[cfg(feature = "accountable")]
         let user_sig = cryptography::sign(&invalid_appointment.inner.to_vec(), &user_sk).unwrap();
         #[cfg(feature = "accountable")]
         let (receipt, slots, expiry) = watcher
@@ -1118,7 +1131,7 @@ mod tests {
             .add_appointment(appointment.clone(), user2_sig.clone())
             .unwrap();
         #[cfg(not(feature = "accountable"))]
-        assert_appointment_added(slots, SLOTS - 1, expiry, &user2_sig, tower_id);
+        assert_appointment_added(slots, SLOTS - 1, expiry);
         assert_eq!(watcher.appointments.lock().unwrap().len(), 3);
 
         // Data should not be in the database
@@ -1132,9 +1145,11 @@ mod tests {
             chain.tip().deref().height,
         );
         *watcher.responder.get_carrier().lock().unwrap() = carrier;
-
+        #[cfg(feature = "accountable")]
         let dispute_tx = &tip_txs[tip_txs.len() - 2];
+        #[cfg(feature = "accountable")]
         let invalid_appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
+        #[cfg(feature = "accountable")]
         let user_sig = cryptography::sign(&invalid_appointment.to_vec(), &user_sk).unwrap();
         #[cfg(feature = "accountable")]
         let (receipt, slots, expiry) = watcher
@@ -1147,7 +1162,7 @@ mod tests {
             .add_appointment(appointment.clone(), user2_sig.clone())
             .unwrap();
         #[cfg(not(feature = "accountable"))]
-        assert_appointment_added(slots, SLOTS - 1, expiry, &user2_sig, tower_id);
+        assert_appointment_added(slots, SLOTS - 1, expiry);
         assert_eq!(watcher.appointments.lock().unwrap().len(), 3);
 
         // Data should not be in the database

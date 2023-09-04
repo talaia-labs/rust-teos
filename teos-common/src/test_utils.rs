@@ -13,10 +13,9 @@ use bitcoin::Txid;
 
 use crate::appointment::{Appointment, Locator};
 use crate::cryptography;
-#[cfg(not(feature = "accountable"))]
 use crate::receipts::RegistrationReceipt;
 #[cfg(feature = "accountable")]
-use crate::receipts::{AppointmentReceipt, RegistrationReceipt};
+use crate::receipts::AppointmentReceipt;
 use crate::UserId;
 
 pub static TXID_HEX: &str = "338bda693c4a26e0d41a01f7f2887aaf48bf0bdf93e6415c9110b29349349d3e";

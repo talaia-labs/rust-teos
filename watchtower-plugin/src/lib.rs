@@ -1,5 +1,3 @@
-#[cfg(not(feature = "accountable"))]
-use std::collections::HashSet;
 #[cfg(feature = "accountable")]
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -213,7 +211,6 @@ pub struct TowerInfo {
     #[cfg(feature = "accountable")]
     #[serde(serialize_with = "crate::ser::serialize_receipts")]
     pub appointments: HashMap<Locator, String>,
-    #[cfg(not(feature = "accountable"))]
     #[serde(serialize_with = "crate::ser::serialize_locators")]
     pub appointments: Vec<Locators>,
     #[serde(serialize_with = "crate::ser::serialize_appointments")]

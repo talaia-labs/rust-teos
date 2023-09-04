@@ -6,10 +6,9 @@ use teos_common::cryptography;
 use teos_common::net::http::Endpoint;
 use teos_common::net::NetAddr;
 use teos_common::protos as common_msgs;
-#[cfg(not(feature = "accountable"))]
 use teos_common::receipts::RegistrationReceipt;
 #[cfg(feature = "accountable")]
-use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
+use teos_common::receipts::AppointmentReceipt;
 use teos_common::{TowerId, UserId};
 
 use crate::net::ProxyInfo;
@@ -423,7 +422,9 @@ mod tests {
     async fn test_add_appointment() {
         // `add_appointment` is basically a pass trough function for `send_appointment` with some logging and a parse of the outputs
         // in case there are no errors. All the error cases will be tested in `send_appointment`.
-        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        #[cfg(feature = "accountable")]
+        let (tower_sk,_) = cryptography::get_random_keypair();
+        let (_, tower_pk) = cryptography::get_random_keypair();
         let appointment = generate_random_appointment(None);
 
         #[cfg(feature = "accountable")]

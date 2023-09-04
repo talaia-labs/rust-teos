@@ -824,8 +824,7 @@ mod tests {
         let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let mut wt_client =
             WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
-
-        #[cfg(feature = "accountable")]
+            #[cfg(feature = "accountable")]
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         #[cfg(not(feature = "accountable"))]
         let tower_pk = cryptography::get_random_public_key();

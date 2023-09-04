@@ -1,11 +1,9 @@
 use bitcoin::consensus::encode;
 use bitcoin::Transaction;
-
 #[cfg(feature = "accountable")]
 use teos_common::appointment::{Appointment, Locator, Locators};
 #[cfg(not(feature = "accountable"))]
 use teos_common::appointment::{Appointment, Locators};
-
 use hex::FromHex;
 use serde::{de, ser::SerializeMap, Deserializer, Serialize, Serializer};
 #[cfg(feature = "accountable")]
