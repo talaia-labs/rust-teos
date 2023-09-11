@@ -429,11 +429,11 @@ mod tests {
 
         #[cfg(feature = "accountable")]
         let appointment_receipt = get_random_appointment_receipt(tower_sk);
-        #[cfg(feature = "accountable")]
+        // #[cfg(feature = "accountable")]
         let add_appointment_response =
-            get_dummy_add_appointment_response(appointment.locator, &appointment_receipt);
-        #[cfg(not(feature = "accountable"))]
-        let add_appointment_response = get_dummy_add_appointment_response(appointment.locator);
+            get_dummy_add_appointment_response(appointment.locator, #[cfg(feature = "accountable")]
+            &appointment_receipt);
+       
 
         let mut server = mockito::Server::new_async().await;
         let api_mock = server
@@ -455,7 +455,7 @@ mod tests {
         .await
         .unwrap();
         #[cfg(not(feature = "accountable"))]
-        let (response) = add_appointment(
+        let response = add_appointment(
             TowerId(tower_pk),
             &NetAddr::new(server.url()),
             &None,
@@ -521,17 +521,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "accountable")]
     async fn test_send_appointment_misbehaving() {
         let (sybil_tower_sk, sibyl_tower_pk) = cryptography::get_random_keypair();
         let appointment = generate_random_appointment(None);
-
-        #[cfg(feature = "accountable")]
         let appointment_receipt = get_random_appointment_receipt(tower_sk);
-        #[cfg(feature = "accountable")]
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &appointment_receipt);
-        #[cfg(not(feature = "accountable"))]
-        let add_appointment_response = get_dummy_add_appointment_response(appointment.locator);
 
         let mut server = mockito::Server::new_async().await;
         let api_mock = server
@@ -554,7 +550,6 @@ mod tests {
         .unwrap_err();
 
         api_mock.assert_async().await;
-        #[cfg(feature = "accountable")]
         if let AddAppointmentError::SignatureError(proof) = error {
             assert_eq!(
                 MisbehaviorProof::new(

@@ -14,10 +14,9 @@ use teos_common::UserId as TowerId;
 
 use crate::net::http::{self, AddAppointmentError};
 use crate::wt_client::{RevocationData, WTClient};
-#[cfg(not(feature = "accountable"))]
 use crate::TowerStatus;
 #[cfg(feature = "accountable")]
-use crate::{MisbehaviorProof, TowerStatus};
+use crate::MisbehaviorProof;
 
 const POLLING_TIME: u64 = 1;
 
@@ -48,7 +47,7 @@ impl RetryError {
     fn is_permanent(&self) -> bool {
         matches!(
             self,
-            RetryError::Subscription(_, true) | RetryError::Misbehaving(_) | RetryError::Abandoned
+            RetryError::Subscription(_, true) | RetryError::Abandoned |  RetryError::Misbehaving(_) 
         )
     }
 }
@@ -520,6 +519,7 @@ impl Retrier {
                             tower_id,
                             appointment.locator,
                             slots,
+                            #[cfg(feature = "accountable")]
                             &receipt,
                         );
                         wt_client.remove_pending_appointment(tower_id, appointment.locator);
@@ -529,7 +529,7 @@ impl Retrier {
                     Ok(slots) => {
                         self.pending_appointments.lock().unwrap().remove(&locator);
                         let mut wt_client = self.wt_client.lock().unwrap();
-                        wt_client.add_accepted_appointment(tower_id, appointment.locator, slots);
+                        wt_client.add_appointment_receipt(tower_id, appointment.locator, slots);
                         wt_client.remove_pending_appointment(tower_id, appointment.locator);
                         log::debug!("Response verified and data stored in the database");
                     }
@@ -652,6 +652,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "accountable")]
+    // #[cfg(feature = "accountable")]
     async fn test_manage_retry_reachable() {
         let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let (tx, rx) = unbounded_channel();
@@ -678,19 +680,19 @@ mod tests {
             .unwrap()
             .add_pending_appointment(tower_id, &appointment);
 
-        #[cfg(not(feature = "accountable"))]
+            
         // Prepare the mock response
         let mut add_appointment_receipt = AppointmentReceipt::new(
             cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
             42,
         );
-        #[cfg(not(feature = "accountable"))]
+        
         add_appointment_receipt.sign(&tower_sk);
-        #[cfg(feature = "accountable")]
+        
         let add_appointment_response =
             get_dummy_add_appointment_response(appointment.locator, &add_appointment_receipt);
 
-        #[cfg(not(feature = "accountable"))]
+        
         let add_appointment_response = get_dummy_add_appointment_response(appointment.locator);
         let api_mock = server
             .mock("POST", Endpoint::AddAppointment.path().as_str())
