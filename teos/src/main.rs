@@ -48,6 +48,7 @@ where
 {
     let mut last_n_blocks = Vec::with_capacity(n);
     for _ in 0..n {
+        log::debug!("Fetching block #{}", last_known_block.height);
         let block = poller.fetch_block(&last_known_block).await?;
         last_known_block = poller.look_up_previous_header(&last_known_block).await?;
         last_n_blocks.push(block);
@@ -257,16 +258,6 @@ async fn main() {
         any => any,
     };
 
-    let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
-    let last_n_blocks = get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize)
-        .await.unwrap_or_else(|e| {
-            // I'm pretty sure this can only happen if we are pulling blocks from the target to the prune height, and by the time we get to
-            // the end at least one has been pruned.
-            log::error!("Couldn't load the latest {IRREVOCABLY_RESOLVED} blocks. Please try again (Error: {})", e.into_inner());
-            std::process::exit(1);
-        }
-    );
-
     // Build components
     let gatekeeper = Arc::new(Gatekeeper::new(
         tip.height,
@@ -276,23 +267,35 @@ async fn main() {
         dbm.clone(),
     ));
 
-    let carrier = Carrier::new(rpc, bitcoind_reachable.clone(), tip.height);
-    let responder = Arc::new(Responder::new(
-        &last_n_blocks,
-        tip.height,
-        carrier,
-        gatekeeper.clone(),
-        dbm.clone(),
-    ));
-    let watcher = Arc::new(Watcher::new(
-        gatekeeper.clone(),
-        responder.clone(),
-        &last_n_blocks[0..6],
-        tip.height,
-        tower_sk,
-        TowerId(tower_pk),
-        dbm.clone(),
-    ));
+    let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
+    let (responder, watcher) = {
+        let last_n_blocks = get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize)
+            .await.unwrap_or_else(|e| {
+                // I'm pretty sure this can only happen if we are pulling blocks from the target to the prune height, and by the time we get to
+                // the end at least one has been pruned.
+                log::error!("Couldn't load the latest {IRREVOCABLY_RESOLVED} blocks. Please try again (Error: {})", e.into_inner());
+                std::process::exit(1);
+            }
+        );
+
+        let responder = Arc::new(Responder::new(
+            &last_n_blocks,
+            tip.height,
+            Carrier::new(rpc, bitcoind_reachable.clone(), tip.height),
+            gatekeeper.clone(),
+            dbm.clone(),
+        ));
+        let watcher = Arc::new(Watcher::new(
+            gatekeeper.clone(),
+            responder.clone(),
+            &last_n_blocks[0..6],
+            tip.height,
+            tower_sk,
+            TowerId(tower_pk),
+            dbm.clone(),
+        ));
+        (responder, watcher)
+    };
 
     if watcher.is_fresh() & responder.is_fresh() & gatekeeper.is_fresh() {
         log::info!("Fresh bootstrap");
@@ -307,8 +310,8 @@ async fn main() {
     let shutdown_signal_tor = shutdown_signal_rpc_api.clone();
 
     // The ordering here actually matters. Listeners are called by order, and we want the gatekeeper to be called
-    // last, so both the Watcher and the Responder can query the necessary data from it during data deletion.
-    let listener = &(watcher.clone(), &(responder, gatekeeper));
+    // first so it updates the users' states and both the Watcher and the Responder operate only on registered users.
+    let listener = &(gatekeeper, &(watcher.clone(), responder));
     let cache = &mut UnboundedCache::new();
     let spv_client = SpvClient::new(tip, poller, cache, listener);
     let mut chain_monitor = ChainMonitor::new(

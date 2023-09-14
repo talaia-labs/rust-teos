@@ -9,7 +9,7 @@ use lightning_block_sync::poll::ValidatedBlock;
 use teos_common::appointment::Locator;
 
 /// A trait implemented by types that can be used as key in a [TxIndex].
-pub trait Key: Hash {
+pub trait Key: Hash + Eq {
     fn from_txid(txid: Txid) -> Self;
 }
 
@@ -79,8 +79,8 @@ impl Value for Transaction {
 /// Data structure used to index locators computed from parsed blocks.
 ///
 /// Holds up to `size` blocks with their corresponding computed [Locator]s.
-#[derive(Debug)]
-pub struct TxIndex<K, V> {
+#[derive(Debug, PartialEq, Eq)]
+pub struct TxIndex<K: Key, V: Value> {
     /// A [K]:[V] map.
     index: HashMap<K, V>,
     /// Vector of block hashes covered by the index.
@@ -95,7 +95,7 @@ pub struct TxIndex<K, V> {
 
 impl<K, V> TxIndex<K, V>
 where
-    K: Key + std::cmp::Eq + Copy,
+    K: Key + Copy,
     V: Value + Clone,
     Self: Sized,
 {
@@ -143,11 +143,6 @@ where
         self.index.get(k)
     }
 
-    /// Checks whether the index contains a certain key.
-    pub fn contains_key(&self, k: &K) -> bool {
-        self.index.contains_key(k)
-    }
-
     /// Checks if the index if full.
     pub fn is_full(&self) -> bool {
         self.blocks.len() > self.size
@@ -175,7 +170,7 @@ where
 
         if self.is_full() {
             // Avoid logging during bootstrap
-            log::info!("New block added to index: {}", block_header.block_hash());
+            log::debug!("New block added to index: {}", block_header.block_hash());
             self.tip += 1;
             self.remove_oldest_block();
         }
@@ -204,11 +199,11 @@ where
         let ks = self.tx_in_block.remove(&h).unwrap();
         self.index.retain(|k, _| !ks.contains(k));
 
-        log::info!("Oldest block removed from index: {h}");
+        log::debug!("Oldest block removed from index: {h}");
     }
 }
 
-impl<K: std::fmt::Debug, V: std::fmt::Debug> fmt::Display for TxIndex<K, V> {
+impl<K: std::fmt::Debug + Key, V: std::fmt::Debug + Value> fmt::Display for TxIndex<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -239,6 +234,10 @@ mod tests {
 
         pub fn blocks(&self) -> &VecDeque<BlockHash> {
             &self.blocks
+        }
+
+        pub fn contains_key(&self, k: &K) -> bool {
+            self.index.contains_key(k)
         }
     }
 
@@ -304,7 +303,7 @@ mod tests {
         );
 
         let fake_hash = BlockHash::default();
-        assert!(matches!(cache.get_height(&fake_hash), None));
+        assert!(cache.get_height(&fake_hash).is_none());
     }
 
     #[tokio::test]

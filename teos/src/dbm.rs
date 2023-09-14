@@ -1,7 +1,7 @@
 //! Logic related to the tower database manager (DBM), component in charge of persisting data on disk.
 //!
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -14,16 +14,15 @@ use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::BlockHash;
 
-use teos_common::appointment::{compute_appointment_slots, Appointment, Locator};
-use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
+use teos_common::appointment::{Appointment, Locator};
 use teos_common::dbm::{DatabaseConnection, DatabaseManager, Error};
 use teos_common::UserId;
 
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::UserInfo;
-use crate::responder::{ConfirmationStatus, TransactionTracker};
+use crate::responder::{ConfirmationStatus, PenaltySummary, TransactionTracker};
 
-const TABLES: [&str; 5] = [
+const TABLES: [&str; 6] = [
     "CREATE TABLE IF NOT EXISTS users (
     user_id INT PRIMARY KEY,
     available_slots INT NOT NULL,
@@ -59,6 +58,9 @@ const TABLES: [&str; 5] = [
     "CREATE TABLE IF NOT EXISTS keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key INT NOT NULL
+)",
+    "CREATE INDEX IF NOT EXISTS locators_index ON appointments (
+        locator
 )",
 ];
 
@@ -139,27 +141,21 @@ impl DBM {
         }
     }
 
-    /// Loads the associated appointments ([Appointment]) of a given user ([UserInfo]).
-    pub(crate) fn load_user_appointments(&self, user_id: UserId) -> HashMap<UUID, u32> {
+    /// Loads the associated locators ([Locator]) of a given user ([UserId]).
+    pub(crate) fn load_user_locators(&self, user_id: UserId) -> Vec<Locator> {
         let mut stmt = self
             .connection
-            .prepare("SELECT UUID, encrypted_blob FROM appointments WHERE user_id=(?)")
+            .prepare("SELECT locator FROM appointments WHERE user_id=(?)")
             .unwrap();
-        let mut rows = stmt.query([user_id.to_vec()]).unwrap();
 
-        let mut appointments = HashMap::new();
-        while let Ok(Some(inner_row)) = rows.next() {
-            let raw_uuid: Vec<u8> = inner_row.get(0).unwrap();
-            let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
-            let e_blob: Vec<u8> = inner_row.get(1).unwrap();
-
-            appointments.insert(
-                uuid,
-                compute_appointment_slots(e_blob.len(), ENCRYPTED_BLOB_MAX_SIZE),
-            );
-        }
-
-        appointments
+        stmt.query_map([user_id.to_vec()], |row| {
+            let raw_locator: Vec<u8> = row.get(0).unwrap();
+            let locator = Locator::from_slice(&raw_locator).unwrap();
+            Ok(locator)
+        })
+        .unwrap()
+        .map(|res| res.unwrap())
+        .collect()
     }
 
     /// Loads all users from the database.
@@ -178,22 +174,14 @@ impl DBM {
             let start = row.get(2).unwrap();
             let expiry = row.get(3).unwrap();
 
-            users.insert(
-                user_id,
-                UserInfo::with_appointments(
-                    slots,
-                    start,
-                    expiry,
-                    self.load_user_appointments(user_id),
-                ),
-            );
+            users.insert(user_id, UserInfo::new(slots, start, expiry));
         }
 
         users
     }
 
     /// Removes some users from the database in batch.
-    pub(crate) fn batch_remove_users(&mut self, users: &HashSet<UserId>) -> usize {
+    pub(crate) fn batch_remove_users(&mut self, users: &Vec<UserId>) -> usize {
         let limit = self.connection.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
         let tx = self.connection.transaction().unwrap();
         let iter = users
@@ -217,6 +205,24 @@ impl DBM {
         }
 
         (users.len() as f64 / limit as f64).ceil() as usize
+    }
+
+    /// Get the number of stored appointments.
+    pub(crate) fn get_appointments_count(&self) -> usize {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT COUNT(*) FROM appointments as a LEFT JOIN trackers as t ON a.UUID=t.UUID WHERE t.UUID IS NULL")
+            .unwrap();
+        stmt.query_row([], |row| row.get(0)).unwrap()
+    }
+
+    /// Get the number of stored trackers.
+    pub(crate) fn get_trackers_count(&self) -> usize {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT COUNT(*) FROM trackers")
+            .unwrap();
+        stmt.query_row([], |row| row.get(0)).unwrap()
     }
 
     /// Stores an [Appointment] into the database.
@@ -250,7 +256,11 @@ impl DBM {
     }
 
     /// Updates an existing [Appointment] in the database.
-    pub(crate) fn update_appointment(&self, uuid: UUID, appointment: &ExtendedAppointment) {
+    pub(crate) fn update_appointment(
+        &self,
+        uuid: UUID,
+        appointment: &ExtendedAppointment,
+    ) -> Result<(), Error> {
         // DISCUSS: Check what fields we'd like to make updatable. e_blob and signature are the obvious, to_self_delay and start_block may not be necessary (or even risky)
         let query =
             "UPDATE appointments SET encrypted_blob=(?1), to_self_delay=(?2), user_signature=(?3), start_block=(?4) WHERE UUID=(?5)";
@@ -266,9 +276,11 @@ impl DBM {
         ) {
             Ok(_) => {
                 log::debug!("Appointment successfully updated: {uuid}");
+                Ok(())
             }
-            Err(_) => {
-                log::error!("Appointment not found, data cannot be updated: {uuid}");
+            Err(e) => {
+                log::error!("Appointment not found, data cannot be updated: {uuid}. Error: {e:?}");
+                Err(e)
             }
         }
     }
@@ -303,6 +315,15 @@ impl DBM {
             ))
         })
         .ok()
+    }
+
+    /// Check if an appointment with `uuid` exists.
+    pub(crate) fn appointment_exists(&self, uuid: UUID) -> bool {
+        self.connection
+            .prepare("SELECT UUID FROM appointments WHERE UUID=(?)")
+            .unwrap()
+            .exists([uuid.to_vec()])
+            .unwrap()
     }
 
     /// Loads appointments from the database. If a locator is given, this method loads only the appointments
@@ -352,6 +373,32 @@ impl DBM {
         appointments
     }
 
+    /// Gets the length of an appointment (the length of `appointment.encrypted_blob`).
+    pub(crate) fn get_appointment_length(&self, uuid: UUID) -> Option<usize> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT length(encrypted_blob) FROM appointments WHERE UUID=(?)")
+            .unwrap();
+
+        stmt.query_row([uuid.to_vec()], |row| row.get(0)).ok()
+    }
+
+    /// Gets the [`UserId`] of the owner of the appointment along with the appointment
+    /// length (same as [DBM::get_appointment_length]) for `uuid`.
+    pub(crate) fn get_appointment_user_and_length(&self, uuid: UUID) -> Option<(UserId, usize)> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT user_id, length(encrypted_blob) FROM appointments WHERE UUID=(?)")
+            .unwrap();
+
+        stmt.query_row([uuid.to_vec()], |row| {
+            let raw_userid: Vec<u8> = row.get(0).unwrap();
+            let length = row.get(1).unwrap();
+            Ok((UserId::from_slice(&raw_userid).unwrap(), length))
+        })
+        .ok()
+    }
+
     /// Removes an [Appointment] from the database.
     pub(crate) fn remove_appointment(&self, uuid: UUID) {
         let query = "DELETE FROM appointments WHERE UUID=(?)";
@@ -365,11 +412,12 @@ impl DBM {
         }
     }
 
-    /// Removes some appointments from the database in batch and updates the associated users giving back
-    /// the freed appointment slots
+    /// Removes some appointments from the database in batch and updates the associated users
+    /// (giving back freed appointment slots) in one transaction so that the deletion and the
+    /// update is atomic.
     pub(crate) fn batch_remove_appointments(
         &mut self,
-        appointments: &HashSet<UUID>,
+        appointments: &Vec<UUID>,
         updated_users: &HashMap<UserId, UserInfo>,
     ) -> usize {
         let limit = self.connection.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
@@ -405,18 +453,49 @@ impl DBM {
         (appointments.len() as f64 / limit as f64).ceil() as usize
     }
 
-    /// Loads the locator associated to a given UUID
-    pub(crate) fn load_locator(&self, uuid: UUID) -> Option<Locator> {
+    /// Loads the [`UUID`]s of appointments triggered by `locator`.
+    pub(crate) fn load_uuids(&self, locator: Locator) -> Vec<UUID> {
         let mut stmt = self
             .connection
-            .prepare("SELECT locator FROM appointments WHERE UUID=(?)")
+            .prepare("SELECT UUID from appointments WHERE locator=(?)")
             .unwrap();
 
-        stmt.query_row([uuid.to_vec()], |row| {
-            let raw_locator: Vec<u8> = row.get(0).unwrap();
-            Ok(Locator::from_slice(&raw_locator).unwrap())
+        stmt.query_map([locator.to_vec()], |row| {
+            let raw_uuid: Vec<u8> = row.get(0).unwrap();
+            let uuid = UUID::from_slice(&raw_uuid).unwrap();
+            Ok(uuid)
         })
-        .ok()
+        .unwrap()
+        .map(|uuid_res| uuid_res.unwrap())
+        .collect()
+    }
+
+    /// Filters the given set of [`Locator`]s by including only the ones which trigger any of our stored appointments.
+    pub(crate) fn batch_check_locators_exist(&self, locators: Vec<&Locator>) -> Vec<Locator> {
+        let mut registered_locators = Vec::new();
+        let locators: Vec<Vec<u8>> = locators.iter().map(|l| l.to_vec()).collect();
+        let limit = self.connection.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
+
+        for chunk in locators.chunks(limit) {
+            let query = "SELECT locator FROM appointments WHERE locator IN ".to_owned();
+            let placeholders = format!("(?{})", (", ?").repeat(chunk.len() - 1));
+
+            let mut stmt = self
+                .connection
+                .prepare(&format!("{query}{placeholders}"))
+                .unwrap();
+            let known_locators = stmt
+                .query_map(params_from_iter(chunk), |row| {
+                    let raw_locator: Vec<u8> = row.get(0).unwrap();
+                    let locator = Locator::from_slice(&raw_locator).unwrap();
+                    Ok(locator)
+                })
+                .unwrap()
+                .map(|locator_res| locator_res.unwrap());
+            registered_locators.extend(known_locators);
+        }
+
+        registered_locators
     }
 
     /// Stores a [TransactionTracker] into the database.
@@ -445,6 +524,29 @@ impl DBM {
             }
             Err(e) => {
                 log::error!("Couldn't store tracker: {uuid}. Error: {e:?}");
+                Err(e)
+            }
+        }
+    }
+
+    /// Updates the tracker status in the database.
+    ///
+    /// The only updatable fields are `height` and `confirmed`.
+    pub(crate) fn update_tracker_status(
+        &self,
+        uuid: UUID,
+        status: &ConfirmationStatus,
+    ) -> Result<(), Error> {
+        let (height, confirmed) = status.to_db_data().ok_or(Error::MissingField)?;
+
+        let query = "UPDATE trackers SET height=(?1), confirmed=(?2) WHERE UUID=(?3)";
+        match self.update_data(query, params![height, confirmed, uuid.to_vec(),]) {
+            Ok(x) => {
+                log::debug!("Tracker successfully updated: {uuid}");
+                Ok(x)
+            }
+            Err(e) => {
+                log::error!("Couldn't update tracker: {uuid}. Error: {e:?}");
                 Err(e)
             }
         }
@@ -479,6 +581,15 @@ impl DBM {
             })
         })
         .ok()
+    }
+
+    /// Check if a tracker with `uuid` exists.
+    pub(crate) fn tracker_exists(&self, uuid: UUID) -> bool {
+        self.connection
+            .prepare("SELECT UUID FROM trackers WHERE UUID=(?)")
+            .unwrap()
+            .exists([uuid.to_vec()])
+            .unwrap()
     }
 
     /// Loads trackers from the database. If a locator is given, this method loads only the trackers
@@ -528,6 +639,66 @@ impl DBM {
         }
 
         trackers
+    }
+
+    /// Loads trackers with the given confirmation status.
+    ///
+    /// Note that for [`ConfirmationStatus::InMempoolSince(height)`] variant, this pulls trackers
+    /// with `h <= height` and not just `h = height`.
+    pub(crate) fn load_trackers_with_confirmation_status(
+        &self,
+        status: ConfirmationStatus,
+    ) -> Result<Vec<UUID>, Error> {
+        let (height, confirmed) = status.to_db_data().ok_or(Error::MissingField)?;
+        let sql = format!(
+            "SELECT UUID FROM trackers WHERE confirmed=(?1) AND height{}(?2)",
+            if confirmed { "=" } else { "<=" }
+        );
+        let mut stmt = self.connection.prepare(&sql).unwrap();
+
+        Ok(stmt
+            .query_map(params![confirmed, height], |row| {
+                let raw_uuid: Vec<u8> = row.get(0).unwrap();
+                let uuid = UUID::from_slice(&raw_uuid).unwrap();
+                Ok(uuid)
+            })
+            .unwrap()
+            .map(|uuid_res| uuid_res.unwrap())
+            .collect())
+    }
+
+    /// Loads the transaction IDs of all the penalties and their status from the database.
+    pub(crate) fn load_penalties_summaries(&self) -> HashMap<UUID, PenaltySummary> {
+        let mut summaries = HashMap::new();
+
+        let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT t.UUID, t.penalty_tx, t.height, t.confirmed
+                    FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID",
+            )
+            .unwrap();
+        let mut rows = stmt.query([]).unwrap();
+
+        while let Ok(Some(row)) = rows.next() {
+            let raw_uuid: Vec<u8> = row.get(0).unwrap();
+            let raw_penalty_tx: Vec<u8> = row.get(1).unwrap();
+            let height: u32 = row.get(2).unwrap();
+            let confirmed: bool = row.get(3).unwrap();
+
+            // DISCUSS: Should we store the txids to avoid pulling raw txs and deserializing then hashing them.
+            let penalty_txid = consensus::deserialize::<bitcoin::Transaction>(&raw_penalty_tx)
+                .unwrap()
+                .txid();
+            summaries.insert(
+                UUID::from_slice(&raw_uuid).unwrap(),
+                PenaltySummary::new(
+                    penalty_txid,
+                    ConfirmationStatus::from_db_data(height, confirmed),
+                ),
+            );
+        }
+        summaries
     }
 
     /// Stores the last known block into the database.
@@ -581,11 +752,13 @@ impl DBM {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::iter::FromIterator;
 
     use teos_common::cryptography::{get_random_bytes, get_random_keypair};
-    use teos_common::test_utils::get_random_user_id;
+    use teos_common::test_utils::{get_random_locator, get_random_user_id};
 
+    use crate::rpc_errors;
     use crate::test_utils::{
         generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
         get_random_tracker, get_random_tx, AVAILABLE_SLOTS, SUBSCRIPTION_EXPIRY,
@@ -607,20 +780,15 @@ mod tests {
             let mut stmt = self
                 .connection
                 .prepare(
-                    "SELECT user_id, available_slots, subscription_start, subscription_expiry
+                    "SELECT available_slots, subscription_start, subscription_expiry
                         FROM users WHERE user_id=(?)",
                 )
                 .unwrap();
             stmt.query_row([&key], |row| {
-                let slots = row.get(1).unwrap();
-                let start = row.get(2).unwrap();
-                let expiry = row.get(3).unwrap();
-                Ok(UserInfo::with_appointments(
-                    slots,
-                    start,
-                    expiry,
-                    self.load_user_appointments(user_id),
-                ))
+                let slots = row.get(0).unwrap();
+                let start = row.get(1).unwrap();
+                let expiry = row.get(2).unwrap();
+                Ok(UserInfo::new(slots, start, expiry))
             })
             .ok()
         }
@@ -652,27 +820,6 @@ mod tests {
     }
 
     #[test]
-    fn test_store_load_user_with_appointments() {
-        let dbm = DBM::in_memory().unwrap();
-
-        let user_id = get_random_user_id();
-        let mut user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
-
-        dbm.store_user(user_id, &user).unwrap();
-
-        // Add some appointments to the user
-        for _ in 0..10 {
-            let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-            dbm.store_appointment(uuid, &appointment).unwrap();
-            user.appointments.insert(uuid, 1);
-        }
-
-        // Check both loading the whole user info or only the associated appointments
-        assert_eq!(dbm.load_user(user_id).unwrap(), user);
-        assert_eq!(dbm.load_user_appointments(user_id), user.appointments);
-    }
-
-    #[test]
     fn test_load_nonexistent_user() {
         let dbm = DBM::in_memory().unwrap();
 
@@ -696,6 +843,30 @@ mod tests {
     }
 
     #[test]
+    fn test_load_user_locators() {
+        let dbm = DBM::in_memory().unwrap();
+
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
+        dbm.store_user(user_id, &user).unwrap();
+
+        let mut locators = HashSet::new();
+
+        // Add some appointments to the user
+        for _ in 0..10 {
+            let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+            dbm.store_appointment(uuid, &appointment).unwrap();
+            locators.insert(appointment.locator());
+        }
+
+        assert_eq!(dbm.load_user(user_id).unwrap(), user);
+        assert_eq!(
+            HashSet::from_iter(dbm.load_user_locators(user_id)),
+            locators
+        );
+    }
+
+    #[test]
     fn test_load_all_users() {
         let dbm = DBM::in_memory().unwrap();
         let mut users = HashMap::new();
@@ -707,19 +878,8 @@ mod tests {
                 SUBSCRIPTION_START + i,
                 SUBSCRIPTION_EXPIRY + i,
             );
-            users.insert(user_id, user.clone());
+            users.insert(user_id, user);
             dbm.store_user(user_id, &user).unwrap();
-
-            // Add appointments to some of the users
-            if i % 2 == 0 {
-                let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-                dbm.store_appointment(uuid, &appointment).unwrap();
-                users
-                    .get_mut(&user_id)
-                    .unwrap()
-                    .appointments
-                    .insert(uuid, 1);
-            }
         }
 
         assert_eq!(dbm.load_all_users(), users);
@@ -735,7 +895,7 @@ mod tests {
         dbm.connection
             .set_limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER, limit);
 
-        let mut to_be_deleted = HashSet::new();
+        let mut to_be_deleted = Vec::new();
         let mut rest = HashSet::new();
         for i in 1..100 {
             let user_id = get_random_user_id();
@@ -743,7 +903,7 @@ mod tests {
             dbm.store_user(user_id, &user).unwrap();
 
             if i % 2 == 0 {
-                to_be_deleted.insert(user_id);
+                to_be_deleted.push(user_id);
             } else {
                 rest.insert(user_id);
             }
@@ -775,7 +935,7 @@ mod tests {
             Ok { .. }
         ));
 
-        dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id]));
+        dbm.batch_remove_users(&vec![appointment.user_id]);
         assert!(dbm.load_user(appointment.user_id).is_none());
         assert!(dbm.load_appointment(uuid).is_none());
 
@@ -787,7 +947,7 @@ mod tests {
         ));
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
-        dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id]));
+        dbm.batch_remove_users(&vec![appointment.user_id]);
         assert!(dbm.load_user(appointment.user_id).is_none());
         assert!(dbm.load_appointment(uuid).is_none());
         assert!(dbm.load_tracker(uuid).is_none());
@@ -800,6 +960,37 @@ mod tests {
 
         // Test it does not fail even if the user does not exist (it will log though)
         dbm.batch_remove_users(&users);
+    }
+
+    #[test]
+    fn test_get_appointments_trackers_count() {
+        let dbm = DBM::in_memory().unwrap();
+        let n_users = 100;
+        let n_app_per_user = 4;
+        let n_trk_per_user = 6;
+
+        for _ in 0..n_users {
+            let user_id = get_random_user_id();
+            let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
+            dbm.store_user(user_id, &user).unwrap();
+
+            // These are un-triggered appointments.
+            for _ in 0..n_app_per_user {
+                let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+                dbm.store_appointment(uuid, &appointment).unwrap();
+            }
+
+            // And these are triggered ones (trackers).
+            for _ in 0..n_trk_per_user {
+                let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+                dbm.store_appointment(uuid, &appointment).unwrap();
+                let tracker = get_random_tracker(user_id, ConfirmationStatus::ConfirmedIn(42));
+                dbm.store_tracker(uuid, &tracker).unwrap();
+            }
+        }
+
+        assert_eq!(dbm.get_appointments_count(), n_users * n_app_per_user);
+        assert_eq!(dbm.get_trackers_count(), n_users * n_trk_per_user);
     }
 
     #[test]
@@ -849,6 +1040,22 @@ mod tests {
     }
 
     #[test]
+    fn test_appointment_exists() {
+        let dbm = DBM::in_memory().unwrap();
+
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+
+        assert!(!dbm.appointment_exists(uuid));
+
+        dbm.store_user(user_id, &user).unwrap();
+        dbm.store_appointment(uuid, &appointment).unwrap();
+
+        assert!(dbm.appointment_exists(uuid));
+    }
+
+    #[test]
     fn test_update_appointment() {
         let dbm = DBM::in_memory().unwrap();
 
@@ -871,7 +1078,8 @@ mod tests {
         another_modified_appointment.user_id = get_random_user_id();
 
         // Check how only the modifiable fields have been updated
-        dbm.update_appointment(uuid, &another_modified_appointment);
+        dbm.update_appointment(uuid, &another_modified_appointment)
+            .unwrap();
         assert_eq!(dbm.load_appointment(uuid).unwrap(), modified_appointment);
         assert_ne!(
             dbm.load_appointment(uuid).unwrap(),
@@ -971,6 +1179,44 @@ mod tests {
     }
 
     #[test]
+    fn test_get_appointment_length() {
+        let dbm = DBM::in_memory().unwrap();
+
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+
+        dbm.store_user(user_id, &user).unwrap();
+        dbm.store_appointment(uuid, &appointment).unwrap();
+
+        assert_eq!(
+            dbm.get_appointment_length(uuid).unwrap(),
+            appointment.inner.encrypted_blob.len()
+        );
+        assert!(dbm.get_appointment_length(generate_uuid()).is_none());
+    }
+
+    #[test]
+    fn test_get_appointment_user_and_length() {
+        let dbm = DBM::in_memory().unwrap();
+
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+
+        dbm.store_user(user_id, &user).unwrap();
+        dbm.store_appointment(uuid, &appointment).unwrap();
+
+        assert_eq!(
+            dbm.get_appointment_user_and_length(uuid).unwrap(),
+            (user_id, appointment.encrypted_blob().len())
+        );
+        assert!(dbm
+            .get_appointment_user_and_length(generate_uuid())
+            .is_none());
+    }
+
+    #[test]
     fn test_batch_remove_appointments() {
         let mut dbm = DBM::in_memory().unwrap();
 
@@ -990,13 +1236,13 @@ mod tests {
 
         let mut rest = HashSet::new();
         for i in 1..6 {
-            let mut to_be_deleted = HashSet::new();
+            let mut to_be_deleted = Vec::new();
             for j in 0..limit * 2 * i {
                 let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
                 dbm.store_appointment(uuid, &appointment).unwrap();
 
                 if j % 2 == 0 {
-                    to_be_deleted.insert(uuid);
+                    to_be_deleted.push(uuid);
                 } else {
                     rest.insert(uuid);
                 }
@@ -1005,7 +1251,7 @@ mod tests {
             // When the appointment are deleted, the user will get back slots based on the deleted data.
             // Here we can just make a number up to make sure it matches.
             user.available_slots = i as u32;
-            let updated_users = HashMap::from_iter([(user_id, user.clone())]);
+            let updated_users = HashMap::from_iter([(user_id, user)]);
 
             // Check that the db transaction had i queries on it
             assert_eq!(
@@ -1041,8 +1287,8 @@ mod tests {
         ));
 
         dbm.batch_remove_appointments(
-            &HashSet::from_iter(vec![uuid]),
-            &HashMap::from_iter([(appointment.user_id, info.clone())]),
+            &vec![uuid],
+            &HashMap::from_iter([(appointment.user_id, info)]),
         );
         assert!(dbm.load_appointment(uuid).is_none());
 
@@ -1054,7 +1300,7 @@ mod tests {
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
         dbm.batch_remove_appointments(
-            &HashSet::from_iter(vec![uuid]),
+            &vec![uuid],
             &HashMap::from_iter([(appointment.user_id, info)]),
         );
         assert!(dbm.load_appointment(uuid).is_none());
@@ -1069,32 +1315,83 @@ mod tests {
         // Test it does not fail even if the user does not exist (it will log though)
         dbm.batch_remove_appointments(&appointments, &HashMap::new());
     }
+
     #[test]
-    fn test_load_locator() {
+    fn test_load_uuids() {
         let dbm = DBM::in_memory().unwrap();
 
-        // In order to add an appointment we need the associated user to be present
-        let user_id = get_random_user_id();
         let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
-        dbm.store_user(user_id, &user).unwrap();
+        let dispute_tx = get_random_tx();
+        let dispute_txid = dispute_tx.txid();
+        let mut uuids = HashSet::new();
 
-        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        // Add ten appointments triggered by the same locator.
+        for _ in 0..10 {
+            let user_id = get_random_user_id();
+            dbm.store_user(user_id, &user).unwrap();
 
-        assert!(matches!(
-            dbm.store_appointment(uuid, &appointment),
-            Ok { .. }
-        ));
+            let (uuid, appointment) =
+                generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
+            dbm.store_appointment(uuid, &appointment).unwrap();
 
-        // We should be able to load the locator now the appointment exists
-        assert_eq!(dbm.load_locator(uuid).unwrap(), appointment.locator());
+            uuids.insert(uuid);
+        }
+
+        // Add ten more appointments triggered by different locators.
+        for _ in 0..10 {
+            let user_id = get_random_user_id();
+            dbm.store_user(user_id, &user).unwrap();
+
+            let dispute_txid = get_random_tx().txid();
+            let (uuid, appointment) =
+                generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
+            dbm.store_appointment(uuid, &appointment).unwrap();
+        }
+
+        assert_eq!(
+            HashSet::from_iter(dbm.load_uuids(Locator::new(dispute_txid))),
+            uuids
+        );
     }
 
     #[test]
-    fn test_load_nonexistent_locator() {
+    fn test_batch_check_locators_exist() {
         let dbm = DBM::in_memory().unwrap();
+        // Generate `n_app` appointments which we will store in the DB.
+        let n_app = 100;
+        let appointments: Vec<_> = (0..n_app)
+            .map(|_| generate_dummy_appointment(None))
+            .collect();
 
-        let (uuid, _) = generate_dummy_appointment_with_user(get_random_user_id(), None);
-        assert!(dbm.load_locator(uuid).is_none());
+        // Register all the users beforehand.
+        for user_id in appointments.iter().map(|a| a.user_id) {
+            let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
+            dbm.store_user(user_id, &user).unwrap();
+        }
+
+        // Store all the `n_app` appointments.
+        for appointment in appointments.iter() {
+            dbm.store_appointment(appointment.uuid(), appointment)
+                .unwrap();
+        }
+
+        // Select `n_app / 5` locators as if they appeared in a new block.
+        let known_locators: HashSet<_> = appointments
+            .iter()
+            .take(n_app / 5)
+            .map(|a| a.locator())
+            .collect();
+        // And extra `n_app / 5` unknown locators.
+        let unknown_locators: HashSet<_> = (0..n_app / 5).map(|_| get_random_locator()).collect();
+        let all_locators = known_locators
+            .iter()
+            .chain(unknown_locators.iter())
+            .collect();
+
+        assert_eq!(
+            HashSet::from_iter(dbm.batch_check_locators_exist(all_locators)),
+            known_locators
+        );
     }
 
     #[test]
@@ -1151,6 +1448,38 @@ mod tests {
         assert!(matches!(
             dbm.store_tracker(uuid, &tracker),
             Err(Error::MissingForeignKey)
+        ));
+    }
+
+    #[test]
+    fn test_update_tracker_status() {
+        let dbm = DBM::in_memory().unwrap();
+
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
+        dbm.store_user(user_id, &user).unwrap();
+
+        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        dbm.store_appointment(uuid, &appointment).unwrap();
+
+        let tracker = get_random_tracker(user_id, ConfirmationStatus::InMempoolSince(42));
+        dbm.store_tracker(uuid, &tracker).unwrap();
+
+        // Update the status and check if it's actually updated.
+        dbm.update_tracker_status(uuid, &ConfirmationStatus::ConfirmedIn(100))
+            .unwrap();
+        assert_eq!(
+            dbm.load_tracker(uuid).unwrap().status,
+            ConfirmationStatus::ConfirmedIn(100)
+        );
+
+        // Rejected status doesn't have a persistent DB representation.
+        assert!(matches!(
+            dbm.update_tracker_status(
+                uuid,
+                &ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED)
+            ),
+            Err(Error::MissingField)
         ));
     }
 
@@ -1222,6 +1551,166 @@ mod tests {
         }
 
         assert_eq!(dbm.load_trackers(Some(locator)), trackers);
+    }
+
+    #[test]
+    fn test_load_trackers_with_confirmation_status_in_mempool() {
+        let dbm = DBM::in_memory().unwrap();
+        let n_trackers = 100;
+        let mut tracker_statuses = HashMap::new();
+
+        // Store a bunch of trackers.
+        for i in 0..n_trackers {
+            let user_id = get_random_user_id();
+            let user = UserInfo::new(
+                AVAILABLE_SLOTS + i,
+                SUBSCRIPTION_START + i,
+                SUBSCRIPTION_EXPIRY + i,
+            );
+            dbm.store_user(user_id, &user).unwrap();
+
+            let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+            dbm.store_appointment(uuid, &appointment).unwrap();
+
+            // Some trackers confirmed and some aren't.
+            let status = if i % 2 == 0 {
+                ConfirmationStatus::InMempoolSince(i)
+            } else {
+                ConfirmationStatus::ConfirmedIn(i)
+            };
+
+            let tracker = get_random_tracker(user_id, status);
+            dbm.store_tracker(uuid, &tracker).unwrap();
+            tracker_statuses.insert(uuid, status);
+        }
+
+        for i in 0..n_trackers + 10 {
+            let in_mempool_since_i: HashSet<UUID> = tracker_statuses
+                .iter()
+                .filter_map(|(&uuid, &status)| {
+                    if let ConfirmationStatus::InMempoolSince(x) = status {
+                        // If a tracker was in mempool since x, then it's also in mempool since x + 1, x + 2, etc...
+                        return (x <= i).then_some(uuid);
+                    }
+                    None
+                })
+                .collect();
+            assert_eq!(
+                HashSet::from_iter(
+                    dbm.load_trackers_with_confirmation_status(ConfirmationStatus::InMempoolSince(
+                        i
+                    ))
+                    .unwrap()
+                ),
+                in_mempool_since_i,
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_trackers_with_confirmation_status_confirmed() {
+        let dbm = DBM::in_memory().unwrap();
+        let n_blocks = 100;
+        let n_trackers = 30;
+        let mut tracker_statuses = HashMap::new();
+
+        // Loop over a bunch of blocks.
+        for i in 0..n_blocks {
+            // Store a bunch of trackers in each block.
+            for j in 0..n_trackers {
+                let user_id = get_random_user_id();
+                let user = UserInfo::new(
+                    AVAILABLE_SLOTS + i,
+                    SUBSCRIPTION_START + i,
+                    SUBSCRIPTION_EXPIRY + i,
+                );
+                dbm.store_user(user_id, &user).unwrap();
+
+                let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+                dbm.store_appointment(uuid, &appointment).unwrap();
+
+                // Some trackers confirmed and some aren't.
+                let status = if j % 2 == 0 {
+                    ConfirmationStatus::InMempoolSince(i)
+                } else {
+                    ConfirmationStatus::ConfirmedIn(i)
+                };
+
+                let tracker = get_random_tracker(user_id, status);
+                dbm.store_tracker(uuid, &tracker).unwrap();
+                tracker_statuses.insert(uuid, status);
+            }
+        }
+
+        for i in 0..n_blocks + 10 {
+            let confirmed_in_i: HashSet<UUID> = tracker_statuses
+                .iter()
+                .filter_map(|(&uuid, &status)| {
+                    if let ConfirmationStatus::ConfirmedIn(x) = status {
+                        return (x == i).then_some(uuid);
+                    }
+                    None
+                })
+                .collect();
+            assert_eq!(
+                HashSet::from_iter(
+                    dbm.load_trackers_with_confirmation_status(ConfirmationStatus::ConfirmedIn(i))
+                        .unwrap()
+                ),
+                confirmed_in_i,
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_trackers_with_confirmation_status_bad_status() {
+        let dbm = DBM::in_memory().unwrap();
+
+        assert!(matches!(
+            dbm.load_trackers_with_confirmation_status(ConfirmationStatus::Rejected(
+                rpc_errors::RPC_VERIFY_REJECTED
+            )),
+            Err(Error::MissingField)
+        ));
+
+        assert!(matches!(
+            dbm.load_trackers_with_confirmation_status(ConfirmationStatus::IrrevocablyResolved),
+            Err(Error::MissingField)
+        ));
+    }
+
+    #[test]
+    fn test_load_penalties_summaries() {
+        let dbm = DBM::in_memory().unwrap();
+        let n_trackers = 100;
+        let mut penalties_summaries = HashMap::new();
+
+        for i in 0..n_trackers {
+            let user_id = get_random_user_id();
+            let user = UserInfo::new(
+                AVAILABLE_SLOTS + i,
+                SUBSCRIPTION_START + i,
+                SUBSCRIPTION_EXPIRY + i,
+            );
+            dbm.store_user(user_id, &user).unwrap();
+
+            let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+            dbm.store_appointment(uuid, &appointment).unwrap();
+
+            let status = if i % 2 == 0 {
+                ConfirmationStatus::InMempoolSince(i)
+            } else {
+                ConfirmationStatus::ConfirmedIn(i)
+            };
+
+            let tracker = get_random_tracker(user_id, status);
+            dbm.store_tracker(uuid, &tracker).unwrap();
+
+            penalties_summaries
+                .insert(uuid, PenaltySummary::new(tracker.penalty_tx.txid(), status));
+        }
+
+        assert_eq!(dbm.load_penalties_summaries(), penalties_summaries);
     }
 
     #[test]

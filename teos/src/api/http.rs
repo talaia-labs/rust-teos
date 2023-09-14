@@ -660,8 +660,11 @@ mod tests_methods {
     };
     use super::*;
 
-    use crate::extended_appointment::UUID;
-    use crate::test_utils::{generate_dummy_appointment, ApiConfig, DURATION, SLOTS};
+    use crate::responder::{ConfirmationStatus, TransactionTracker};
+    use crate::test_utils::{
+        generate_dummy_appointment, get_random_tx, ApiConfig, DURATION, SLOTS,
+    };
+    use crate::watcher::Breach;
 
     use teos_common::test_utils::get_random_user_id;
     use teos_common::{cryptography, UserId};
@@ -830,14 +833,20 @@ mod tests_methods {
         .await
         .unwrap();
 
-        // Add the appointment to the Responder so it counts as triggered
-        let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        // Add the appointment to the Responder as a tracker so it counts as triggered
+        let dispute_tx = get_random_tx();
+        let tracker = TransactionTracker::new(
+            Breach::new(dispute_tx.clone(), get_random_tx()),
+            UserId(user_pk),
+            ConfirmationStatus::ConfirmedIn(100),
+        );
         internal_api
             .get_watcher()
-            .add_random_tracker_to_responder(UUID::new(appointment.locator, UserId(user_pk)));
+            .add_dummy_tracker_to_responder(&tracker);
 
         // Try to add it via the http API
+        let appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         assert_eq!(
             check_api_error(
                 Endpoint::AddAppointment,
