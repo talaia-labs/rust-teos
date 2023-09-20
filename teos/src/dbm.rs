@@ -656,14 +656,14 @@ mod tests {
 
         #[cfg(feature = "postgres")]
         async fn postgres() -> Self {
-            (|| async {
+            async {
                 return_db_if_matching!(
                     "postgres://user:pass@localhost/teos",
                     postgres,
                     "migrations/postgres"
                 );
-                Err(format!("Unreachable (the macro above will always match)"))
-            })()
+                Err("Unreachable (the macro above will always match)".to_string())
+            }
             .await
             .unwrap()
         }
@@ -763,7 +763,7 @@ mod tests {
                 SUBSCRIPTION_START + i,
                 SUBSCRIPTION_EXPIRY + i,
             );
-            users.insert(user_id, user_info.clone());
+            users.insert(user_id, user_info);
             dbm.store_user(user_id, &user_info).await.unwrap();
         }
 
@@ -1155,7 +1155,7 @@ mod tests {
             assert_eq!(
                 dbm.batch_remove_appointments(to_be_deleted, updated_users)
                     .await,
-                i as usize
+                i
             );
             // Check appointment data was deleted and users properly updated
             assert_eq!(
@@ -1188,7 +1188,7 @@ mod tests {
 
         dbm.batch_remove_appointments(
             vec![uuid],
-            HashMap::from_iter([(appointment.user_id, info.clone())]),
+            HashMap::from_iter([(appointment.user_id, info)]),
         )
         .await;
         assert!(dbm.load_appointment(uuid).await.is_none());
