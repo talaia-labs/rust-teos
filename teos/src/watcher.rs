@@ -476,6 +476,11 @@ impl Watcher {
         let (subscription_info, locators) = self.gatekeeper.get_user_info(user_id).unwrap();
         Ok((subscription_info, locators))
     }
+
+    /// Signs a message using the tower's signing key
+    pub(crate) fn sign_message(&self, message: &str) -> String {
+        cryptography::sign(message.as_bytes(), &self.signing_key).unwrap()
+    }
 }
 
 /// Listen implementation by the [Watcher]. Handles monitoring and reorgs.

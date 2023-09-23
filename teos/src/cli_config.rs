@@ -16,6 +16,8 @@ pub enum Command {
     GetUsers,
     /// Gets information about a specific user
     GetUser(GetUserData),
+    /// Signs a message using the tower's secret key
+    SignMessage(MessageToSign),
     /// Requests a graceful shutdown of the tower
     Stop,
 }
@@ -31,6 +33,12 @@ pub struct GetUserData {
 pub struct GetAppointmentsData {
     /// The locator of the appointments (16-byte hexadecimal string).
     pub locator: String,
+}
+
+#[derive(Debug, StructOpt, Clone)]
+pub struct MessageToSign {
+    /// The locator of the appointments (16-byte hexadecimal string).
+    pub message: String,
 }
 
 /// Holds all the command line options and commands.
