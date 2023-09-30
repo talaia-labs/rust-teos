@@ -8,7 +8,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::{consensus, BlockHash};
 use sqlx::any::{install_drivers, AnyRow};
-use sqlx::{AnyPool, Row};
+use sqlx::{AnyPool, Error, Row};
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::UserId;
@@ -17,8 +17,6 @@ use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::UserInfo;
 use crate::responder::{ConfirmationStatus, PenaltySummary, TransactionTracker};
 use crate::watcher::Breach;
-
-type Error = sqlx::Error;
 
 #[cfg(not(test))]
 /// The maximum number of bind variables per SQL query.
