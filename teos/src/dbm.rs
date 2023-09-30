@@ -54,6 +54,7 @@ macro_rules! return_db_if_matching {
 /// Component in charge of interacting with the underlying database.
 #[derive(Debug)]
 pub struct DBM {
+    // TODO: Add MySQL support. The queries used right now isn't MySQL-compatible.
     pool: AnyPool,
 }
 
