@@ -48,7 +48,7 @@ enum BlockListenerAction {
 }
 
 /// A helper struct that wraps a listener that implements [AsyncListen] and feeds it connected and disconnected
-/// blocks received from [UnboundedReceiver] in the background.
+/// blocks received from an [UnboundedReceiver] in the background.
 pub struct AsyncBlockListener<L: AsyncListen> {
     listener: L,
     dbm: Arc<DBM>,
@@ -93,7 +93,7 @@ impl<L: AsyncListen + 'static> AsyncBlockListener<L> {
 }
 
 /// A block listener that implements the sync [chain::Listen] trait. All it does is forward the blocks received
-/// another (async) block listener through an [UnboundedSender].
+/// to another (async) block listener through an [UnboundedSender].
 pub struct SyncBlockListener {
     tx: UnboundedSender<BlockListenerAction>,
 }
