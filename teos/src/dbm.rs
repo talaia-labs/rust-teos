@@ -379,7 +379,9 @@ impl DBM {
     pub(crate) async fn load_uuids(&self, locator: Locator) -> Vec<UUID> {
         sqlx::query("SELECT UUID from appointments WHERE locator=($1)")
             .bind(locator.to_vec())
-            .map(|row: AnyRow| UUID::from_slice(row.get("UUID")).unwrap())
+            // NOTE: For some reason, indexing using the string "UUID" fails on PostgreSQL.
+            // Using numerical index for interoperability with SQLite.
+            .map(|row: AnyRow| UUID::from_slice(row.get(0)).unwrap())
             .fetch_all(&self.pool)
             .await
             .unwrap()
@@ -577,7 +579,8 @@ impl DBM {
 
     /// Stores the last known block into the database.
     pub(crate) async fn store_last_known_block(&self, block_hash: &BlockHash) -> Result<(), Error> {
-        sqlx::query("INSERT OR REPLACE INTO last_known_block (id, block_hash) VALUES (0, $1)")
+        let sql = "INSERT INTO last_known_block (id, block_hash) VALUES (0, $1) ON CONFLICT (id) DO UPDATE SET block_hash = excluded.block_hash";
+        sqlx::query(sql)
             .bind(block_hash.to_vec())
             .execute(&self.pool)
             .await
@@ -655,7 +658,7 @@ mod tests {
 
         #[cfg(feature = "postgres")]
         async fn postgres() -> Self {
-            async {
+            let dbm = async {
                 return_db_if_matching!(
                     "postgres://user:pass@localhost/teos",
                     postgres,
@@ -664,7 +667,26 @@ mod tests {
                 Err("Unreachable (the macro above will always match)".to_string())
             }
             .await
-            .unwrap()
+            .unwrap();
+            // The DBM could have been used in a previous test, so make sure it is clear.
+            dbm.clear_db().await;
+            dbm
+        }
+
+        async fn clear_db(&self) {
+            let tables_to_clear = [
+                "users",
+                "appointments",
+                "trackers",
+                "last_known_block",
+                "keys",
+            ];
+            for table in tables_to_clear {
+                sqlx::query(&format!("DELETE FROM {table}"))
+                    .execute(&self.pool)
+                    .await
+                    .unwrap();
+            }
         }
 
         #[allow(unreachable_code)]
@@ -673,6 +695,8 @@ mod tests {
             #[cfg(feature = "sqlite")]
             return Self::memory().await;
 
+            // WARNING: When running the tests on PostgreSQL set the environment variable RUST_TEST_THREADS=1.
+            // Otherwise tests will run on parallel and contaminate the database.
             #[cfg(feature = "postgres")]
             return Self::postgres().await;
 
