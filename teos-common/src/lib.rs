@@ -11,7 +11,6 @@ pub mod protos {
 pub mod appointment;
 pub mod constants;
 pub mod cryptography;
-pub mod dbm;
 pub mod errors;
 pub mod net;
 pub mod receipts;
