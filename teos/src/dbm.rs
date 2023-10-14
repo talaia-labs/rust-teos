@@ -673,6 +673,7 @@ mod tests {
             dbm
         }
 
+        /// Clears all the DB tables. To be used to emulate starting a brand new database.
         async fn clear_db(&self) {
             let tables_to_clear = [
                 "users",
