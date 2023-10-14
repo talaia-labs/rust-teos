@@ -328,7 +328,7 @@ async fn main() {
     // first so it updates the users' states and both the Watcher and the Responder operate only on registered users.
     let listeners = (gatekeeper, (watcher.clone(), responder));
 
-    // This spawns a separate async actor that will be fed new blocks from a sync block listener.
+    // This spawns a separate async actor in the background that will be fed new blocks from a sync block listener.
     // In this way we can have our components listen to blocks in an async manner from the async actor.
     let listener = AsyncBlockListener::wrap_listener(listeners, dbm);
 
