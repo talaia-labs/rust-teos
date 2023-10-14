@@ -418,7 +418,7 @@ impl Watcher {
         (!invalid_breaches.is_empty()).then_some(invalid_breaches)
     }
 
-    /// Ges the number of users currently registered with the tower.
+    /// Gets the number of users currently registered with the tower.
     pub(crate) async fn get_registered_users_count(&self) -> usize {
         self.gatekeeper.get_registered_users_count().await
     }
