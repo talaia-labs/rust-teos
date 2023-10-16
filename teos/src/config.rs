@@ -86,6 +86,10 @@ pub struct Opt {
     #[structopt(long, default_value = "~/.teos")]
     pub data_dir: String,
 
+    /// Database connection string [default: managed (managed SQLite database)]
+    #[structopt(long)]
+    pub database_url: Option<String>,
+
     /// Runs teos in debug mode
     #[structopt(long)]
     pub debug: bool,
@@ -140,6 +144,9 @@ pub struct Config {
     pub btc_rpc_connect: String,
     pub btc_rpc_port: u16,
 
+    // Database
+    pub database_url: String,
+
     // Flags
     pub debug: bool,
     pub deps_debug: bool,
@@ -192,6 +199,9 @@ impl Config {
         }
         if options.btc_rpc_port.is_some() {
             self.btc_rpc_port = options.btc_rpc_port.unwrap();
+        }
+        if options.database_url.is_some() {
+            self.database_url = options.database_url.unwrap();
         }
         if options.tor_control_port.is_some() {
             self.tor_control_port = options.tor_control_port.unwrap();
@@ -254,7 +264,7 @@ impl Config {
     pub fn log_non_default_options(&self) {
         let json_default_config = serde_json::json!(&Config::default());
         let json_config = serde_json::json!(&self);
-        let sensitive_args = ["btc_rpc_user", "btc_rpc_password"];
+        let sensitive_args = ["btc_rpc_user", "btc_rpc_password", "database_url"];
 
         for (key, value) in json_config.as_object().unwrap().iter() {
             if *value != json_default_config[key] {
@@ -293,7 +303,7 @@ impl Default for Config {
             btc_rpc_password: String::new(),
             btc_rpc_connect: "localhost".into(),
             btc_rpc_port: 0,
-
+            database_url: "managed".into(),
             debug: false,
             deps_debug: false,
             overwrite_key: false,
@@ -329,7 +339,7 @@ mod tests {
                 btc_rpc_connect: None,
                 btc_rpc_port: None,
                 data_dir: String::from("~/.teos"),
-
+                database_url: None,
                 debug: false,
                 deps_debug: false,
                 overwrite_key: false,

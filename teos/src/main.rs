@@ -20,6 +20,7 @@ use lightning_block_sync::{BlockSource, BlockSourceError, SpvClient, UnboundedCa
 
 use teos::api::internal::InternalAPI;
 use teos::api::{http, tor::TorAPI};
+use teos::async_listener::AsyncBlockListener;
 use teos::bitcoin_cli::BitcoindClient;
 use teos::carrier::Carrier;
 use teos::chain_monitor::ChainMonitor;
@@ -57,9 +58,9 @@ where
     Ok(last_n_blocks)
 }
 
-fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
+async fn create_new_tower_keypair(dbm: &DBM) -> (SecretKey, PublicKey) {
     let (sk, pk) = get_random_keypair();
-    db.store_tower_key(&sk).unwrap();
+    dbm.store_tower_key(&sk).await.unwrap();
     (sk, pk)
 }
 
@@ -122,22 +123,33 @@ async fn main() {
         conf.log_non_default_options();
     }
 
-    let dbm = Arc::new(Mutex::new(
-        DBM::new(path_network.join("teos_db.sql3")).unwrap(),
-    ));
+    let dbm = if conf.database_url == "managed" {
+        DBM::new(&format!(
+            "sqlite://{}",
+            path_network
+                // rwc = Read + Write + Create (creates the database file if not found)
+                .join("teos_db.sql3?mode=rwc")
+                .to_str()
+                .expect("Path to the sqlite DB contains non-UTF-8 characters.")
+        ))
+        .await
+        .unwrap()
+    } else {
+        DBM::new(&conf.database_url).await.unwrap()
+    };
+    let dbm = Arc::new(dbm);
 
     // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
     // key straightaway
     let (tower_sk, tower_pk) = {
-        let locked_db = dbm.lock().unwrap();
         if conf.overwrite_key {
             log::info!("Overwriting tower keys");
-            create_new_tower_keypair(&locked_db)
-        } else if let Some(sk) = locked_db.load_tower_key() {
+            create_new_tower_keypair(&dbm).await
+        } else if let Some(sk) = dbm.load_tower_key().await {
             (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk))
         } else {
             log::info!("Tower keys not found. Creating a fresh set");
-            create_new_tower_keypair(&locked_db)
+            create_new_tower_keypair(&dbm).await
         }
     };
     log::info!("tower_id: {tower_pk}");
@@ -182,7 +194,7 @@ async fn main() {
     );
     let mut derefed = bitcoin_cli.deref();
     // Load last known block from DB if found. Poll it from Bitcoind otherwise.
-    let last_known_block = dbm.lock().unwrap().load_last_known_block();
+    let last_known_block = dbm.load_last_known_block().await;
     let tip = if let Some(block_hash) = last_known_block {
         let mut last_known_header = derefed
             .get_header(&block_hash, None)
@@ -259,13 +271,16 @@ async fn main() {
     };
 
     // Build components
-    let gatekeeper = Arc::new(Gatekeeper::new(
-        tip.height,
-        conf.subscription_slots,
-        conf.subscription_duration,
-        conf.expiry_delta,
-        dbm.clone(),
-    ));
+    let gatekeeper = Arc::new(
+        Gatekeeper::new(
+            tip.height,
+            conf.subscription_slots,
+            conf.subscription_duration,
+            conf.expiry_delta,
+            dbm.clone(),
+        )
+        .await,
+    );
 
     let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
     let (responder, watcher) = {
@@ -297,7 +312,7 @@ async fn main() {
         (responder, watcher)
     };
 
-    if watcher.is_fresh() & responder.is_fresh() & gatekeeper.is_fresh() {
+    if watcher.is_fresh().await & responder.is_fresh().await & gatekeeper.is_fresh().await {
         log::info!("Fresh bootstrap");
     } else {
         log::info!("Bootstrapping from backed up data");
@@ -311,13 +326,17 @@ async fn main() {
 
     // The ordering here actually matters. Listeners are called by order, and we want the gatekeeper to be called
     // first so it updates the users' states and both the Watcher and the Responder operate only on registered users.
-    let listener = &(gatekeeper, &(watcher.clone(), responder));
+    let listeners = (gatekeeper, (watcher.clone(), responder));
+
+    // This spawns a separate async actor in the background that will be fed new blocks from a sync block listener.
+    // In this way we can have our components listen to blocks in an async manner from the async actor.
+    let listener = AsyncBlockListener::wrap_listener(listeners, dbm);
+
     let cache = &mut UnboundedCache::new();
-    let spv_client = SpvClient::new(tip, poller, cache, listener);
+    let spv_client = SpvClient::new(tip, poller, cache, &listener);
     let mut chain_monitor = ChainMonitor::new(
         spv_client,
         tip,
-        dbm,
         conf.polling_delta,
         shutdown_signal_cm,
         bitcoind_reachable.clone(),

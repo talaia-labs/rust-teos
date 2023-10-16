@@ -341,14 +341,16 @@ pub(crate) fn get_random_tracker(
     TransactionTracker::new(breach, user_id, status)
 }
 
-pub(crate) fn store_appointment_and_its_user(dbm: &DBM, appointment: &ExtendedAppointment) {
+pub(crate) async fn store_appointment_and_its_user(dbm: &DBM, appointment: &ExtendedAppointment) {
     dbm.store_user(
         appointment.user_id,
         &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
     )
+    .await
     // It's ok if the user is already stored.
     .ok();
     dbm.store_appointment(appointment.uuid(), appointment)
+        .await
         .unwrap();
 }
 
@@ -392,7 +394,7 @@ pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> (Carrier,
 pub(crate) async fn create_responder(
     chain: &mut Blockchain,
     gatekeeper: Arc<Gatekeeper>,
-    dbm: Arc<Mutex<DBM>>,
+    dbm: Arc<DBM>,
     server_url: &str,
 ) -> Responder {
     let height = chain.tip().height;
@@ -413,7 +415,7 @@ pub(crate) async fn create_watcher(
     responder: Arc<Responder>,
     gatekeeper: Arc<Gatekeeper>,
     bitcoind_mock: BitcoindMock,
-    dbm: Arc<Mutex<DBM>>,
+    dbm: Arc<DBM>,
 ) -> (Watcher, BitcoindStopper) {
     let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
@@ -471,14 +473,17 @@ pub(crate) async fn create_api_with_config(
     let bitcoind_mock = BitcoindMock::new(MockOptions::default());
     let mut chain = Blockchain::default().with_height(START_HEIGHT);
 
-    let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-    let gk = Arc::new(Gatekeeper::new(
-        chain.get_block_count(),
-        api_config.slots,
-        api_config.duration,
-        EXPIRY_DELTA,
-        dbm.clone(),
-    ));
+    let dbm = Arc::new(DBM::test_db().await);
+    let gk = Arc::new(
+        Gatekeeper::new(
+            chain.get_block_count(),
+            api_config.slots,
+            api_config.duration,
+            EXPIRY_DELTA,
+            dbm.clone(),
+        )
+        .await,
+    );
     let responder =
         create_responder(&mut chain, gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
     let (watcher, stopper) = create_watcher(

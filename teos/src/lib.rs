@@ -8,6 +8,7 @@ pub mod protos {
     tonic::include_proto!("teos.v2");
 }
 pub mod api;
+pub mod async_listener;
 pub mod bitcoin_cli;
 pub mod carrier;
 pub mod chain_monitor;

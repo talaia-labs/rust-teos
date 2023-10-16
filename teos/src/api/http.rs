@@ -842,7 +842,8 @@ mod tests_methods {
         );
         internal_api
             .get_watcher()
-            .add_dummy_tracker_to_responder(&tracker);
+            .add_dummy_tracker_to_responder(&tracker)
+            .await;
 
         // Try to add it via the http API
         let appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;

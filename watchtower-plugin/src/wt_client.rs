@@ -8,10 +8,10 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
-use teos_common::dbm::Error as DBError;
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
+use crate::dbm::Error as DBError;
 use crate::dbm::DBM;
 use crate::net::ProxyInfo;
 use crate::retrier::RetrierStatus;
