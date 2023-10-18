@@ -81,17 +81,13 @@ pub fn decrypt(encrypted_blob: &[u8], secret: &Txid) -> Result<Transaction, Decr
 pub fn get_random_bytes(size: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
     let uniform_u8 = Uniform::new(u8::MIN, u8::MAX);
-    let v: Vec<u8> = (&mut rng).sample_iter(uniform_u8).take(size).collect();
-
-    v
+    (&mut rng).sample_iter(uniform_u8).take(size).collect()
 }
 
 /// Gets a key pair generated in a pseudorandom way.
 pub fn get_random_keypair() -> (SecretKey, PublicKey) {
-    let raw_sk = get_random_bytes(32);
-
     loop {
-        if let Ok(sk) = SecretKey::from_slice(&raw_sk) {
+        if let Ok(sk) = SecretKey::from_slice(&get_random_bytes(32)) {
             return (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk));
         }
     }
