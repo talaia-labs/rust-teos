@@ -390,10 +390,10 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             Some((info, locators)) => Ok(Response::new(msgs::GetUserResponse {
                 available_slots: info.available_slots,
                 subscription_expiry: info.subscription_expiry,
-                // TODO: Should make it return locators and make `get_appointments` queryable using the (user_id, locator) pair for consistency.
+                // TODO: Should make `get_appointments` queryable using the (user_id, locator) pair for consistency.
                 appointments: locators
                     .into_iter()
-                    .map(|locator| UUID::new(locator, user_id).to_vec())
+                    .map(|locator| locator.to_vec())
                     .collect(),
             })),
             None => Err(Status::new(Code::NotFound, "User not found")),
@@ -730,11 +730,11 @@ mod tests_private_api {
         assert!(response.appointments.is_empty());
 
         // Add an appointment and check back
-        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        let (_, appointment) = generate_dummy_appointment_with_user(user_id, None);
         let user_signature = cryptography::sign(&appointment.inner.to_vec(), &user_sk).unwrap();
         internal_api
             .watcher
-            .add_appointment(appointment.inner, user_signature)
+            .add_appointment(appointment.inner.clone(), user_signature)
             .unwrap();
 
         let response = internal_api
@@ -747,7 +747,7 @@ mod tests_private_api {
 
         assert_eq!(response.available_slots, SLOTS - 1);
         assert_eq!(response.subscription_expiry, START_HEIGHT as u32 + DURATION);
-        assert_eq!(response.appointments, Vec::from([uuid.to_vec()]));
+        assert_eq!(response.appointments, Vec::from([appointment.inner.locator.to_vec()]));
     }
 
     #[tokio::test]
