@@ -2,7 +2,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .extern_path(".common.teos.v2", "::teos-common::protos")
         .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
-        .field_attribute("user_id", "#[serde(with = \"hex::serde\")]")
+        .field_attribute("GetUserRequest.user_id", "#[serde(with = \"hex::serde\")]")
         .field_attribute("tower_id", "#[serde(with = \"hex::serde\")]")
         .field_attribute(
             "user_ids",

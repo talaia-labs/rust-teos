@@ -75,20 +75,28 @@ async fn main() {
             println!("{}", pretty_json(&appointments.into_inner()).unwrap());
         }
         Command::GetAppointments(appointments_data) => {
-            match Locator::from_hex(&appointments_data.locator) {
-                Ok(locator) => {
-                    match client
-                        .get_appointments(Request::new(msgs::GetAppointmentsRequest {
-                            locator: locator.to_vec(),
-                        }))
-                        .await
-                    {
-                        Ok(appointments) => {
-                            println!("{}", pretty_json(&appointments.into_inner()).unwrap())
+            match appointments_data
+                .user_id
+                .map(|id| UserId::from_str(&id).map(|user_id| user_id.to_vec()))
+                .transpose()
+            {
+                Ok(user_id) => match Locator::from_hex(&appointments_data.locator) {
+                    Ok(locator) => {
+                        match client
+                            .get_appointments(Request::new(msgs::GetAppointmentsRequest {
+                                locator: locator.to_vec(),
+                                user_id,
+                            }))
+                            .await
+                        {
+                            Ok(appointments) => {
+                                println!("{}", pretty_json(&appointments.into_inner()).unwrap())
+                            }
+                            Err(status) => handle_error(status.message()),
                         }
-                        Err(status) => handle_error(status.message()),
                     }
-                }
+                    Err(e) => handle_error(e),
+                },
                 Err(e) => handle_error(e),
             };
         }
