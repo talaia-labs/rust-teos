@@ -2,7 +2,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use tonic::{Code, Request, Response, Status};
 use triggered::Trigger;
 
-use crate::extended_appointment::UUID;
 use crate::protos as msgs;
 use crate::protos::private_tower_services_server::PrivateTowerServices;
 use crate::protos::public_tower_services_server::PublicTowerServices;
@@ -280,31 +279,44 @@ impl PrivateTowerServices for Arc<InternalAPI> {
                 .map_or("an unknown address".to_owned(), |a| a.to_string())
         );
 
-        let mut matching_appointments = vec![];
-        let locator = Locator::from_slice(&request.into_inner().locator).map_err(|_| {
+        let req_data = request.into_inner();
+        let locator = Locator::from_slice(&req_data.locator).map_err(|_| {
             Status::new(
                 Code::InvalidArgument,
                 "The provided locator does not match the expected format (16-byte hexadecimal string)",
             )
         })?;
 
-        for (_, appointment) in self
+        let user_id = req_data
+            .user_id
+            .map(|id| UserId::from_slice(&id))
+            .transpose()
+            .map_err(|_| {
+                Status::new(
+                    Code::InvalidArgument,
+                    "The Provided user_id does not match expected format (33-byte hex string)",
+                )
+            })?;
+
+        let appointments: Vec<Appointment> = self
             .watcher
-            .get_watcher_appointments_with_locator(locator)
+            .get_watcher_appointments_with_locator(locator, user_id)
+            .into_values()
+            .map(|appointment| appointment.inner)
+            .collect();
+
+        let mut matching_appointments: Vec<common_msgs::AppointmentData> = appointments
             .into_iter()
-        {
-            matching_appointments.push(common_msgs::AppointmentData {
+            .map(|appointment| common_msgs::AppointmentData {
                 appointment_data: Some(
-                    common_msgs::appointment_data::AppointmentData::Appointment(
-                        appointment.inner.into(),
-                    ),
+                    common_msgs::appointment_data::AppointmentData::Appointment(appointment.into()),
                 ),
             })
-        }
+            .collect();
 
         for (_, tracker) in self
             .watcher
-            .get_responder_trackers_with_locator(locator)
+            .get_responder_trackers_with_locator(locator, user_id)
             .into_iter()
         {
             matching_appointments.push(common_msgs::AppointmentData {
@@ -390,7 +402,6 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             Some((info, locators)) => Ok(Response::new(msgs::GetUserResponse {
                 available_slots: info.available_slots,
                 subscription_expiry: info.subscription_expiry,
-                // TODO: Should make `get_appointments` queryable using the (user_id, locator) pair for consistency.
                 appointments: locators
                     .into_iter()
                     .map(|locator| locator.to_vec())
@@ -511,7 +522,10 @@ mod tests_private_api {
 
         let locator = Locator::new(get_random_tx().txid()).to_vec();
         let response = internal_api
-            .get_appointments(Request::new(msgs::GetAppointmentsRequest { locator }))
+            .get_appointments(Request::new(msgs::GetAppointmentsRequest {
+                locator,
+                user_id: None,
+            }))
             .await
             .unwrap()
             .into_inner();
@@ -548,6 +562,7 @@ mod tests_private_api {
             let response = internal_api
                 .get_appointments(Request::new(msgs::GetAppointmentsRequest {
                     locator: locator.to_vec(),
+                    user_id: None,
                 }))
                 .await
                 .unwrap()
@@ -599,6 +614,7 @@ mod tests_private_api {
             let response = internal_api
                 .get_appointments(Request::new(msgs::GetAppointmentsRequest {
                     locator: locator.to_vec(),
+                    user_id: None,
                 }))
                 .await
                 .unwrap()
@@ -747,7 +763,10 @@ mod tests_private_api {
 
         assert_eq!(response.available_slots, SLOTS - 1);
         assert_eq!(response.subscription_expiry, START_HEIGHT as u32 + DURATION);
-        assert_eq!(response.appointments, Vec::from([appointment.inner.locator.to_vec()]));
+        assert_eq!(
+            response.appointments,
+            Vec::from([appointment.inner.locator.to_vec()])
+        );
     }
 
     #[tokio::test]
