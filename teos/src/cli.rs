@@ -53,7 +53,7 @@ async fn main() {
         .ca_certificate(ca_cert)
         .identity(Identity::from_pem(certificate, key));
 
-    let channel = Channel::from_shared(format!("http://{}:{}", conf.rpc_bind, conf.rpc_port))
+    let channel = Channel::from_shared(format!("https://{}:{}", conf.rpc_bind, conf.rpc_port))
         .expect("Cannot create channel from endpoint")
         .tls_config(tls)
         .unwrap_or_else(|e| {
