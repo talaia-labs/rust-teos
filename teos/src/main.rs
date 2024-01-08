@@ -23,7 +23,7 @@ use teos::api::{http, tor::TorAPI};
 use teos::bitcoin_cli::BitcoindClient;
 use teos::carrier::Carrier;
 use teos::chain_monitor::ChainMonitor;
-use teos::config::{self, Config, Opt};
+use teos::config::{self, AuthMethod, Config, Opt};
 use teos::dbm::DBM;
 use teos::gatekeeper::Gatekeeper;
 use teos::protos as msgs;
@@ -142,12 +142,20 @@ async fn main() {
     };
     log::info!("tower_id: {tower_pk}");
 
+    let btc_rpc_auth = match conf.get_auth_method() {
+        AuthMethod::CookieFile => {
+            Auth::CookieFile(config::data_dir_absolute_path(conf.btc_rpc_cookie))
+        }
+        AuthMethod::UserPass => Auth::UserPass(conf.btc_rpc_user, conf.btc_rpc_password),
+        // Notice an invalid conf would have failed on `Config::verify()`
+        _ => unreachable!("A verified conf will only have one of these two auth methods"),
+    };
+
     // Initialize our bitcoind client
     let (bitcoin_cli, bitcoind_reachable) = match BitcoindClient::new(
         &conf.btc_rpc_connect,
         conf.btc_rpc_port,
-        &conf.btc_rpc_user,
-        &conf.btc_rpc_password,
+        btc_rpc_auth.clone(),
         &conf.btc_network,
     )
     .await
@@ -176,7 +184,7 @@ async fn main() {
     let rpc = Arc::new(
         Client::new(
             &format!("{schema}{}:{}", conf.btc_rpc_connect, conf.btc_rpc_port),
-            Auth::UserPass(conf.btc_rpc_user.clone(), conf.btc_rpc_password.clone()),
+            btc_rpc_auth,
         )
         .unwrap(),
     );

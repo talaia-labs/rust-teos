@@ -18,6 +18,7 @@ use bitcoin::base64;
 use bitcoin::hash_types::{BlockHash, Txid};
 use bitcoin::hashes::hex::ToHex;
 use bitcoin::{Block, Transaction};
+use bitcoincore_rpc::Auth;
 use lightning::util::ser::Writeable;
 use lightning_block_sync::http::{HttpEndpoint, JsonResponse};
 use lightning_block_sync::rpc::RpcClient;
@@ -32,9 +33,9 @@ pub struct BitcoindClient<'a> {
     /// The port to connect to.
     port: u16,
     /// The RPC user `bitcoind` is configured with.
-    rpc_user: &'a str,
+    rpc_user: String,
     /// The RPC password for the given user.
-    rpc_password: &'a str,
+    rpc_password: String,
 }
 
 impl BlockSource for &BitcoindClient<'_> {
@@ -74,12 +75,33 @@ impl<'a> BitcoindClient<'a> {
     pub async fn new(
         host: &'a str,
         port: u16,
-        rpc_user: &'a str,
-        rpc_password: &'a str,
+        auth: Auth,
         teos_network: &'a str,
     ) -> std::io::Result<BitcoindClient<'a>> {
         let http_endpoint = HttpEndpoint::for_host(host.to_owned()).with_port(port);
-        let rpc_credentials = base64::encode(&format!("{rpc_user}:{rpc_password}"));
+        let (rpc_user, rpc_password) = {
+            let (user, pass) = auth.get_user_pass().map_err(|e| {
+                Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("Cannot read cookie file. {}", e),
+                )
+            })?;
+            if user.is_none() {
+                Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Empty btc_rpc_user parsed from rpc_cookie".to_string(),
+                ))
+            } else if pass.is_none() {
+                Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Empty btc_rpc_password parsed from rpc_cookie",
+                ))
+            } else {
+                Ok((user.unwrap(), pass.unwrap()))
+            }
+        }?;
+
+        let rpc_credentials = base64::encode(&format!("{}:{}", rpc_user, rpc_password));
         let bitcoind_rpc_client = RpcClient::new(&rpc_credentials, http_endpoint)?;
 
         let client = Self {

@@ -12,8 +12,10 @@ rpc_port = 8814
 # bitcoind
 btc_network = "mainnet"
 btc_rpc_user = "CSW"
+## Notice only user+password **OR** cookie is allowed as rpc auth, any other combination would be rejected
 btc_rpc_password = "NotSatoshi"
 btc_rpc_connect = "localhost"
+btc_rpc_cookie = "~/.bitcoin/.cookie"
 btc_rpc_port = 8332
 
 # Flags
