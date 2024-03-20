@@ -94,6 +94,8 @@ impl RegisterParams {
 impl TryFrom<serde_json::Value> for RegisterParams {
     type Error = RegisterError;
 
+    // clippy-fix: We are getting more than just the first item, so this clippy check does not make sense here
+    #[allow(clippy::get_first)]
     fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
         match value {
             serde_json::Value::String(s) => {
@@ -193,6 +195,8 @@ pub struct GetAppointmentParams {
 impl TryFrom<serde_json::Value> for GetAppointmentParams {
     type Error = GetAppointmentError;
 
+    // clippy-fix: We are getting more than just the first item, so this clippy check does not make sense here
+    #[allow(clippy::get_first)]
     fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
         match value {
             serde_json::Value::Array(a) => {

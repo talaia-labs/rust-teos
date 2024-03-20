@@ -1163,7 +1163,7 @@ mod tests {
 
         let mut uuids = HashSet::new();
         // Let the watcher track these breaches.
-        for (_, (_, tx)) in breaches.iter().enumerate() {
+        for tx in breaches.values() {
             let (uuid, appointment) =
                 generate_dummy_appointment_with_user(user_id, Some(&tx.txid()));
             let appointment = appointment.inner;

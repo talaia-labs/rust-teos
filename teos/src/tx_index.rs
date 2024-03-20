@@ -276,7 +276,7 @@ mod tests {
 
         // last_n_blocks is ordered from latest to earliest
         let first_block = last_n_blocks.get(cache_size - 1).unwrap();
-        let last_block = last_n_blocks.get(0).unwrap();
+        let last_block = last_n_blocks.first().unwrap();
         let mid = last_n_blocks.get(cache_size / 2).unwrap();
 
         let cache: TxIndex<Locator, Transaction> = TxIndex::new(&last_n_blocks, height as u32);
