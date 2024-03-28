@@ -330,23 +330,30 @@ impl DBM {
     /// matching this locator. If no locator is given, all the appointments in the database would be returned.
     pub(crate) fn load_appointments(
         &self,
-        locator: Option<Locator>,
+        locator_and_userid: Option<(Locator, Option<UserId>)>,
     ) -> HashMap<UUID, ExtendedAppointment> {
         let mut appointments = HashMap::new();
 
         let mut sql =
             "SELECT a.UUID, a.locator, a.encrypted_blob, a.to_self_delay, a.user_signature, a.start_block, a.user_id
                 FROM appointments as a LEFT JOIN trackers as t ON a.UUID=t.UUID WHERE t.UUID IS NULL".to_string();
-        // If a locator was passed, filter based on it.
-        if locator.is_some() {
-            sql.push_str(" AND a.locator=(?)");
-        }
+
+        // If a locator and an optional user_id were passed, filter based on it.
+        if let Some((_, user_id)) = locator_and_userid {
+            sql.push_str(" AND a.locator=(?1)");
+            if user_id.is_some() {
+                sql.push_str(" AND a.user_id=(?2)");
+            }
+        };
+
         let mut stmt = self.connection.prepare(&sql).unwrap();
 
-        let mut rows = if let Some(locator) = locator {
-            stmt.query([locator.to_vec()]).unwrap()
-        } else {
-            stmt.query([]).unwrap()
+        let mut rows = match locator_and_userid {
+            Some((locator, None)) => stmt.query([locator.to_vec()]).unwrap(),
+            Some((locator, Some(user_id))) => {
+                stmt.query([locator.to_vec(), user_id.to_vec()]).unwrap()
+            }
+            _ => stmt.query([]).unwrap(),
         };
 
         while let Ok(Some(row)) = rows.next() {
@@ -596,23 +603,30 @@ impl DBM {
     /// matching this locator. If no locator is given, all the trackers in the database would be returned.
     pub(crate) fn load_trackers(
         &self,
-        locator: Option<Locator>,
+        locator_and_userid: Option<(Locator, Option<UserId>)>,
     ) -> HashMap<UUID, TransactionTracker> {
         let mut trackers = HashMap::new();
 
         let mut sql = "SELECT t.UUID, t.dispute_tx, t.penalty_tx, t.height, t.confirmed, a.user_id
             FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID"
             .to_string();
-        // If a locator was passed, filter based on it.
-        if locator.is_some() {
-            sql.push_str(" WHERE a.locator=(?)");
+
+        // If a locator and an optional user_id were passed, filter based on it.
+        if let Some((_, user_id)) = locator_and_userid {
+            sql.push_str(" AND a.locator=(?1)");
+            if user_id.is_some() {
+                sql.push_str(" AND a.user_id=(?2)");
+            }
         }
+
         let mut stmt = self.connection.prepare(&sql).unwrap();
 
-        let mut rows = if let Some(locator) = locator {
-            stmt.query([locator.to_vec()]).unwrap()
-        } else {
-            stmt.query([]).unwrap()
+        let mut rows = match locator_and_userid {
+            Some((locator, None)) => stmt.query([locator.to_vec()]).unwrap(),
+            Some((locator, Some(user_id))) => {
+                stmt.query([locator.to_vec(), user_id.to_vec()]).unwrap()
+            }
+            _ => stmt.query([]).unwrap(),
         };
 
         while let Ok(Some(row)) = rows.next() {
@@ -1157,7 +1171,7 @@ mod tests {
         }
 
         // Validate that no other appointments than the ones with our locator are returned.
-        assert_eq!(dbm.load_appointments(Some(locator)), appointments);
+        assert_eq!(dbm.load_appointments(Some((locator, None))), appointments);
 
         // If an appointment has an associated tracker, it should not be loaded since it is seen
         // as a triggered appointment
@@ -1175,7 +1189,61 @@ mod tests {
         dbm.store_tracker(uuid, &tracker).unwrap();
 
         // We should get all the appointments matching our locator back except from the triggered one
-        assert_eq!(dbm.load_appointments(Some(locator)), appointments);
+        assert_eq!(dbm.load_appointments(Some((locator, None))), appointments);
+    }
+
+    #[test]
+    fn test_load_appointments_with_locator_and_user_id() {
+        let dbm = DBM::in_memory().unwrap();
+
+        let mut appointments = HashMap::new();
+        let dispute_tx = get_random_tx();
+        let dispute_txid = dispute_tx.txid();
+        let locator = Locator::new(dispute_txid);
+
+        // create user id
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
+        dbm.store_user(user_id, &user).unwrap();
+
+        // Create and store a particular appointment
+        let (uuid, appointment) =
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
+        dbm.store_appointment(uuid, &appointment).unwrap();
+        appointments.insert(uuid, appointment.clone());
+
+        // create random appointments
+        for _ in 1..11 {
+            let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+            dbm.store_appointment(uuid, &appointment).unwrap();
+            appointments.insert(uuid, appointment);
+        }
+
+        // Returns empty if no appointment matches both userid and locator
+        assert_eq!(
+            dbm.load_appointments(Some((locator, Some(get_random_user_id()))),),
+            HashMap::new()
+        );
+        assert_eq!(
+            dbm.load_appointments(Some((get_random_locator(), Some(user_id))),),
+            HashMap::new()
+        );
+
+        // Returns particular appointments if they match both userid and locator
+        assert_eq!(
+            dbm.load_appointments(Some((locator, Some(user_id))),),
+            HashMap::from([(uuid, appointment)])
+        );
+
+        // Create a tracker from existing appointment
+        let tracker = get_random_tracker(user_id, ConfirmationStatus::InMempoolSince(100));
+        dbm.store_tracker(uuid, &tracker).unwrap();
+
+        // ensure that no tracker is returned
+        assert_eq!(
+            dbm.load_appointments(Some((locator, Some(user_id))),),
+            HashMap::new()
+        );
     }
 
     #[test]
@@ -1544,7 +1612,54 @@ mod tests {
             dbm.store_tracker(uuid, &tracker).unwrap();
         }
 
-        assert_eq!(dbm.load_trackers(Some(locator)), trackers);
+        assert_eq!(dbm.load_trackers(Some((locator, None))), trackers);
+    }
+
+    #[test]
+    fn test_load_trackers_with_locator_and_user_id() {
+        let dbm = DBM::in_memory().unwrap();
+        let mut trackers = HashMap::new();
+        let dispute_tx = get_random_tx();
+        let dispute_txid = dispute_tx.txid();
+        let locator = Locator::new(dispute_txid);
+        let status = ConfirmationStatus::InMempoolSince(42);
+
+        // create user id
+        let user_id = get_random_user_id();
+        let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
+        dbm.store_user(user_id, &user).unwrap();
+
+        // Create and store a particular tracker
+        let (uuid, appointment) =
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
+        let tracker = get_random_tracker(user_id, status);
+        dbm.store_appointment(uuid, &appointment).unwrap();
+        dbm.store_tracker(uuid, &tracker).unwrap();
+        trackers.insert(uuid, tracker.clone());
+
+        // create random trackers
+        for _ in 1..11 {
+            let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+            let tracker = get_random_tracker(user_id, status);
+            dbm.store_appointment(uuid, &appointment).unwrap();
+            dbm.store_tracker(uuid, &tracker).unwrap();
+        }
+
+        // Returns empty if no tracker matches both userid and locator
+        assert_eq!(
+            dbm.load_trackers(Some((locator, Some(get_random_user_id()))),),
+            HashMap::new()
+        );
+        assert_eq!(
+            dbm.load_trackers(Some((get_random_locator(), Some(user_id))),),
+            HashMap::new()
+        );
+
+        // Returns particular trackers if they match both userid and locator
+        assert_eq!(
+            dbm.load_trackers(Some((locator, Some(user_id))),),
+            HashMap::from([(uuid, tracker)])
+        );
     }
 
     #[test]

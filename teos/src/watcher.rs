@@ -423,12 +423,16 @@ impl Watcher {
         self.dbm.lock().unwrap().load_appointments(None)
     }
 
-    /// Gets all the appointments matching a specific locator from the [Watcher] (from the database).
+    /// Gets all the appointments matching a specific locator and an optional user id from the [Watcher] (from the database).
     pub(crate) fn get_watcher_appointments_with_locator(
         &self,
         locator: Locator,
+        user_id: Option<UserId>,
     ) -> HashMap<UUID, ExtendedAppointment> {
-        self.dbm.lock().unwrap().load_appointments(Some(locator))
+        self.dbm
+            .lock()
+            .unwrap()
+            .load_appointments(Some((locator, user_id)))
     }
 
     /// Gets all the trackers stored in the [Responder] (from the database).
@@ -436,12 +440,16 @@ impl Watcher {
         self.dbm.lock().unwrap().load_trackers(None)
     }
 
-    /// Gets all the trackers matching s specific locator from the [Responder] (from the database).
+    /// Gets all the trackers matching a specific locator and an optional user id from the [Responder] (from the database).
     pub(crate) fn get_responder_trackers_with_locator(
         &self,
         locator: Locator,
+        user_id: Option<UserId>,
     ) -> HashMap<UUID, TransactionTracker> {
-        self.dbm.lock().unwrap().load_trackers(Some(locator))
+        self.dbm
+            .lock()
+            .unwrap()
+            .load_trackers(Some((locator, user_id)))
     }
 
     /// Gets the list of all registered user ids.
