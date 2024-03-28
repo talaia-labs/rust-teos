@@ -41,6 +41,14 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+#[derive(PartialEq)]
+pub enum AuthMethod {
+    UserPass,
+    CookieFile,
+    Multiple,
+    Invalid,
+}
+
 /// Holds all the command line options.
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(rename_all = "lowercase")]
@@ -66,13 +74,17 @@ pub struct Opt {
     #[structopt(long)]
     pub btc_network: Option<String>,
 
-    /// bitcoind rpcuser [default: user]
+    /// bitcoind rpcuser
     #[structopt(long)]
     pub btc_rpc_user: Option<String>,
 
-    /// bitcoind rpcpassword [default: passwd]
+    /// bitcoind rpcpassword
     #[structopt(long)]
     pub btc_rpc_password: Option<String>,
+
+    /// bitcoind rpccookie
+    #[structopt(long)]
+    pub btc_rpc_cookie: Option<String>,
 
     /// bitcoind rpcconnect [default: localhost]
     #[structopt(long)]
@@ -136,6 +148,7 @@ pub struct Config {
     // Bitcoind
     pub btc_network: String,
     pub btc_rpc_user: String,
+    pub btc_rpc_cookie: String,
     pub btc_rpc_password: String,
     pub btc_rpc_connect: String,
     pub btc_rpc_port: u16,
@@ -164,6 +177,24 @@ pub struct Config {
 }
 
 impl Config {
+    /// The only combinations of valid authentication methods are:
+    ///     - User **AND** password
+    ///     - **OR** Cookie file
+    //
+    /// Any other combination will be rejected
+    pub fn get_auth_method(&self) -> AuthMethod {
+        match (
+            self.btc_rpc_user.is_empty(),
+            self.btc_rpc_password.is_empty(),
+            self.btc_rpc_cookie.is_empty(),
+        ) {
+            (false, false, true) => AuthMethod::UserPass,
+            (true, true, false) => AuthMethod::CookieFile,
+            (true, true, true) => AuthMethod::Invalid,
+            _ => AuthMethod::Multiple,
+        }
+    }
+
     /// Patches the configuration options with the command line options.
     pub fn patch_with_options(&mut self, options: Opt) {
         if options.api_bind.is_some() {
@@ -186,6 +217,9 @@ impl Config {
         }
         if options.btc_rpc_password.is_some() {
             self.btc_rpc_password = options.btc_rpc_password.unwrap();
+        }
+        if options.btc_rpc_cookie.is_some() {
+            self.btc_rpc_cookie = options.btc_rpc_cookie.unwrap();
         }
         if options.btc_rpc_connect.is_some() {
             self.btc_rpc_connect = options.btc_rpc_connect.unwrap();
@@ -216,11 +250,14 @@ impl Config {
     /// This will also assign the default `btc_rpc_port` depending on the network if it has not
     /// been overwritten at this point.
     pub fn verify(&mut self) -> Result<(), ConfigError> {
-        if self.btc_rpc_user == String::new() {
-            return Err(ConfigError("btc_rpc_user must be set".to_owned()));
-        }
-        if self.btc_rpc_password == String::new() {
-            return Err(ConfigError("btc_rpc_password must be set".to_owned()));
+        let auth_method = self.get_auth_method();
+        if auth_method == AuthMethod::Invalid {
+            return Err(ConfigError("No valid bitcoind auth provided. Set either both btc_rpc_user/btc_rpc_password or btc_rpc_cookie".to_owned()));
+        } else if auth_method == AuthMethod::Multiple {
+            return Err(ConfigError(
+                "Multiple bitcoind auth provided. Pick a single one (either btc_rpc_user/btc_rpc_password or btc_rpc_cookie)"
+                    .to_owned(),
+            ));
         }
 
         // Normalize the network option to the ones used by bitcoind.
@@ -291,6 +328,7 @@ impl Default for Config {
             btc_network: "mainnet".into(),
             btc_rpc_user: String::new(),
             btc_rpc_password: String::new(),
+            btc_rpc_cookie: String::new(),
             btc_rpc_connect: "localhost".into(),
             btc_rpc_port: 0,
 
@@ -326,6 +364,7 @@ mod tests {
                 btc_network: None,
                 btc_rpc_user: None,
                 btc_rpc_password: None,
+                btc_rpc_cookie: None,
                 btc_rpc_connect: None,
                 btc_rpc_port: None,
                 data_dir: String::from("~/.teos"),
@@ -363,7 +402,7 @@ mod tests {
         // required to be updated by the user.
         let mut config = Config::default();
         assert!(
-            matches!(config.verify(), Err(ConfigError(e)) if e.contains("btc_rpc_user must be set"))
+            matches!(config.verify(), Err(ConfigError(e)) if e.contains("No valid bitcoind auth provided"))
         );
     }
 
