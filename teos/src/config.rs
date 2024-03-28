@@ -143,7 +143,9 @@ pub struct Config {
     // Flags
     pub debug: bool,
     pub deps_debug: bool,
+    #[serde(skip_serializing)]
     pub overwrite_key: bool,
+    #[serde(skip_serializing)]
     pub force_update: bool,
 
     // General
