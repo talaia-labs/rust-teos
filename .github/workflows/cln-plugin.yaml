@@ -10,14 +10,14 @@ jobs:
   cache-cln:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.9'
           check-latest: true
       - name: Create CLN cache
         id: cache-cln
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: cache-cln-dev
         with:
@@ -37,8 +37,8 @@ jobs:
     needs: cache-cln
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.9'
           check-latest: true
@@ -49,7 +49,7 @@ jobs:
           ln -s $(pwd)/bitcoin-${{ env.bitcoind_version }}/bin/bitcoin* /usr/local/bin
       - name: Load CLN cache
         id: cache-cln
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: cache-cln-dev
         with:
