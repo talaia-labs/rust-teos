@@ -5,19 +5,19 @@
  * https://github.com/ElementsProject/lightning/blob/master/LICENSE
 */
 
-use rcgen::{Certificate, KeyPair, RcgenError};
+use rcgen::{Certificate, Error, KeyPair};
 use std::convert::TryFrom;
 use std::path::Path;
 
 /// Packs the reasons why generating mtls certificates may fail.
 #[derive(Debug)]
 pub enum GenCertificateFailure {
-    RcgenError(RcgenError),
+    RcgenError(Error),
     IoError(std::io::Error),
 }
 
-impl From<RcgenError> for GenCertificateFailure {
-    fn from(e: RcgenError) -> Self {
+impl From<Error> for GenCertificateFailure {
+    fn from(e: Error) -> Self {
         GenCertificateFailure::RcgenError(e)
     }
 }
@@ -36,9 +36,9 @@ pub struct Identity {
 }
 
 impl TryFrom<&Identity> for Certificate {
-    type Error = RcgenError;
+    type Error = Error;
 
-    fn try_from(id: &Identity) -> Result<Certificate, RcgenError> {
+    fn try_from(id: &Identity) -> Result<Certificate, Error> {
         let keystr = String::from_utf8_lossy(&id.key);
         let key = KeyPair::from_pem(&keystr)?;
         let certstr = String::from_utf8_lossy(&id.certificate);
@@ -77,14 +77,14 @@ fn generate_or_load_identity(
         log::debug!("Generating a new certificate for key {key_path:?} at {cert_path:?}",);
 
         // Configure the certificate we want.
-        let subject_alt_names = vec!["cln".to_string(), "localhost".to_string()];
+        let subject_alt_names = vec!["teos".to_string(), "localhost".to_string()];
         let mut params = rcgen::CertificateParams::new(subject_alt_names);
         params.key_pair = Some(keypair);
         params.alg = &rcgen::PKCS_ECDSA_P256_SHA256;
         if parent.is_none() {
             params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         } else {
-            params.is_ca = rcgen::IsCa::SelfSignedOnly;
+            params.is_ca = rcgen::IsCa::NoCa;
         }
         params
             .distinguished_name
