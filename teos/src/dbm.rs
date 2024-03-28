@@ -181,7 +181,7 @@ impl DBM {
     }
 
     /// Removes some users from the database in batch.
-    pub(crate) fn batch_remove_users(&mut self, users: &Vec<UserId>) -> usize {
+    pub(crate) fn batch_remove_users(&mut self, users: &[UserId]) -> usize {
         let limit = self.connection.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
         let tx = self.connection.transaction().unwrap();
         let iter = users
@@ -417,7 +417,7 @@ impl DBM {
     /// update is atomic.
     pub(crate) fn batch_remove_appointments(
         &mut self,
-        appointments: &Vec<UUID>,
+        appointments: &[UUID],
         updated_users: &HashMap<UserId, UserInfo>,
     ) -> usize {
         let limit = self.connection.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
@@ -935,7 +935,7 @@ mod tests {
             Ok { .. }
         ));
 
-        dbm.batch_remove_users(&vec![appointment.user_id]);
+        dbm.batch_remove_users(&[appointment.user_id]);
         assert!(dbm.load_user(appointment.user_id).is_none());
         assert!(dbm.load_appointment(uuid).is_none());
 
@@ -947,7 +947,7 @@ mod tests {
         ));
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
-        dbm.batch_remove_users(&vec![appointment.user_id]);
+        dbm.batch_remove_users(&[appointment.user_id]);
         assert!(dbm.load_user(appointment.user_id).is_none());
         assert!(dbm.load_appointment(uuid).is_none());
         assert!(dbm.load_tracker(uuid).is_none());
@@ -956,7 +956,7 @@ mod tests {
     #[test]
     fn test_batch_remove_nonexistent_users() {
         let mut dbm = DBM::in_memory().unwrap();
-        let users = (0..10).map(|_| get_random_user_id()).collect();
+        let users = (0..10).map(|_| get_random_user_id()).collect::<Vec<_>>();
 
         // Test it does not fail even if the user does not exist (it will log though)
         dbm.batch_remove_users(&users);
@@ -1286,10 +1286,7 @@ mod tests {
             Ok { .. }
         ));
 
-        dbm.batch_remove_appointments(
-            &vec![uuid],
-            &HashMap::from_iter([(appointment.user_id, info)]),
-        );
+        dbm.batch_remove_appointments(&[uuid], &HashMap::from_iter([(appointment.user_id, info)]));
         assert!(dbm.load_appointment(uuid).is_none());
 
         // Appointment + Tracker
@@ -1299,10 +1296,7 @@ mod tests {
         ));
         assert!(matches!(dbm.store_tracker(uuid, &tracker), Ok { .. }));
 
-        dbm.batch_remove_appointments(
-            &vec![uuid],
-            &HashMap::from_iter([(appointment.user_id, info)]),
-        );
+        dbm.batch_remove_appointments(&[uuid], &HashMap::from_iter([(appointment.user_id, info)]));
         assert!(dbm.load_appointment(uuid).is_none());
         assert!(dbm.load_tracker(uuid).is_none());
     }
@@ -1310,7 +1304,7 @@ mod tests {
     #[test]
     fn test_batch_remove_nonexistent_appointments() {
         let mut dbm = DBM::in_memory().unwrap();
-        let appointments = (0..10).map(|_| generate_uuid()).collect();
+        let appointments = (0..10).map(|_| generate_uuid()).collect::<Vec<_>>();
 
         // Test it does not fail even if the user does not exist (it will log though)
         dbm.batch_remove_appointments(&appointments, &HashMap::new());
