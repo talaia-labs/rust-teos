@@ -60,6 +60,7 @@ jobs:
           cd lightning && sudo make install
       - name: Install teos and the plugin
         run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
           cargo install --locked --path teos 
           cargo install --locked --path watchtower-plugin
       - name: Add test dependencies
