@@ -1,5 +1,4 @@
 import pytest
-from pyln.client import RpcError
 from conftest import WT_PLUGIN
 
 
@@ -16,7 +15,6 @@ def change_endianness(x):
     return b[::-1].hex()
 
 
-@pytest.mark.developer("Requires dev_sign_last_tx")
 def test_watchtower(node_factory, bitcoind, teosd):
     """
     Test watchtower hook.
@@ -27,7 +25,9 @@ def test_watchtower(node_factory, bitcoind, teosd):
     commitment transaction.
     """
 
-    l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": WT_PLUGIN}])
+    l1, l2 = node_factory.line_graph(
+        2, opts=[{"developer": None, "allow_broken_log": True}, {"developer": None, "plugin": WT_PLUGIN}]
+    )
 
     # We need to register l2 with the tower
     tower_id = teosd.cli.gettowerinfo()["tower_id"]
@@ -60,7 +60,7 @@ def test_watchtower(node_factory, bitcoind, teosd):
     penalty_txid = bitcoind.rpc.getrawmempool()[0]
 
     # The channel still exists between the two peers, but it's on chain
-    assert l1.rpc.listpeers()["peers"][0]["channels"][0]["state"] == "ONCHAIN"
+    assert l1.rpc.listpeerchannels()["channels"][0]["state"] == "ONCHAIN"
     assert l2.rpc.getappointment(tower_id, locator)["status"] == "dispute_responded"
 
     # Generate blocks until the penalty gets irrevocably resolved
@@ -87,8 +87,9 @@ def test_unreachable_watchtower(node_factory, bitcoind, teosd):
     l1, l2 = node_factory.line_graph(
         2,
         opts=[
-            {},
+            {"developer": None},
             {
+                "developer": None,
                 "plugin": WT_PLUGIN,
                 "allow_broken_log": True,
                 "dev-watchtower-max-retry-interval": max_interval_time,
@@ -120,8 +121,9 @@ def test_auto_retry_watchtower(node_factory, bitcoind, teosd):
     l1, l2 = node_factory.line_graph(
         2,
         opts=[
-            {},
+            {"developer": None},
             {
+                "developer": None,
                 "plugin": WT_PLUGIN,
                 "allow_broken_log": True,
                 "watchtower-max-retry-time": 1,
@@ -158,8 +160,9 @@ def test_manually_retry_watchtower(node_factory, bitcoind, teosd):
     l1, l2 = node_factory.line_graph(
         2,
         opts=[
-            {},
+            {"developer": None},
             {
+                "developer": None,
                 "plugin": WT_PLUGIN,
                 "allow_broken_log": True,
                 "watchtower-max-retry-time": 0,
@@ -193,7 +196,9 @@ def test_manually_retry_watchtower(node_factory, bitcoind, teosd):
 
 
 def test_misbehaving_watchtower(node_factory, bitcoind, teosd, directory):
-    l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": WT_PLUGIN, "allow_broken_log": True}])
+    l1, l2 = node_factory.line_graph(
+        2, opts=[{"developer": None}, {"developer": None, "plugin": WT_PLUGIN, "allow_broken_log": True}]
+    )
 
     # We need to register l2 with the tower
     tower_id = teosd.cli.gettowerinfo()["tower_id"]
@@ -210,7 +215,9 @@ def test_misbehaving_watchtower(node_factory, bitcoind, teosd, directory):
 
 
 def test_get_appointment(node_factory, bitcoind, teosd, directory):
-    l1, l2 = node_factory.line_graph(2, opts=[{"allow_broken_log": True}, {"plugin": WT_PLUGIN}])
+    l1, l2 = node_factory.line_graph(
+        2, opts=[{"developer": None, "allow_broken_log": True}, {"developer": None, "plugin": WT_PLUGIN}]
+    )
 
     # We need to register l2 with the tower
     tower_id = teosd.cli.gettowerinfo()["tower_id"]
