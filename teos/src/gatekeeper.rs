@@ -1,6 +1,7 @@
 //! Logic related to the Gatekeeper, the component in charge of managing access to the tower resources.
 
 use lightning::chain;
+use lightning_invoice::Invoice;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,15 +24,24 @@ pub(crate) struct UserInfo {
     pub(crate) subscription_start: u32,
     /// Block height where the user subscription expires.
     pub(crate) subscription_expiry: u32,
+    /// If this watchtower requires payments, we store an invoice that the user needs to pay.
+    /// Note: We store the invoice as a string instead of the full invoice so that UserInfo can successfully implement the "Copy" trait.
+    pub(crate) invoice: Option<Invoice>,
 }
 
 impl UserInfo {
     /// Creates a new [UserInfo] instance.
-    pub fn new(available_slots: u32, subscription_start: u32, subscription_expiry: u32) -> Self {
+    pub fn new(
+        available_slots: u32,
+        subscription_start: u32,
+        subscription_expiry: u32,
+        invoice: Option<Invoice>,
+    ) -> Self {
         UserInfo {
             available_slots,
             subscription_start,
             subscription_expiry,
+            invoice,
         }
     }
 }
@@ -170,6 +180,7 @@ impl Gatekeeper {
                     self.subscription_slots,
                     block_count,
                     block_count + self.subscription_duration,
+                    None,
                 );
                 self.dbm
                     .lock()
@@ -467,7 +478,8 @@ mod tests {
             UserInfo::new(
                 receipt.available_slots(),
                 receipt.subscription_start(),
-                receipt.subscription_expiry()
+                receipt.subscription_expiry(),
+                None
             )
         );
 
@@ -490,7 +502,8 @@ mod tests {
             UserInfo::new(
                 updated_receipt.available_slots(),
                 updated_receipt.subscription_start(),
-                updated_receipt.subscription_expiry()
+                updated_receipt.subscription_expiry(),
+                None
             )
         );
 
@@ -514,7 +527,8 @@ mod tests {
             UserInfo::new(
                 updated_receipt.available_slots(),
                 updated_receipt.subscription_start(),
-                updated_receipt.subscription_expiry()
+                updated_receipt.subscription_expiry(),
+                None
             )
         );
     }

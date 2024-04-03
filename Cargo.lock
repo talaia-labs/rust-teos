@@ -1291,6 +1291,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightning-invoice"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaafc1cebaf9ea8d2a57e60aae9fe6095554b8305714f8452cd8a20a3aa5b7ba"
+dependencies = [
+ "bech32",
+ "bitcoin_hashes",
+ "lightning",
+ "num-traits",
+ "secp256k1",
+]
+
+[[package]]
 name = "lightning-net-tokio"
 version = "0.0.108"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2488,6 +2501,7 @@ dependencies = [
  "jsonrpc-http-server",
  "lightning",
  "lightning-block-sync",
+ "lightning-invoice",
  "lightning-net-tokio",
  "log",
  "prost 0.9.0",
