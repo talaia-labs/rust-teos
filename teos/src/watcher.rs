@@ -8,6 +8,7 @@ use bitcoin::secp256k1::SecretKey;
 use bitcoin::{BlockHeader, Transaction};
 use lightning::chain;
 use lightning_block_sync::poll::ValidatedBlock;
+use lightning_invoice::Invoice;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::cryptography;
@@ -16,7 +17,7 @@ use teos_common::{TowerId, UserId};
 
 use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
-use crate::gatekeeper::{Gatekeeper, MaxSlotsReached, UserInfo};
+use crate::gatekeeper::{Gatekeeper, MaxSlotsReached, PaymentsNotAccepted, UserInfo};
 use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
 use crate::tx_index::TxIndex;
 
@@ -142,10 +143,19 @@ impl Watcher {
     /// Registers a new user within the [Watcher]. This request is passed to the [Gatekeeper], who is in
     /// charge of managing users.
     pub(crate) fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
-        let mut receipt = self.gatekeeper.add_update_user(user_id)?;
+        let mut receipt = self
+            .gatekeeper
+            .add_update_user(user_id)
+            .map_err(|_| MaxSlotsReached)?;
         receipt.sign(&self.signing_key);
 
         Ok(receipt)
+    }
+
+    /// Requests an invoice to pay for additional slots within the [Watcher]. This request is passed to the [Gatekeeper], who is in
+    /// charge of managing users.
+    pub(crate) fn pay(&self, user_id: UserId) -> Result<Invoice, PaymentsNotAccepted> {
+        self.gatekeeper.add_update_invoice(user_id)
     }
 
     /// Adds a new [Appointment] to the tower.
@@ -595,6 +605,7 @@ mod tests {
             DURATION,
             EXPIRY_DELTA,
             dbm.clone(),
+            None,
         ));
         let responder = create_responder(chain, gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
         create_watcher(

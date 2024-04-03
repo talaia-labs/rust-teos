@@ -17,6 +17,7 @@ pub mod dbm;
 #[doc(hidden)]
 mod errors;
 mod extended_appointment;
+mod fees;
 pub mod gatekeeper;
 pub mod responder;
 #[doc(hidden)]
