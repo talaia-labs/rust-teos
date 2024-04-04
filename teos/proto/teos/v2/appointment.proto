@@ -4,7 +4,8 @@ package teos.v2;
 import "common/teos/v2/appointment.proto";
 
 message GetAppointmentsRequest {
-  // Request the information of appointments with specific locator and user_id (optional) .
+  // Request the information of appointments with specific locator.
+  // If a user id is provided (optional), request only appointments belonging to that user. 
 
   bytes locator = 1;
   optional bytes user_id = 2;

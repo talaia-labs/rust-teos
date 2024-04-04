@@ -18,13 +18,10 @@ pub fn data_dir_absolute_path(data_dir: String) -> PathBuf {
 
 pub fn from_file<T: Default + serde::de::DeserializeOwned>(path: &PathBuf) -> T {
     match std::fs::read(path) {
-        Ok(file_content) => toml::from_slice::<T>(&file_content).map_or_else(
-            |e| {
-                eprintln!("Couldn't parse config file: {e}");
-                T::default()
-            },
-            |config| config,
-        ),
+        Ok(file_content) => toml::from_slice::<T>(&file_content).unwrap_or_else(|e| {
+            eprintln!("Couldn't parse config file: {e}");
+            T::default()
+        }),
         Err(_) => T::default(),
     }
 }
@@ -392,7 +389,7 @@ mod tests {
         assert_eq!(config.api_bind, expected_value);
 
         // Check the rest of fields are equal. The easiest is to just the field back and compare with a clone
-        config.api_bind = config_clone.api_bind.clone();
+        config.api_bind.clone_from(&config_clone.api_bind);
         assert_eq!(config, config_clone);
     }
 

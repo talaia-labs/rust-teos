@@ -338,13 +338,15 @@ impl DBM {
             "SELECT a.UUID, a.locator, a.encrypted_blob, a.to_self_delay, a.user_signature, a.start_block, a.user_id
                 FROM appointments as a LEFT JOIN trackers as t ON a.UUID=t.UUID WHERE t.UUID IS NULL".to_string();
 
-        // If a locator and an optional user_id were passed, filter based on it.
-        if let Some((_, user_id)) = locator_and_userid {
+        // If a locator was passed, filter based on it.
+        if locator_and_userid.is_some() {
             sql.push_str(" AND a.locator=(?1)");
-            if user_id.is_some() {
-                sql.push_str(" AND a.user_id=(?2)");
-            }
-        };
+        }
+
+        // If a user_id is passed, filter even more.
+        if locator_and_userid.is_some_and(|inner| inner.1.is_some()) {
+            sql.push_str(" AND a.user_id=(?2)");
+        }
 
         let mut stmt = self.connection.prepare(&sql).unwrap();
 
@@ -611,12 +613,14 @@ impl DBM {
             FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID"
             .to_string();
 
-        // If a locator and an optional user_id were passed, filter based on it.
-        if let Some((_, user_id)) = locator_and_userid {
+        // If a locator was passed, filter based on it.
+        if locator_and_userid.is_some() {
             sql.push_str(" AND a.locator=(?1)");
-            if user_id.is_some() {
-                sql.push_str(" AND a.user_id=(?2)");
-            }
+        }
+
+        // If a user_id is passed, filter even more.
+        if locator_and_userid.is_some_and(|inner| inner.1.is_some()) {
+            sql.push_str(" AND a.user_id=(?2)");
         }
 
         let mut stmt = self.connection.prepare(&sql).unwrap();
@@ -774,8 +778,8 @@ mod tests {
 
     use crate::rpc_errors;
     use crate::test_utils::{
-        generate_dummy_appointment, generate_dummy_appointment_with_user, generate_uuid,
-        get_random_tracker, get_random_tx, AVAILABLE_SLOTS, SUBSCRIPTION_EXPIRY,
+        generate_dummy_appointment, generate_dummy_appointment_with_user, generate_dummy_tracker,
+        generate_uuid, get_random_tracker, get_random_tx, AVAILABLE_SLOTS, SUBSCRIPTION_EXPIRY,
         SUBSCRIPTION_START,
     };
 
@@ -1201,7 +1205,7 @@ mod tests {
         let dispute_txid = dispute_tx.txid();
         let locator = Locator::new(dispute_txid);
 
-        // create user id
+        // Create user id
         let user_id = get_random_user_id();
         let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(user_id, &user).unwrap();
@@ -1212,14 +1216,14 @@ mod tests {
         dbm.store_appointment(uuid, &appointment).unwrap();
         appointments.insert(uuid, appointment.clone());
 
-        // create random appointments
+        // Create random appointments
         for _ in 1..11 {
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
             dbm.store_appointment(uuid, &appointment).unwrap();
             appointments.insert(uuid, appointment);
         }
 
-        // Returns empty if no appointment matches both userid and locator
+        // Verify that no appointment is returned if there is not an exact match of user_id + locator
         assert_eq!(
             dbm.load_appointments(Some((locator, Some(get_random_user_id()))),),
             HashMap::new()
@@ -1229,17 +1233,17 @@ mod tests {
             HashMap::new()
         );
 
-        // Returns particular appointments if they match both userid and locator
+        // Verify that the expected appointment is returned, if the correct user_id and locator is given
         assert_eq!(
             dbm.load_appointments(Some((locator, Some(user_id))),),
             HashMap::from([(uuid, appointment)])
         );
 
-        // Create a tracker from existing appointment
-        let tracker = get_random_tracker(user_id, ConfirmationStatus::InMempoolSince(100));
+        // Create a tracker from the existing appointment
+        let tracker = generate_dummy_tracker(user_id, dispute_tx.clone());
         dbm.store_tracker(uuid, &tracker).unwrap();
 
-        // ensure that no tracker is returned
+        // Verify that an appointment is not returned, if it is triggered (there's a tracker for it)
         assert_eq!(
             dbm.load_appointments(Some((locator, Some(user_id))),),
             HashMap::new()
@@ -1622,9 +1626,8 @@ mod tests {
         let dispute_tx = get_random_tx();
         let dispute_txid = dispute_tx.txid();
         let locator = Locator::new(dispute_txid);
-        let status = ConfirmationStatus::InMempoolSince(42);
 
-        // create user id
+        // Create user id
         let user_id = get_random_user_id();
         let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         dbm.store_user(user_id, &user).unwrap();
@@ -1632,20 +1635,20 @@ mod tests {
         // Create and store a particular tracker
         let (uuid, appointment) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
-        let tracker = get_random_tracker(user_id, status);
+        let tracker = generate_dummy_tracker(user_id, dispute_tx.clone());
         dbm.store_appointment(uuid, &appointment).unwrap();
         dbm.store_tracker(uuid, &tracker).unwrap();
         trackers.insert(uuid, tracker.clone());
 
-        // create random trackers
+        // Create random trackers
         for _ in 1..11 {
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-            let tracker = get_random_tracker(user_id, status);
+            let tracker = generate_dummy_tracker(user_id, dispute_tx.clone());
             dbm.store_appointment(uuid, &appointment).unwrap();
             dbm.store_tracker(uuid, &tracker).unwrap();
         }
 
-        // Returns empty if no tracker matches both userid and locator
+        // Verify that no tracker is returned if there is not an exact match of user_id + locator
         assert_eq!(
             dbm.load_trackers(Some((locator, Some(get_random_user_id()))),),
             HashMap::new()
@@ -1655,7 +1658,7 @@ mod tests {
             HashMap::new()
         );
 
-        // Returns particular trackers if they match both userid and locator
+        // Verify that the expected tracker is returned if both the correct user_id and locator are provided
         assert_eq!(
             dbm.load_trackers(Some((locator, Some(user_id))),),
             HashMap::from([(uuid, tracker)])
