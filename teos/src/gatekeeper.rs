@@ -15,7 +15,7 @@ use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 
 /// Data regarding a user subscription with the tower.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UserInfo {
     /// Number of appointment slots available for a given user.
     pub(crate) available_slots: u32,
@@ -273,7 +273,7 @@ impl Gatekeeper {
                 let (user_id, blob_size) = dbm.get_appointment_user_and_length(*uuid).unwrap();
                 registered_users.get_mut(&user_id).unwrap().available_slots +=
                     compute_appointment_slots(blob_size, ENCRYPTED_BLOB_MAX_SIZE);
-                updated_users.insert(user_id, registered_users[&user_id]);
+                updated_users.insert(user_id, registered_users[&user_id].clone());
             }
             updated_users
         } else {

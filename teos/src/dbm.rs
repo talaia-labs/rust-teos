@@ -878,7 +878,7 @@ mod tests {
                 SUBSCRIPTION_START + i,
                 SUBSCRIPTION_EXPIRY + i,
             );
-            users.insert(user_id, user);
+            users.insert(user_id, user.clone());
             dbm.store_user(user_id, &user).unwrap();
         }
 
@@ -1251,7 +1251,7 @@ mod tests {
             // When the appointment are deleted, the user will get back slots based on the deleted data.
             // Here we can just make a number up to make sure it matches.
             user.available_slots = i as u32;
-            let updated_users = HashMap::from_iter([(user_id, user)]);
+            let updated_users = HashMap::from_iter([(user_id, user.clone())]);
 
             // Check that the db transaction had i queries on it
             assert_eq!(
@@ -1286,7 +1286,10 @@ mod tests {
             Ok { .. }
         ));
 
-        dbm.batch_remove_appointments(&[uuid], &HashMap::from_iter([(appointment.user_id, info)]));
+        dbm.batch_remove_appointments(
+            &[uuid],
+            &HashMap::from_iter([(appointment.user_id, info.clone())]),
+        );
         assert!(dbm.load_appointment(uuid).is_none());
 
         // Appointment + Tracker
