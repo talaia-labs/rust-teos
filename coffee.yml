@@ -1,0 +1,10 @@
+---
+plugin:
+  name: rust-teos
+  version: 0.2.0
+  lang: rust
+  install: |
+    cargo build --release --locked --package watchtower-plugin
+    cp target/release/watchtower-client .
+    cargo clean
+  main: watchtower-client
