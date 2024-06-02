@@ -11,12 +11,14 @@
 
 use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use bitcoin::base64;
 use bitcoin::hash_types::{BlockHash, Txid};
 use bitcoin::hashes::hex::ToHex;
+use bitcoin::network::constants::Network;
 use bitcoin::{Block, Transaction};
 use bitcoincore_rpc::Auth;
 use lightning::util::ser::Writeable;
@@ -113,13 +115,18 @@ impl<'a> BitcoindClient<'a> {
         };
 
         // Test that bitcoind is reachable.
-        let btc_network = client.get_chain().await?;
+        let (btc_network, ibd) = client.get_chain().await?;
 
-        // Assert teos runs on the same chain/network as bitcoind.
         if btc_network != teos_network {
+            // Assert teos runs on the same chain/network as bitcoind.
             Err(Error::new(
                 ErrorKind::InvalidInput,
                 format!("bitcoind is running on {btc_network} but teosd is set to run on {teos_network}"),
+            ))
+        } else if ibd && Network::from_str(&btc_network).unwrap() != Network::Regtest {
+            Err(Error::new(
+                ErrorKind::Interrupted,
+                "bitcoind is still doing IDB, start the tower once it has finished",
             ))
         } else {
             Ok(client)
@@ -160,14 +167,17 @@ impl<'a> BitcoindClient<'a> {
             .await
     }
 
-    /// Gets bitcoind's network.
-    pub async fn get_chain(&self) -> std::io::Result<String> {
+    /// Gets the chain we are running in and whether or not we're on IBD
+    pub async fn get_chain(&self) -> std::io::Result<(String, bool)> {
         // A wrapper type to extract "chain" key from getblockchaininfo JsonResponse.
-        struct BtcNetwork(String);
+        struct BtcNetwork(String, bool);
         impl TryInto<BtcNetwork> for JsonResponse {
             type Error = std::io::Error;
             fn try_into(self) -> std::io::Result<BtcNetwork> {
-                Ok(BtcNetwork(self.0["chain"].as_str().unwrap().to_string()))
+                Ok(BtcNetwork(
+                    self.0["chain"].as_str().unwrap().to_string(),
+                    self.0["initialblockdownload"].as_bool().unwrap(),
+                ))
             }
         }
 
@@ -177,6 +187,6 @@ impl<'a> BitcoindClient<'a> {
             .call_method::<BtcNetwork>("getblockchaininfo", &[])
             .await?;
 
-        Ok(btc_network.0)
+        Ok((btc_network.0, btc_network.1))
     }
 }
