@@ -1,0 +1,96 @@
+name: Build and release
+on:
+    push:
+      tags:
+        - 'v[0-9]+\.[0-9]+\.[0-9]+'
+
+jobs:
+    build:
+        name: build release binaries
+        runs-on: "ubuntu-latest"
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Install rust
+              id: rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Install cross
+              run: |
+                cargo install cross --git https://github.com/cross-rs/cross
+
+            - name: Build unix
+              id: unix_build
+              run: |
+                cross build --release --locked --target x86_64-unknown-linux-gnu
+                cross build --release --locked --target armv7-unknown-linux-gnueabihf
+                cross build --release --locked --target aarch64-unknown-linux-gnu
+
+            - name: Package unix binaries
+              run: |
+                tar -czf "teos-${{github.ref_name}}-aarch64-linux.tar.gz" --transform 's|.*/||' "target/aarch64-unknown-linux-gnu/release/teosd" "target/aarch64-unknown-linux-gnu/release/teos-cli"
+                tar -czf "teos-${{github.ref_name}}-armv7-linux.tar.gz" --transform 's|.*/||' "target/armv7-unknown-linux-gnueabihf/release/teosd" "target/armv7-unknown-linux-gnueabihf/release/teos-cli"
+                tar -czf "teos-${{github.ref_name}}-x86_64-linux.tar.gz" --transform 's|.*/||' "target/x86_64-unknown-linux-gnu/release/teosd" "target/x86_64-unknown-linux-gnu/release/teos-cli"
+                tar -czf "watchtower-client-${{github.ref_name}}-aarch64-linux.tar.gz" --transform 's|.*/||' "target/aarch64-unknown-linux-gnu/release/watchtower-client"
+                tar -czf "watchtower-client-${{github.ref_name}}-armv7-linux.tar.gz" --transform 's|.*/||' "target/armv7-unknown-linux-gnueabihf/release/watchtower-client"
+                tar -czf "watchtower-client-${{github.ref_name}}-x86_64-linux.tar.gz" --transform 's|.*/||' "target/x86_64-unknown-linux-gnu/release/watchtower-client"
+
+            - name: Upload unix artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                name: unix-binaries
+                path: |
+                  *.tar.gz
+
+            - name: Get rust version
+              id: rversion
+              run: |
+                echo "rust_version=$(rustc --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+        outputs:
+            rust-version: ${{ steps.rversion.outputs.rust_version }}
+
+    release:
+        name: Github Release
+        needs: [build]
+        runs-on: "ubuntu-latest"
+        permissions:
+            contents: write
+        steps:
+            - name: Get semver version from tag
+              id: tag_name
+              run: echo "current_version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            # - name: Get Changelog Entry
+            #   id: changelog_reader
+            #   uses: mindsers/changelog-reader-action@v2
+            #   with:
+            #     version: ${{ steps.tag_name.outputs.current_version }}
+            #     path: ./CHANGELOG.md
+
+            # - name: Get tag message
+            #   id: get_tag_message
+            #   run: |
+            #     TAG_NAME=$(echo "${GITHUB_REF}" | sed 's/refs\/tags\///')
+            #     TAG_MESSAGE=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG_NAME}")
+            #     echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+            #     echo "tag_message=${TAG_MESSAGE}" >> "$GITHUB_OUTPUT"
+
+            - name: Download Artifacts
+              uses: actions/download-artifact@v4
+              with:
+                merge-multiple: true
+
+            - name: Release
+              uses: ncipollo/release-action@v1
+              with:
+                allowUpdates: false
+                artifactErrorsFailBuild: true
+                # body: "${{ steps.changelog_reader.outputs.changes }} \n\n### Release binaries info\n\n- Release binaries were built using rust ${{ needs.build.outputs.rust-version }}\n- Linux release binaries require glibc>=2.31"
+                # body: "${{ steps.get_tag_message.outputs.tag_message }} \n\n### Release binaries info\n\n- Release binaries were built using rust ${{ needs.build.outputs.rust-version }}\n- Linux release binaries require glibc>=2.31"
+                body: "### Release binaries info\n\n- Release binaries were built using rust ${{ needs.build.outputs.rust-version }}\n- Linux release binaries require glibc>=2.31"
+                artifacts: |
+                  *.tar.gz

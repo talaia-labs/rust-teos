@@ -16,7 +16,7 @@ path = "src/main.rs"
 backoff = { version = "0.4.0", features = ["tokio"] }
 hex = { version = "0.4.3", features = [ "serde" ] }
 home = "0.5.3"
-reqwest = { version = "0.11", features = [ "blocking", "json", "socks" ] }
+reqwest = { version = "0.11", default-features = false, features = [ "blocking", "json", "socks", "rustls-tls" ] }
 log = "0.4.16"
 rusqlite = { version = "0.26.0", features = [ "bundled", "limits" ] }
 serde = "1.0.130"
