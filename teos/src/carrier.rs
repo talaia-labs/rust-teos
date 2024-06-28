@@ -31,33 +31,18 @@ pub struct Carrier {
 
 impl Carrier {
     /// Creates a new [Carrier] instance.
-    #[cfg(not(test))]
     pub fn new(
         bitcoin_cli: Arc<BitcoindClient>,
         bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
         last_known_block_height: u32,
+        #[cfg(test)] stopper: Option<crate::test_utils::BitcoindStopper>,
     ) -> Self {
         Carrier {
             bitcoin_cli,
             bitcoind_reachable,
             issued_receipts: HashMap::new(),
             block_height: last_known_block_height,
-        }
-    }
-
-    /// Creates a new [Carrier] instance.
-    #[cfg(test)]
-    pub fn new(
-        bitcoin_cli: Arc<BitcoindClient>,
-        bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
-        last_known_block_height: u32,
-        stopper: Option<crate::test_utils::BitcoindStopper>,
-    ) -> Self {
-        Carrier {
-            bitcoin_cli,
-            bitcoind_reachable,
-            issued_receipts: HashMap::new(),
-            block_height: last_known_block_height,
+            #[cfg(test)]
             _stopper: stopper,
         }
     }
