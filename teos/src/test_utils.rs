@@ -392,18 +392,28 @@ pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> Carrier {
     )
 }
 
+pub(crate) async fn create_responder_with_query(
+    chain: &mut Blockchain,
+    gatekeeper: Arc<Gatekeeper>,
+    dbm: Arc<Mutex<DBM>>,
+    query: MockedServerQuery,
+) -> Responder {
+    let height = chain.tip().height;
+    // For the local TxIndex logic to be sound, our index needs to have, at least, IRREVOCABLY_RESOLVED blocks
+    debug_assert!(height >= IRREVOCABLY_RESOLVED);
+
+    let carrier = create_carrier(query, chain.tip().height);
+    let last_n_blocks = get_last_n_blocks(chain, height as usize).await;
+
+    Responder::new(&last_n_blocks, chain.tip().height, carrier, gatekeeper, dbm)
+}
+
 pub(crate) async fn create_responder(
     chain: &mut Blockchain,
     gatekeeper: Arc<Gatekeeper>,
     dbm: Arc<Mutex<DBM>>,
 ) -> Responder {
-    let height = chain.tip().height;
-    // For the local TxIndex logic to be sound, our index needs to have, at least, IRREVOCABLY_RESOLVED blocks
-    debug_assert!(height >= IRREVOCABLY_RESOLVED);
-    let carrier = create_carrier(MockedServerQuery::Regular, height);
-    let last_n_blocks = get_last_n_blocks(chain, IRREVOCABLY_RESOLVED as usize).await;
-
-    Responder::new(&last_n_blocks, height, carrier, gatekeeper, dbm)
+    create_responder_with_query(chain, gatekeeper, dbm, MockedServerQuery::Regular).await
 }
 
 pub(crate) async fn create_watcher(

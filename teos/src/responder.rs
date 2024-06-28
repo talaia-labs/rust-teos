@@ -479,13 +479,12 @@ mod tests {
     use crate::dbm::DBM;
     use crate::rpc_errors;
     use crate::test_utils::{
-        create_carrier, generate_dummy_appointment, generate_dummy_appointment_with_user,
-        generate_uuid, get_last_n_blocks, get_random_breach, get_random_tracker, get_random_tx,
-        store_appointment_and_its_user, Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA,
-        SLOTS, START_HEIGHT,
+        create_responder_with_query, generate_dummy_appointment,
+        generate_dummy_appointment_with_user, generate_uuid, get_random_breach, get_random_tracker,
+        get_random_tx, store_appointment_and_its_user, Blockchain, MockedServerQuery, DURATION,
+        EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
 
-    use teos_common::constants::IRREVOCABLY_RESOLVED;
     use teos_common::test_utils::get_random_user_id;
 
     impl TransactionTracker {
@@ -548,24 +547,6 @@ mod tests {
         }
     }
 
-    async fn create_responder(
-        chain: &mut Blockchain,
-        gatekeeper: Arc<Gatekeeper>,
-        dbm: Arc<Mutex<DBM>>,
-        query: MockedServerQuery,
-    ) -> Responder {
-        let height = if chain.tip().height < IRREVOCABLY_RESOLVED {
-            chain.tip().height
-        } else {
-            IRREVOCABLY_RESOLVED
-        };
-
-        let carrier = create_carrier(query, chain.tip().height);
-        let last_n_blocks = get_last_n_blocks(chain, height as usize).await;
-
-        Responder::new(&last_n_blocks, chain.tip().height, carrier, gatekeeper, dbm)
-    }
-
     async fn init_responder_with_chain_and_dbm(
         mocked_query: MockedServerQuery,
         chain: &mut Blockchain,
@@ -578,7 +559,7 @@ mod tests {
             EXPIRY_DELTA,
             dbm.clone(),
         );
-        create_responder(chain, Arc::new(gk), dbm, mocked_query).await
+        create_responder_with_query(chain, Arc::new(gk), dbm, mocked_query).await
     }
 
     async fn init_responder(mocked_query: MockedServerQuery) -> Responder {
