@@ -481,8 +481,8 @@ mod tests {
     use crate::test_utils::{
         create_carrier, generate_dummy_appointment, generate_dummy_appointment_with_user,
         generate_uuid, get_last_n_blocks, get_random_breach, get_random_tracker, get_random_tx,
-        store_appointment_and_its_user, BitcoindStopper, Blockchain, MockedServerQuery, DURATION,
-        EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        store_appointment_and_its_user, Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA,
+        SLOTS, START_HEIGHT,
     };
 
     use teos_common::constants::IRREVOCABLY_RESOLVED;
@@ -553,27 +553,24 @@ mod tests {
         gatekeeper: Arc<Gatekeeper>,
         dbm: Arc<Mutex<DBM>>,
         query: MockedServerQuery,
-    ) -> (Responder, BitcoindStopper) {
+    ) -> Responder {
         let height = if chain.tip().height < IRREVOCABLY_RESOLVED {
             chain.tip().height
         } else {
             IRREVOCABLY_RESOLVED
         };
 
+        let carrier = create_carrier(query, chain.tip().height);
         let last_n_blocks = get_last_n_blocks(chain, height as usize).await;
 
-        let (carrier, bitcoind_stopper) = create_carrier(query, chain.tip().height);
-        (
-            Responder::new(&last_n_blocks, chain.tip().height, carrier, gatekeeper, dbm),
-            bitcoind_stopper,
-        )
+        Responder::new(&last_n_blocks, chain.tip().height, carrier, gatekeeper, dbm)
     }
 
     async fn init_responder_with_chain_and_dbm(
         mocked_query: MockedServerQuery,
         chain: &mut Blockchain,
         dbm: Arc<Mutex<DBM>>,
-    ) -> (Responder, BitcoindStopper) {
+    ) -> Responder {
         let gk = Gatekeeper::new(
             chain.get_block_count(),
             SLOTS,
@@ -584,7 +581,7 @@ mod tests {
         create_responder(chain, Arc::new(gk), dbm, mocked_query).await
     }
 
-    async fn init_responder(mocked_query: MockedServerQuery) -> (Responder, BitcoindStopper) {
+    async fn init_responder(mocked_query: MockedServerQuery) -> Responder {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
         init_responder_with_chain_and_dbm(mocked_query, &mut chain, dbm).await
@@ -629,7 +626,7 @@ mod tests {
         // A fresh responder has no associated data
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let (responder, _s) =
+        let responder =
             init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm.clone())
                 .await;
         assert!(responder.is_fresh());
@@ -648,7 +645,7 @@ mod tests {
         }
 
         // Create a new Responder reusing the same DB and check that the data is loaded
-        let (another_r, _) =
+        let another_r =
             init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm).await;
         assert!(!responder.is_fresh());
         assert_eq!(responder, another_r);
@@ -657,7 +654,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_breach_accepted() {
         let start_height = START_HEIGHT as u32;
-        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
+        let responder = init_responder(MockedServerQuery::Regular).await;
 
         let (user_id, uuid) = responder.store_dummy_appointment_to_db();
         let breach = get_random_breach();
@@ -689,7 +686,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_breach_accepted_in_mempool() {
         let start_height = START_HEIGHT as u32;
-        let (responder, _s) = init_responder(MockedServerQuery::InMempoool).await;
+        let responder = init_responder(MockedServerQuery::InMempoool).await;
 
         let (user_id, uuid) = responder.store_dummy_appointment_to_db();
         let breach = get_random_breach();
@@ -707,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_breach_accepted_in_txindex() {
-        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
+        let responder = init_responder(MockedServerQuery::Regular).await;
 
         let (user_id, uuid) = responder.store_dummy_appointment_to_db();
 
@@ -742,7 +739,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_breach_rejected() {
-        let (responder, _s) = init_responder(MockedServerQuery::Error(
+        let responder = init_responder(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
         ))
         .await;
@@ -760,7 +757,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_tracker() {
-        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
+        let responder = init_responder(MockedServerQuery::Regular).await;
         let start_height = START_HEIGHT as u32;
 
         let (user_id, uuid) = responder.store_dummy_appointment_to_db();
@@ -826,7 +823,7 @@ mod tests {
         // Has tracker should return true as long as the given tracker is held by the Responder.
         // As long as the tracker is in Responder.trackers and Responder.tx_tracker_map, the return
         // must be true.
-        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
+        let responder = init_responder(MockedServerQuery::Regular).await;
 
         // Add a new tracker
         let (user_id, uuid) = responder.store_dummy_appointment_to_db();
@@ -849,7 +846,7 @@ mod tests {
     async fn test_get_tracker() {
         // Should return a tracker as long as it exists
         let start_height = START_HEIGHT as u32;
-        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
+        let responder = init_responder(MockedServerQuery::Regular).await;
 
         // Store the user and the appointment in the database so we can add the tracker later on (due to FK restrictions)
         let (user_id, uuid) = responder.store_dummy_appointment_to_db();
@@ -881,7 +878,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_confirmations() {
-        let (responder, _s) = init_responder(MockedServerQuery::Regular).await;
+        let responder = init_responder(MockedServerQuery::Regular).await;
         let target_height = (START_HEIGHT * 2) as u32;
 
         // Unconfirmed transactions that miss a confirmation will be added to missed_confirmations (if not there) or their missed confirmation count till be increased
@@ -989,7 +986,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_reorged_txs() {
-        let (responder, _s) = init_responder(MockedServerQuery::InMempoool).await;
+        let responder = init_responder(MockedServerQuery::InMempoool).await;
         let mut trackers = Vec::new();
 
         for _ in 0..10 {
@@ -1022,7 +1019,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_reorged_txs_rejected() {
-        let (responder, _s) = init_responder(MockedServerQuery::Error(
+        let responder = init_responder(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_REJECTED as i64,
         ))
         .await;
@@ -1061,7 +1058,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rebroadcast_stale_txs_accepted() {
-        let (responder, _s) = init_responder(MockedServerQuery::InMempoool).await;
+        let responder = init_responder(MockedServerQuery::InMempoool).await;
         let mut statues = HashMap::new();
         let height = 100;
 
@@ -1104,7 +1101,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rebroadcast_stale_txs_rejected() {
-        let (responder, _s) = init_responder(MockedServerQuery::Error(
+        let responder = init_responder(MockedServerQuery::Error(
             rpc_errors::RPC_VERIFY_ERROR as i64,
         ))
         .await;
@@ -1155,7 +1152,7 @@ mod tests {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let start_height = START_HEIGHT * 2;
         let mut chain = Blockchain::default().with_height(start_height);
-        let (responder, _s) =
+        let responder =
             init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm).await;
 
         // filtered_block_connected is used to keep track of the confirmation received (or missed) by the trackers the Responder
@@ -1419,7 +1416,7 @@ mod tests {
     async fn test_block_disconnected() {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
-        let (responder, _s) =
+        let responder =
             init_responder_with_chain_and_dbm(MockedServerQuery::Regular, &mut chain, dbm).await;
 
         // Add user to the database
