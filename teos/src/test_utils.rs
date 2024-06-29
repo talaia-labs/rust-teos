@@ -388,7 +388,7 @@ pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> Carrier {
         bitcoin_cli,
         bitcoind_reachable,
         height,
-        Some(bitcoind_mock.stopper),
+        bitcoind_mock.stopper,
     )
 }
 
@@ -531,7 +531,7 @@ impl Debug for BitcoindStopper {
 pub(crate) struct BitcoindMock {
     pub url: String,
     pub server: Server,
-    stopper: BitcoindStopper,
+    pub stopper: BitcoindStopper,
 }
 
 #[derive(Default)]
