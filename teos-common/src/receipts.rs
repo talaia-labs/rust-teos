@@ -9,11 +9,11 @@ use crate::{cryptography, UserId};
 /// Proof that a user has registered with a tower. This serves two purposes:
 ///
 /// - First, the user is able to prove that the tower agreed on providing a service. If a tower refuses to accept appointments
-/// from a user (claiming the subscription has expired) but the expiry time has still not passed and the tower cannot
-/// provide the relevant appointments signed by the user, it means it is cheating.
+///   from a user (claiming the subscription has expired) but the expiry time has still not passed and the tower cannot
+///   provide the relevant appointments signed by the user, it means it is cheating.
 /// - Second, it serves as proof, alongside an appointment receipt, that an appointment was not fulfilled. A registration receipt
-/// specifies a subscription period (`subscription_start` - `subscription_expiry`) and the appointment a `start_block` so inclusion
-/// can be proved.
+///   specifies a subscription period (`subscription_start` - `subscription_expiry`) and the appointment a `start_block` so inclusion
+///   can be proved.
 ///
 /// TODO: / DISCUSS: In order to minimize the amount of receipts the user has to store, the tower could batch subscription receipts
 /// as long as the user info is still known. That is, if a user has a subscription with range (S, E) and the user renews the subscription
