@@ -1,6 +1,6 @@
 name: CI tests for CLN watchtower-plugin
 
-on: 
+on:
   push:
     branches:
       - master
@@ -19,6 +19,9 @@ jobs:
         with:
           python-version: '3.9'
           check-latest: true
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Create CLN cache
         id: cache-cln
         uses: actions/cache@v4
@@ -28,11 +31,11 @@ jobs:
           path: lightning
           key: ${{ runner.os }}-build-${{ env.cache-name }}-v${{ env.cln_version }}
       - name: Compile CLN
-        env: 
+        env:
           PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
         if: ${{ steps.cache-cln.outputs.cache-hit != 'true' }}
         run: |
-          sudo apt-get update && sudo apt-get install -y gettext protobuf-compiler
+          sudo apt-get update && sudo apt-get install -y gettext
           git clone https://github.com/ElementsProject/lightning.git && cd lightning && git checkout v${{ env.cln_version }}
           pip install --user poetry && poetry install
           ./configure && poetry run make
@@ -46,6 +49,9 @@ jobs:
         with:
           python-version: '3.9'
           check-latest: true
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install bitcoind
         run: |
           wget https://bitcoincore.org/bin/bitcoin-core-${{ env.bitcoind_version }}/bitcoin-${{ env.bitcoind_version }}-x86_64-linux-gnu.tar.gz
@@ -64,7 +70,7 @@ jobs:
           cd lightning && sudo make install
       - name: Install teos and the plugin
         run: |
-          cargo install --locked --path teos 
+          cargo install --locked --path teos
           cargo install --locked --path watchtower-plugin
       - name: Add test dependencies
         run: |
