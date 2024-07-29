@@ -341,6 +341,17 @@ pub(crate) fn get_random_tracker(
     TransactionTracker::new(breach, user_id, status)
 }
 
+pub(crate) fn generate_dummy_tracker(
+    user_id: UserId,
+    dispute_tx: Transaction,
+) -> TransactionTracker {
+    TransactionTracker::new(
+        Breach::new(dispute_tx.clone(), get_random_tx()),
+        user_id,
+        ConfirmationStatus::ConfirmedIn(100),
+    )
+}
+
 pub(crate) fn store_appointment_and_its_user(dbm: &DBM, appointment: &ExtendedAppointment) {
     dbm.store_user(
         appointment.user_id,
