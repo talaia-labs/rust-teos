@@ -5,7 +5,7 @@
  * https://github.com/ElementsProject/lightning/blob/master/LICENSE
 */
 
-use rcgen::{Certificate, KeyPair, RcgenError};
+use rcgen::{Certificate, Error as RcgenError, KeyPair};
 use std::convert::TryFrom;
 use std::path::Path;
 
@@ -30,21 +30,20 @@ impl From<std::io::Error> for GenCertificateFailure {
 
 /// Just a wrapper around a certificate and an associated keypair.
 #[derive(Clone, Debug)]
-pub struct Identity {
+struct Identity {
     pub key: Vec<u8>,
     pub certificate: Vec<u8>,
 }
 
-impl TryFrom<&Identity> for Certificate {
+impl TryFrom<&Identity> for (Certificate, KeyPair) {
     type Error = RcgenError;
 
-    fn try_from(id: &Identity) -> Result<Certificate, RcgenError> {
-        let keystr = String::from_utf8_lossy(&id.key);
-        let key = KeyPair::from_pem(&keystr)?;
-        let certstr = String::from_utf8_lossy(&id.certificate);
-        let params = rcgen::CertificateParams::from_ca_cert_pem(&certstr, key)?;
-        let cert = Certificate::from_params(params)?;
-        Ok(cert)
+    fn try_from(id: &Identity) -> Result<(Certificate, KeyPair), RcgenError> {
+        let key = KeyPair::from_pem(&String::from_utf8_lossy(&id.key))?;
+        let params =
+            rcgen::CertificateParams::from_ca_cert_pem(&String::from_utf8_lossy(&id.certificate))?;
+        let cert = params.self_signed(&key)?;
+        Ok((cert, key))
     }
 }
 
@@ -72,30 +71,30 @@ fn generate_or_load_identity(
     // Did we have to generate a new key? In that case we also need to regenerate the certificate.
     if !key_path.exists() || !cert_path.exists() {
         log::debug!("Generating a new keypair in {key_path:?}, it didn't exist",);
-        let keypair = KeyPair::generate(&rcgen::PKCS_ECDSA_P256_SHA256)?;
+        let keypair = KeyPair::generate()?;
         std::fs::write(&key_path, keypair.serialize_pem())?;
         log::debug!("Generating a new certificate for key {key_path:?} at {cert_path:?}",);
 
         // Configure the certificate we want.
-        let subject_alt_names = vec!["cln".to_string(), "localhost".to_string()];
-        let mut params = rcgen::CertificateParams::new(subject_alt_names);
-        params.key_pair = Some(keypair);
-        params.alg = &rcgen::PKCS_ECDSA_P256_SHA256;
+        let subject_alt_names = vec!["teos".to_string(), "localhost".to_string()];
+        let mut params = rcgen::CertificateParams::new(subject_alt_names)?;
         if parent.is_none() {
             params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         } else {
-            params.is_ca = rcgen::IsCa::SelfSignedOnly;
+            params.is_ca = rcgen::IsCa::NoCa;
         }
         params
             .distinguished_name
             .push(rcgen::DnType::CommonName, name);
 
-        let cert = Certificate::from_params(params)?;
         std::fs::write(
             &cert_path,
             match parent {
-                None => cert.serialize_pem()?,
-                Some(ca) => cert.serialize_pem_with_signer(&Certificate::try_from(ca)?)?,
+                None => params.self_signed(&keypair)?.pem(),
+                Some(ca) => {
+                    let (ca_cert, ca_key) = <(Certificate, KeyPair)>::try_from(ca)?;
+                    params.signed_by(&keypair, &ca_cert, &ca_key)?.pem()
+                }
             },
         )?;
     }

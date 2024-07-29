@@ -25,6 +25,10 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build on Rust ${{ matrix.toolchain }}
         run: |
           cargo build ${{ matrix.arguments }} --verbose --color always
@@ -42,6 +46,10 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run rustfmt
         run: |
           cargo fmt --verbose --check -- --color always
