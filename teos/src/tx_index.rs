@@ -378,7 +378,7 @@ mod tests {
             // Check that the block data is not in the cache anymore
             assert_eq!(cache.blocks().len(), cache.size - i - 1);
             assert!(!cache.blocks().contains(&header.block_hash()));
-            assert!(cache.tx_in_block.get(&header.block_hash()).is_none());
+            assert!(!cache.tx_in_block.contains_key(&header.block_hash()));
             for locator in locators.iter() {
                 assert!(!cache.contains_key(locator));
             }

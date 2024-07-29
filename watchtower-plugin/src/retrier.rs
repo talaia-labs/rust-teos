@@ -432,7 +432,7 @@ impl Retrier {
         // Create a new scope so we can get all the data only locking the WTClient once.
         let (tower_id, status, net_addr, user_id, user_sk, proxy) = {
             let wt_client = self.wt_client.lock().unwrap();
-            if wt_client.towers.get(&self.tower_id).is_none() {
+            if !wt_client.towers.contains_key(&self.tower_id) {
                 return Err(Error::permanent(RetryError::Abandoned));
             }
 

@@ -385,7 +385,7 @@ async fn abandon_tower(
 ) -> Result<serde_json::Value, Error> {
     let tower_id = TowerId::try_from(v).map_err(|e| anyhow!(e))?;
     let mut state = plugin.state().lock().unwrap();
-    if state.towers.get(&tower_id).is_some() {
+    if state.towers.contains_key(&tower_id) {
         state.remove_tower(tower_id).unwrap();
         Ok(json!(format!("{tower_id} successfully abandoned")))
     } else {
