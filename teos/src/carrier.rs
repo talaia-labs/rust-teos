@@ -24,6 +24,9 @@ pub struct Carrier {
     issued_receipts: HashMap<Txid, ConfirmationStatus>,
     /// The last known block height.
     block_height: u32,
+    #[cfg(test)]
+    /// A stopper that stops the mock bitcoind server in tests when the [`Carrier`] is dropped.
+    _stopper: crate::test_utils::BitcoindStopper,
 }
 
 impl Carrier {
@@ -32,12 +35,15 @@ impl Carrier {
         bitcoin_cli: Arc<BitcoindClient>,
         bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
         last_known_block_height: u32,
+        #[cfg(test)] stopper: crate::test_utils::BitcoindStopper,
     ) -> Self {
         Carrier {
             bitcoin_cli,
             bitcoind_reachable,
             issued_receipts: HashMap::new(),
             block_height: last_known_block_height,
+            #[cfg(test)]
+            _stopper: stopper,
         }
     }
 
@@ -212,7 +218,12 @@ mod tests {
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
 
-        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let mut carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
 
         // Lets add some dummy data into the cache
         for i in 0..10 {
@@ -236,7 +247,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let mut carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -254,7 +270,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let mut carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -274,7 +295,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let mut carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -296,7 +322,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let mut carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -319,7 +350,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let mut carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -338,7 +374,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let mut carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let r = carrier.send_transaction(&tx);
 
@@ -358,7 +399,12 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(false), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable.clone(), start_height);
+        let mut carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable.clone(),
+            start_height,
+            bitcoind_mock.stopper,
+        );
 
         let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
         let delay = std::time::Duration::new(3, 0);
@@ -388,7 +434,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         assert!(carrier.in_mempool(&txid));
     }
@@ -401,7 +452,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         assert!(!carrier.in_mempool(&txid));
     }
@@ -416,7 +472,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         assert!(!carrier.in_mempool(&txid));
     }
@@ -430,7 +491,12 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         start_server(bitcoind_mock.server);
 
-        let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
+        let carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable,
+            start_height,
+            bitcoind_mock.stopper,
+        );
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         assert!(!carrier.in_mempool(&txid));
     }
@@ -442,7 +508,12 @@ mod tests {
         let bitcoind_reachable = Arc::new((Mutex::new(false), Condvar::new()));
         let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
         let start_height = START_HEIGHT as u32;
-        let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable.clone(), start_height);
+        let carrier = Carrier::new(
+            bitcoin_cli,
+            bitcoind_reachable.clone(),
+            start_height,
+            bitcoind_mock.stopper,
+        );
 
         let txid = Txid::from_hex(TXID_HEX).unwrap();
         let delay = std::time::Duration::new(3, 0);

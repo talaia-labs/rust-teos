@@ -446,7 +446,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_all_appointments() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         let response = internal_api
             .get_all_appointments(Request::new(()))
@@ -459,7 +459,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_all_appointments_watcher() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // Add data to the Watcher so we can retrieve it later on
         let (user_sk, user_pk) = get_random_keypair();
@@ -487,7 +487,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_all_appointments_responder() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // Add data to the Responser so we can retrieve it later on
         internal_api.watcher.add_random_tracker_to_responder();
@@ -507,7 +507,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_appointments() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         let locator = Locator::new(get_random_tx().txid()).to_vec();
         let response = internal_api
@@ -521,7 +521,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_appointments_watcher() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         for i in 0..3 {
             // Create a dispute tx to be used for creating different dummy appointments with the same locator.
@@ -571,7 +571,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_appointments_responder() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         for i in 0..3 {
             // Create a dispute tx to be used for creating different trackers.
@@ -622,7 +622,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_tower_info_empty() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         let response = internal_api
             .get_tower_info(Request::new(()))
@@ -638,7 +638,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_tower_info() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // Register a user
         let (user_sk, user_pk) = get_random_keypair();
@@ -675,7 +675,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_users() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
         let mut users = HashSet::new();
 
         // Add a couple of users
@@ -697,7 +697,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_users_empty() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         let response = internal_api
             .get_users(Request::new(()))
@@ -710,7 +710,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_user() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // Register a user and get it back
         let (user_sk, user_pk) = get_random_keypair();
@@ -752,7 +752,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_get_user_not_found() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // Non-registered user
         let (_, user_pk) = get_random_keypair();
@@ -773,7 +773,7 @@ mod tests_private_api {
 
     #[tokio::test]
     async fn test_stop() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         assert!(!internal_api.shutdown_trigger.is_triggered());
         internal_api.stop(Request::new(())).await.unwrap();
@@ -795,7 +795,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_register() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         let (_, user_pk) = get_random_keypair();
 
@@ -815,7 +815,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_register_wrong_user_id() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         let mut user_ids = Vec::new();
 
@@ -846,7 +846,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_register_max_slots() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
+        let internal_api = create_api_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
 
         let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk).to_vec();
@@ -874,7 +874,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_register_service_unavailable() {
-        let (internal_api, _s) =
+        let internal_api =
             create_api_with_config(ApiConfig::new(u32::MAX, DURATION).bitcoind_unreachable()).await;
 
         let (_, user_pk) = get_random_keypair();
@@ -894,7 +894,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_add_appointment() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // User must be registered
         let (user_sk, user_pk) = get_random_keypair();
@@ -920,7 +920,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_add_appointment_non_registered() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // User is not registered this time
         let (user_sk, _) = get_random_keypair();
@@ -948,7 +948,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_add_appointment_not_enough_slots() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(0, DURATION)).await;
+        let internal_api = create_api_with_config(ApiConfig::new(0, DURATION)).await;
 
         // User is registered but has no slots
         let (user_sk, user_pk) = get_random_keypair();
@@ -977,7 +977,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_add_appointment_subscription_expired() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
+        let internal_api = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
 
         // User is registered but subscription is expired
         let (user_sk, user_pk) = get_random_keypair();
@@ -1003,7 +1003,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_add_appointment_already_triggered() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
@@ -1042,7 +1042,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_add_appointment_service_unavailable() {
-        let (internal_api, _s) =
+        let internal_api =
             create_api_with_config(ApiConfig::new(u32::MAX, DURATION).bitcoind_unreachable()).await;
 
         let (user_sk, _) = get_random_keypair();
@@ -1066,7 +1066,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_appointment() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // The user must be registered
         let (user_sk, user_pk) = get_random_keypair();
@@ -1099,7 +1099,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_appointment_non_registered() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // Add a first user to link the appointment to him
         let (user_sk, user_pk) = get_random_keypair();
@@ -1127,7 +1127,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_appointment_non_existent() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // The user is registered but the appointment does not exist
         let (user_sk, user_pk) = get_random_keypair();
@@ -1154,7 +1154,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_appointment_subscription_expired() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
+        let internal_api = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
 
         // Register the user
         let (user_sk, user_pk) = get_random_keypair();
@@ -1182,7 +1182,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_appointment_service_unavailable() {
-        let (internal_api, _s) =
+        let internal_api =
             create_api_with_config(ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()).await;
 
         let (user_sk, _) = get_random_keypair();
@@ -1205,7 +1205,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_subscription_info() {
-        let (internal_api, _s) = create_api().await;
+        let internal_api = create_api().await;
 
         // The user must be registered
         let (user_sk, user_pk) = get_random_keypair();
@@ -1229,7 +1229,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_subscription_info_non_registered() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
+        let internal_api = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
 
         // The user is not registered
         let (user_sk, _) = get_random_keypair();
@@ -1252,7 +1252,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_subscription_info_expired() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
+        let internal_api = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
 
         // The user is registered but the subscription has expired
         let (user_sk, user_pk) = get_random_keypair();
@@ -1276,7 +1276,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_subscription_info_service_unavailable() {
-        let (internal_api, _s) =
+        let internal_api =
             create_api_with_config(ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()).await;
 
         let (user_sk, _) = get_random_keypair();
