@@ -12,8 +12,8 @@ black = "^22.6.0"
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.2"
 pytest-timeout = "^2.1.0"
-pyln-testing = "^0.12.1"
-pyln-client = "^23.11"
+pyln-testing = "^24.2.1"
+pyln-client = "^24.2.1"
 
 
 [build-system]

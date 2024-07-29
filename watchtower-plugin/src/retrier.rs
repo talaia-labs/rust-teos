@@ -103,7 +103,7 @@ impl RetryManager {
                     } else if let Some(retrier) = self.retriers.get(&tower_id) {
                         if retrier.is_idle() {
                             if !data.is_none() {
-                                log::error!("Data was send to an idle retier. This should have never happened. Please report! ({data:?})");
+                                log::error!("Data was send to an idle retrier. This should have never happened. Please report! ({data:?})");
                                 continue;
                             }
                             log::info!(
@@ -774,7 +774,7 @@ mod tests {
             .unwrap()
             .is_running());
 
-        // Wait until the task gives up and check again (this gives up due to accumulation of transient errors, so the retiers will be idle).
+        // Wait until the task gives up and check again (this gives up due to accumulation of transient errors, so the retriers will be idle).
         wait_until!(wt_client
             .lock()
             .unwrap()

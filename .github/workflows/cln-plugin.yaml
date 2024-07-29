@@ -1,10 +1,14 @@
 name: CI tests for CLN watchtower-plugin
 
-on: [push, pull_request]
+on: 
+  push:
+    branches:
+      - master
+  pull_request:
 
 env:
-  bitcoind_version: 0.20.1
-  cln_version: 0.12.1
+  bitcoind_version: "27.0"
+  cln_version: "24.02.2"
 
 jobs:
   cache-cln:
@@ -28,10 +32,10 @@ jobs:
           PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
         if: ${{ steps.cache-cln.outputs.cache-hit != 'true' }}
         run: |
-          sudo apt-get update && sudo apt-get install gettext
+          sudo apt-get update && sudo apt-get install -y gettext protobuf-compiler
           git clone https://github.com/ElementsProject/lightning.git && cd lightning && git checkout v${{ env.cln_version }}
           pip install --user poetry && poetry install
-          ./configure --enable-developer && poetry run make
+          ./configure && poetry run make
 
   cln-plugin:
     needs: cache-cln
@@ -69,4 +73,4 @@ jobs:
       - name: Run tests
         run: |
           cd watchtower-plugin/tests
-          DEVELOPER=1 SLOW_MACHINE=1 poetry run pytest test.py --log-cli-level=INFO -s
+          VALGRIND=0 SLOW_MACHINE=1 poetry run pytest test.py --log-cli-level=INFO -s
