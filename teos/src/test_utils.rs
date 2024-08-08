@@ -23,17 +23,22 @@ use bitcoin::blockdata::script::{Builder, Script};
 use bitcoin::blockdata::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use bitcoin::hash_types::BlockHash;
 use bitcoin::hash_types::Txid;
+use bitcoin::hashes::sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::network::constants::Network;
+use bitcoin::secp256k1::Secp256k1;
 use bitcoin::util::hash::bitcoin_merkle_root;
 use bitcoin::util::uint::Uint256;
 use bitcoin::Witness;
+use lightning::ln::PaymentSecret;
 use lightning_block_sync::poll::{
     ChainPoller, Poll, Validate, ValidatedBlock, ValidatedBlockHeader,
 };
 use lightning_block_sync::{
     AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError, UnboundedCache,
 };
+
+use lightning_invoice::{Currency, Invoice, InvoiceBuilder};
 
 use teos_common::constants::IRREVOCABLY_RESOLVED;
 use teos_common::cryptography::{get_random_bytes, get_random_keypair};
@@ -44,6 +49,7 @@ use crate::api::internal::InternalAPI;
 use crate::carrier::Carrier;
 use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::fees::ValidatePayment;
 use crate::gatekeeper::{Gatekeeper, UserInfo};
 use crate::protos as msgs;
 use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
@@ -344,7 +350,12 @@ pub(crate) fn get_random_tracker(
 pub(crate) fn store_appointment_and_its_user(dbm: &DBM, appointment: &ExtendedAppointment) {
     dbm.store_user(
         appointment.user_id,
-        &UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY),
+        &UserInfo::new(
+            AVAILABLE_SLOTS,
+            SUBSCRIPTION_START,
+            SUBSCRIPTION_EXPIRY,
+            None,
+        ),
     )
     // It's ok if the user is already stored.
     .ok();
@@ -438,14 +449,16 @@ pub(crate) struct ApiConfig {
     slots: u32,
     duration: u32,
     bitcoind_reachable: bool,
+    validator: bool,
 }
 
 impl ApiConfig {
-    pub fn new(slots: u32, duration: u32) -> Self {
+    pub fn new(slots: u32, duration: u32, validator: bool) -> Self {
         Self {
             slots,
             duration,
             bitcoind_reachable: true,
+            validator,
         }
     }
 
@@ -461,6 +474,7 @@ impl Default for ApiConfig {
             slots: SLOTS,
             duration: DURATION,
             bitcoind_reachable: true,
+            validator: false,
         }
     }
 }
@@ -471,6 +485,15 @@ pub(crate) async fn create_api_with_config(
     let bitcoind_mock = BitcoindMock::new(MockOptions::default());
     let mut chain = Blockchain::default().with_height(START_HEIGHT);
 
+    let validator = if api_config.validator {
+        Some(Arc::new(Mutex::new(MockPaymentValidator::new(false)))
+            as Arc<
+                Mutex<(dyn ValidatePayment + std::marker::Send + 'static)>,
+            >)
+    } else {
+        None
+    };
+
     let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
     let gk = Arc::new(Gatekeeper::new(
         chain.get_block_count(),
@@ -478,6 +501,7 @@ pub(crate) async fn create_api_with_config(
         api_config.duration,
         EXPIRY_DELTA,
         dbm.clone(),
+        validator.clone(),
     ));
     let responder =
         create_responder(&mut chain, gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
@@ -498,6 +522,7 @@ pub(crate) async fn create_api_with_config(
             vec![msgs::NetworkAddress::from_ipv4("address".to_string(), 21)],
             bitcoind_reachable,
             shutdown_trigger,
+            validator,
         )),
         stopper,
     )
@@ -621,4 +646,43 @@ pub(crate) fn start_server(server: Server) {
     thread::spawn(move || {
         server.wait();
     });
+}
+
+pub(crate) fn generate_dummy_invoice() -> Invoice {
+    let (sk, _) = get_random_keypair();
+    let payment_hash = sha256::Hash::from_slice(&[0; 32][..]).unwrap();
+    let payment_secret = PaymentSecret([42u8; 32]);
+
+    InvoiceBuilder::new(Currency::Bitcoin)
+        .description("Test invoice".into())
+        .payment_hash(payment_hash)
+        .payment_secret(payment_secret)
+        .current_timestamp()
+        .min_final_cltv_expiry(144)
+        .build_signed(|hash| Secp256k1::new().sign_ecdsa_recoverable(hash, &sk))
+        .expect("Couldn't create an invoice")
+}
+
+pub(crate) struct MockPaymentValidator {
+    paid: bool,
+}
+
+impl MockPaymentValidator {
+    fn new(paid: bool) -> Self {
+        Self { paid }
+    }
+
+    fn set_paid(&mut self, paid: bool) {
+        self.paid = paid;
+    }
+}
+
+impl ValidatePayment for MockPaymentValidator {
+    fn get_invoice(&self) -> Invoice {
+        generate_dummy_invoice()
+    }
+
+    fn validate(&self, _invoice: Invoice) -> bool {
+        self.paid
+    }
 }

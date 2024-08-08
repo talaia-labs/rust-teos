@@ -17,6 +17,19 @@ message RegisterRequest {
     string subscription_signature = 5;
   }
 
+message PayRequest {
+  // Requests an invoice from the tower so that the user can make a payment.
+
+  bytes user_id = 1;
+}
+
+message PayResponse {
+  // Response to a PayRequest containing an invoice for the client to pay.
+
+  bytes user_id = 1;
+  string invoice = 2;
+}
+
   message GetSubscriptionInfoRequest {
     // Request to get a specific user's subscription info.
 

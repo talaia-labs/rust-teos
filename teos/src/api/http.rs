@@ -687,7 +687,7 @@ mod tests_methods {
     #[tokio::test]
     async fn test_register_max_slots() {
         let (server_addr, _, _s) =
-            run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
+            run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION, false)).await;
         let user_id = get_random_user_id();
 
         // Register once, this should go trough and set slots to the limit
@@ -724,7 +724,7 @@ mod tests_methods {
     #[tokio::test]
     async fn test_register_service_unavailable() {
         let (server_addr, _, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+            ApiConfig::new(SLOTS, DURATION, false).bitcoind_unreachable(),
         )
         .await;
         let user_id = get_random_user_id();
@@ -819,7 +819,7 @@ mod tests_methods {
     async fn test_add_appointment_already_triggered() {
         // Get the InternalAPI so we can mess with the inner state
         let (server_addr, internal_api, _s) =
-            run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
+            run_tower_in_background_with_config(ApiConfig::new(u32::MAX, DURATION, false)).await;
 
         // Register
         let (user_sk, user_pk) = cryptography::get_random_keypair();
@@ -870,7 +870,7 @@ mod tests_methods {
     #[tokio::test]
     async fn test_add_appointment_service_unavailable() {
         let (server_addr, _, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+            ApiConfig::new(SLOTS, DURATION, false).bitcoind_unreachable(),
         )
         .await;
         let (user_sk, _) = cryptography::get_random_keypair();
@@ -1031,7 +1031,7 @@ mod tests_methods {
     #[tokio::test]
     async fn test_get_appointment_service_unavailable() {
         let (server_addr, _, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+            ApiConfig::new(SLOTS, DURATION, false).bitcoind_unreachable(),
         )
         .await;
 
@@ -1130,7 +1130,7 @@ mod tests_methods {
     async fn test_get_subscription_info_service_unavailable() {
         let (user_sk, _) = cryptography::get_random_keypair();
         let (server_addr, _, _s) = run_tower_in_background_with_config(
-            ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable(),
+            ApiConfig::new(SLOTS, DURATION, false).bitcoind_unreachable(),
         )
         .await;
 

@@ -580,6 +580,7 @@ mod tests {
             DURATION,
             EXPIRY_DELTA,
             dbm.clone(),
+            None,
         );
         create_responder(chain, Arc::new(gk), dbm, mocked_query).await
     }

@@ -37,6 +37,7 @@ torut = "0.2.1"
 bitcoin = { version = "0.28.0", features = [ "base64" ] }
 bitcoincore-rpc = "0.15.0"
 lightning = "0.0.108"
+lightning-invoice = "0.16.0"
 lightning-net-tokio = "0.0.108"
 lightning-block-sync = { version = "0.0.108", features = [ "rpc-client" ] }
 
