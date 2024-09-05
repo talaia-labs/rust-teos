@@ -31,6 +31,8 @@ pub struct GetUserData {
 pub struct GetAppointmentsData {
     /// The locator of the appointments (16-byte hexadecimal string).
     pub locator: String,
+    /// The user identifier (33-byte compressed public key).
+    pub user_id: Option<String>,
 }
 
 /// Holds all the command line options and commands.

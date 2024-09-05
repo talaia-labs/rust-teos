@@ -2,7 +2,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use tonic::{Code, Request, Response, Status};
 use triggered::Trigger;
 
-use crate::extended_appointment::UUID;
 use crate::protos as msgs;
 use crate::protos::private_tower_services_server::PrivateTowerServices;
 use crate::protos::public_tower_services_server::PublicTowerServices;
@@ -280,32 +279,42 @@ impl PrivateTowerServices for Arc<InternalAPI> {
                 .map_or("an unknown address".to_owned(), |a| a.to_string())
         );
 
-        let mut matching_appointments = vec![];
-        let locator = Locator::from_slice(&request.into_inner().locator).map_err(|_| {
+        let req_data = request.into_inner();
+        let locator = Locator::from_slice(&req_data.locator).map_err(|_| {
             Status::new(
                 Code::InvalidArgument,
                 "The provided locator does not match the expected format (16-byte hexadecimal string)",
             )
         })?;
 
-        for (_, appointment) in self
+        let user_id = req_data
+            .user_id
+            .map(|id| UserId::from_slice(&id))
+            .transpose()
+            .map_err(|_| {
+                Status::new(
+                    Code::InvalidArgument,
+                    "The Provided user_id does not match expected format (33-byte hex string)",
+                )
+            })?;
+
+        let mut matching_appointments: Vec<common_msgs::AppointmentData> = self
             .watcher
-            .get_watcher_appointments_with_locator(locator)
-            .into_iter()
-        {
-            matching_appointments.push(common_msgs::AppointmentData {
+            .get_watcher_appointments_with_locator(locator, user_id)
+            .into_values()
+            .map(|appointment| common_msgs::AppointmentData {
                 appointment_data: Some(
                     common_msgs::appointment_data::AppointmentData::Appointment(
                         appointment.inner.into(),
                     ),
                 ),
             })
-        }
+            .collect();
 
-        for (_, tracker) in self
+        for tracker in self
             .watcher
-            .get_responder_trackers_with_locator(locator)
-            .into_iter()
+            .get_responder_trackers_with_locator(locator, user_id)
+            .into_values()
         {
             matching_appointments.push(common_msgs::AppointmentData {
                 appointment_data: Some(common_msgs::appointment_data::AppointmentData::Tracker(
@@ -390,10 +399,9 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             Some((info, locators)) => Ok(Response::new(msgs::GetUserResponse {
                 available_slots: info.available_slots,
                 subscription_expiry: info.subscription_expiry,
-                // TODO: Should make it return locators and make `get_appointments` queryable using the (user_id, locator) pair for consistency.
                 appointments: locators
                     .into_iter()
-                    .map(|locator| UUID::new(locator, user_id).to_vec())
+                    .map(|locator| locator.to_vec())
                     .collect(),
             })),
             None => Err(Status::new(Code::NotFound, "User not found")),
@@ -434,6 +442,8 @@ mod tests_private_api {
     use bitcoin::hashes::Hash;
     use bitcoin::Txid;
 
+    use rand::{self, thread_rng, Rng};
+
     use crate::responder::{ConfirmationStatus, TransactionTracker};
     use crate::test_utils::{
         create_api, generate_dummy_appointment, generate_dummy_appointment_with_user,
@@ -442,7 +452,7 @@ mod tests_private_api {
     use crate::watcher::Breach;
 
     use teos_common::cryptography::{self, get_random_keypair};
-    use teos_common::test_utils::get_random_user_id;
+    use teos_common::test_utils::{get_random_locator, get_random_user_id};
 
     #[tokio::test]
     async fn test_get_all_appointments() {
@@ -511,7 +521,23 @@ mod tests_private_api {
 
         let locator = Locator::new(get_random_tx().txid()).to_vec();
         let response = internal_api
-            .get_appointments(Request::new(msgs::GetAppointmentsRequest { locator }))
+            .get_appointments(Request::new(msgs::GetAppointmentsRequest {
+                locator,
+                user_id: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(matches!(response, msgs::GetAppointmentsResponse { .. }));
+
+        let user_id = get_random_user_id().to_vec();
+        let locator = get_random_locator().to_vec();
+        let response = internal_api
+            .get_appointments(Request::new(msgs::GetAppointmentsRequest {
+                locator,
+                user_id: Some(user_id),
+            }))
             .await
             .unwrap()
             .into_inner();
@@ -520,15 +546,17 @@ mod tests_private_api {
     }
 
     #[tokio::test]
-    async fn test_get_appointments_watcher() {
+    async fn test_get_appointments_watcher_without_userid() {
         let (internal_api, _s) = create_api().await;
 
         for i in 0..3 {
             // Create a dispute tx to be used for creating different dummy appointments with the same locator.
             let dispute_txid = get_random_tx().txid();
+            let locator = Locator::new(dispute_txid);
 
             // The number of different appointments to create for this dispute tx.
-            let appointments_to_create = 4 * i + 7;
+            let random_number = 4 * i + 7;
+            let appointments_to_create = random_number;
 
             // Add that many appointments to the watcher.
             for _ in 0..appointments_to_create {
@@ -542,12 +570,11 @@ mod tests_private_api {
                     .unwrap();
             }
 
-            let locator = Locator::new(dispute_txid);
-
             // Query for the current locator and assert it retrieves correct appointments.
             let response = internal_api
                 .get_appointments(Request::new(msgs::GetAppointmentsRequest {
                     locator: locator.to_vec(),
+                    user_id: None,
                 }))
                 .await
                 .unwrap()
@@ -558,6 +585,62 @@ mod tests_private_api {
             for app_data in response.appointments {
                 assert!(matches!(
                     app_data.appointment_data,
+                    Some(common_msgs::appointment_data::AppointmentData::Appointment(
+                        common_msgs::Appointment {
+                            locator: ref app_loc,
+                            ..
+                        }
+                    )) if Locator::from_slice(app_loc).unwrap() == locator
+                ));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_appointments_watcher_with_userid() {
+        let (internal_api, _s) = create_api().await;
+
+        for i in 0..3 {
+            // Create a dispute tx to be used for creating different dummy appointments with the same locator.
+            let dispute_txid = get_random_tx().txid();
+            let locator = Locator::new(dispute_txid);
+
+            // The number of different appointments to create for this dispute tx.
+            let random_number = 4 * i + 7;
+            let appointments_to_create = random_number;
+
+            let mut random_users_list = Vec::new();
+
+            // Add that many appointments to the watcher.
+            for _ in 0..appointments_to_create {
+                let (user_sk, user_pk) = get_random_keypair();
+                let user_id = UserId(user_pk);
+                internal_api.watcher.register(user_id).unwrap();
+                random_users_list.push(user_id);
+                let appointment = generate_dummy_appointment(Some(&dispute_txid)).inner;
+                let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+                internal_api
+                    .watcher
+                    .add_appointment(appointment, signature)
+                    .unwrap();
+            }
+
+            for user_id in random_users_list.into_iter() {
+                let response = internal_api
+                    .get_appointments(Request::new(msgs::GetAppointmentsRequest {
+                        locator: locator.to_vec(),
+                        user_id: Some(user_id.to_vec()),
+                    }))
+                    .await
+                    .unwrap()
+                    .into_inner();
+
+                // Verify that only a single appointment is returned
+                assert_eq!(response.appointments.len(), 1);
+
+                // Verify that the appointment have the current locator
+                assert!(matches!(
+                    response.appointments[0].appointment_data,
                     Some(common_msgs::appointment_data::AppointmentData::Appointment(
                         common_msgs::Appointment {
                             locator: ref app_loc,
@@ -581,11 +664,19 @@ mod tests_private_api {
             // The number of different trackers to create for this dispute tx.
             let trackers_to_create = 4 * i + 7;
 
+            let random_tracker_num = thread_rng().gen_range(0..trackers_to_create);
+            let random_user_id = get_random_user_id();
+
             // Add that many trackers to the responder.
-            for _ in 0..trackers_to_create {
+            for i in 0..trackers_to_create {
+                let user_id = if i == random_tracker_num {
+                    random_user_id
+                } else {
+                    get_random_user_id()
+                };
                 let tracker = TransactionTracker::new(
                     breach.clone(),
-                    get_random_user_id(),
+                    user_id,
                     ConfirmationStatus::ConfirmedIn(100),
                 );
                 internal_api
@@ -595,16 +686,17 @@ mod tests_private_api {
 
             let locator = Locator::new(dispute_tx.txid());
 
-            // Query for the current locator and assert it retrieves correct trackers.
+            // Query for the current locator without the optional user_id.
             let response = internal_api
                 .get_appointments(Request::new(msgs::GetAppointmentsRequest {
                     locator: locator.to_vec(),
+                    user_id: None,
                 }))
                 .await
                 .unwrap()
                 .into_inner();
 
-            // The response should contain `trackers_to_create` trackers, all with dispute txid that matches with the locator of the current iteration.
+            // Verify that the response should contain `trackers_to_create` trackers, all with dispute txid that matches with the locator of the current iteration.
             assert_eq!(response.appointments.len(), trackers_to_create);
             for app_data in response.appointments {
                 assert!(matches!(
@@ -617,6 +709,28 @@ mod tests_private_api {
                     )) if Locator::new(Txid::from_slice(dispute_txid).unwrap()) == locator
                 ));
             }
+
+            // Query for the current locator with the optional user_id present.
+            let response = internal_api
+                .get_appointments(Request::new(msgs::GetAppointmentsRequest {
+                    locator: locator.to_vec(),
+                    user_id: Some(random_user_id.to_vec()),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+
+            // Verify that only a single appointment is returned and the correct locator is found
+            assert_eq!(response.appointments.len(), 1);
+            assert!(matches!(
+                response.appointments[0].appointment_data,
+                Some(common_msgs::appointment_data::AppointmentData::Tracker(
+                    common_msgs::Tracker {
+                        ref dispute_txid,
+                        ..
+                    }
+                )) if Locator::new(Txid::from_slice(dispute_txid).unwrap()) == locator
+            ));
         }
     }
 
@@ -730,11 +844,11 @@ mod tests_private_api {
         assert!(response.appointments.is_empty());
 
         // Add an appointment and check back
-        let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
+        let (_, appointment) = generate_dummy_appointment_with_user(user_id, None);
         let user_signature = cryptography::sign(&appointment.inner.to_vec(), &user_sk).unwrap();
         internal_api
             .watcher
-            .add_appointment(appointment.inner, user_signature)
+            .add_appointment(appointment.inner.clone(), user_signature)
             .unwrap();
 
         let response = internal_api
@@ -747,7 +861,10 @@ mod tests_private_api {
 
         assert_eq!(response.available_slots, SLOTS - 1);
         assert_eq!(response.subscription_expiry, START_HEIGHT as u32 + DURATION);
-        assert_eq!(response.appointments, Vec::from([uuid.to_vec()]));
+        assert_eq!(
+            response.appointments,
+            Vec::from([appointment.inner.locator.to_vec()])
+        );
     }
 
     #[tokio::test]
