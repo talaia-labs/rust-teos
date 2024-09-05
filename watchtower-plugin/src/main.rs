@@ -636,9 +636,8 @@ async fn main() -> Result<(), Error> {
             .as_i64()
             .unwrap(),
     )
-    .map_err(|e| {
+    .inspect_err(|_| {
         log::error!("{} out of range", constants::WT_MAX_RETRY_TIME);
-        e
     })?;
 
     let auto_retry_delay = u32::try_from(
@@ -648,9 +647,8 @@ async fn main() -> Result<(), Error> {
             .as_i64()
             .unwrap(),
     )
-    .map_err(|e| {
+    .inspect_err(|_| {
         log::error!("{} out of range", constants::WT_AUTO_RETRY_DELAY);
-        e
     })?;
 
     let max_interval_time = u16::try_from(
@@ -660,9 +658,8 @@ async fn main() -> Result<(), Error> {
             .as_i64()
             .unwrap(),
     )
-    .map_err(|e| {
+    .inspect_err(|_| {
         log::error!("{} out of range", constants::DEV_WT_MAX_RETRY_INTERVAL);
-        e
     })?;
 
     let plugin = midstate.start(wt_client.clone()).await?;
