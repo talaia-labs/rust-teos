@@ -38,6 +38,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y gettext
           git clone https://github.com/ElementsProject/lightning.git && cd lightning && git checkout v${{ env.cln_version }}
           pip install --user poetry && poetry install
+          cargo update -p time
           ./configure && poetry run make
 
   cln-plugin:
