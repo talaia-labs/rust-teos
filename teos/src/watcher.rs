@@ -546,8 +546,8 @@ mod tests {
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, create_responder, create_watcher, generate_dummy_appointment,
-        generate_dummy_appointment_with_user, get_random_tx, BitcoindMock, BitcoindStopper,
-        Blockchain, MockOptions, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
+        generate_dummy_appointment_with_user, get_random_tx, Blockchain, MockedServerQuery,
+        DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
     use teos_common::cryptography::get_random_keypair;
 
@@ -578,17 +578,12 @@ mod tests {
         }
     }
 
-    async fn init_watcher(chain: &mut Blockchain) -> (Watcher, BitcoindStopper) {
+    async fn init_watcher(chain: &mut Blockchain) -> Watcher {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
         init_watcher_with_db(chain, dbm).await
     }
 
-    async fn init_watcher_with_db(
-        chain: &mut Blockchain,
-        dbm: Arc<Mutex<DBM>>,
-    ) -> (Watcher, BitcoindStopper) {
-        let bitcoind_mock = BitcoindMock::new(MockOptions::default());
-
+    async fn init_watcher_with_db(chain: &mut Blockchain, dbm: Arc<Mutex<DBM>>) -> Watcher {
         let gk = Arc::new(Gatekeeper::new(
             chain.get_block_count(),
             SLOTS,
@@ -596,15 +591,8 @@ mod tests {
             EXPIRY_DELTA,
             dbm.clone(),
         ));
-        let responder = create_responder(chain, gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
-        create_watcher(
-            chain,
-            Arc::new(responder),
-            gk.clone(),
-            bitcoind_mock,
-            dbm.clone(),
-        )
-        .await
+        let responder = create_responder(chain, gk.clone(), dbm.clone()).await;
+        create_watcher(chain, Arc::new(responder), gk.clone(), dbm.clone()).await
     }
 
     fn assert_appointment_added(
@@ -629,7 +617,7 @@ mod tests {
         // A fresh watcher has no associated data
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        let (watcher, _s) = init_watcher_with_db(&mut chain, dbm.clone()).await;
+        let watcher = init_watcher_with_db(&mut chain, dbm.clone()).await;
         assert!(watcher.is_fresh());
 
         let (user_sk, user_pk) = get_random_keypair();
@@ -647,7 +635,7 @@ mod tests {
         }
 
         // Create a new Responder reusing the same DB and check that the data is loaded
-        let (another_w, _as) = init_watcher_with_db(&mut chain, dbm).await;
+        let another_w = init_watcher_with_db(&mut chain, dbm).await;
         assert!(!another_w.is_fresh());
         assert_eq!(watcher, another_w);
     }
@@ -658,7 +646,7 @@ mod tests {
         // Not testing the update / rejection logic, since that's already covered in the Gatekeeper, just that the data makes
         // sense and the signature verifies.
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
         let tower_pk = watcher.tower_id.0;
 
         let (_, user_pk) = get_random_keypair();
@@ -683,7 +671,7 @@ mod tests {
     async fn test_add_appointment() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
         let tip_txs = chain.blocks.last().unwrap().txdata.clone();
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // add_appointment should add a given appointment to the Watcher given the following logic:
         //      - if the appointment does not exist for a given user, add the appointment
@@ -795,7 +783,7 @@ mod tests {
 
         // Transaction rejected
         // Update the Responder with a new Carrier
-        let (carrier, _as) = create_carrier(
+        let carrier = create_carrier(
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
             chain.tip().deref().height,
         );
@@ -869,7 +857,7 @@ mod tests {
     #[tokio::test]
     async fn test_store_appointment() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Register the user
         let (_, user_pk) = get_random_keypair();
@@ -908,7 +896,7 @@ mod tests {
     #[tokio::test]
     async fn test_store_triggered_appointment() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Register the user
         let (_, user_pk) = get_random_keypair();
@@ -930,7 +918,7 @@ mod tests {
 
         // A properly formatted but invalid transaction should be rejected by the Responder
         // Update the Responder with a new Carrier that will reject the transaction
-        let (carrier, _as) = create_carrier(
+        let carrier = create_carrier(
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
             chain.tip().deref().height,
         );
@@ -962,7 +950,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_appointment() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         let dispute_tx = get_random_tx();
         let appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
@@ -1050,7 +1038,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_breaches() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Let's create some locators based on the transactions in the last block
         let locator_tx_map: HashMap<_, _> = (0..10)
@@ -1081,7 +1069,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_breaches_accepted() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Let's create some locators based on the transactions in the last block
         let breaches: HashMap<_, _> = (0..10)
@@ -1106,7 +1094,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_breaches_rejected_decryption() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Let's create some locators based on the transactions in the last block
         let breaches: HashMap<_, _> = (0..10)
@@ -1142,10 +1130,10 @@ mod tests {
     #[tokio::test]
     async fn test_handle_breaches_rejected_by_responder_backend() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Replace the carrier with an erroneous one
-        let (carrier, _s) = create_carrier(
+        let carrier = create_carrier(
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
             chain.tip().deref().height,
         );
@@ -1181,7 +1169,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_breaches_rejected_by_responder_malformed() {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // Let's create some locators based on the transactions in the last block
         let breaches: HashMap<_, _> = (0..10)
@@ -1217,7 +1205,7 @@ mod tests {
     #[tokio::test]
     async fn test_filtered_block_connected() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // block_connected for the Watcher is used to keep track of what new transactions has been mined whose may be potential
         // channel breaches.
@@ -1341,7 +1329,7 @@ mod tests {
 
         // Set the carrier response
         // Both non-decryptable blobs and blobs with invalid transactions will yield an invalid trigger.
-        let (carrier, _s) = create_carrier(
+        let carrier = create_carrier(
             MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
             chain.tip().deref().height,
         );
@@ -1362,7 +1350,7 @@ mod tests {
     async fn test_block_disconnected() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let start_height = START_HEIGHT as u32;
-        let (watcher, _s) = init_watcher(&mut chain).await;
+        let watcher = init_watcher(&mut chain).await;
 
         // block_disconnected for the Watcher fixes the locator cache by removing the disconnected block
         // and updates the last_known_block_height to the previous block height

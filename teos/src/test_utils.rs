@@ -8,6 +8,7 @@
 */
 
 use rand::Rng;
+use std::fmt::Debug;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -373,7 +374,7 @@ pub(crate) enum MockedServerQuery {
     Error(i64),
 }
 
-pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> (Carrier, BitcoindStopper) {
+pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> Carrier {
     let bitcoind_mock = match query {
         MockedServerQuery::Regular => BitcoindMock::new(MockOptions::default()),
         MockedServerQuery::InMempoool => BitcoindMock::new(MockOptions::in_mempool()),
@@ -383,54 +384,57 @@ pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> (Carrier,
     let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
     start_server(bitcoind_mock.server);
 
-    (
-        Carrier::new(bitcoin_cli, bitcoind_reachable, height),
+    Carrier::new(
+        bitcoin_cli,
+        bitcoind_reachable,
+        height,
         bitcoind_mock.stopper,
     )
+}
+
+pub(crate) async fn create_responder_with_query(
+    chain: &mut Blockchain,
+    gatekeeper: Arc<Gatekeeper>,
+    dbm: Arc<Mutex<DBM>>,
+    query: MockedServerQuery,
+) -> Responder {
+    let height = chain.tip().height;
+    // For the local TxIndex logic to be sound, our index needs to have, at least, IRREVOCABLY_RESOLVED blocks
+    debug_assert!(height >= IRREVOCABLY_RESOLVED);
+
+    let carrier = create_carrier(query, chain.tip().height);
+    let last_n_blocks = get_last_n_blocks(chain, height as usize).await;
+
+    Responder::new(&last_n_blocks, chain.tip().height, carrier, gatekeeper, dbm)
 }
 
 pub(crate) async fn create_responder(
     chain: &mut Blockchain,
     gatekeeper: Arc<Gatekeeper>,
     dbm: Arc<Mutex<DBM>>,
-    server_url: &str,
 ) -> Responder {
-    let height = chain.tip().height;
-    // For the local TxIndex logic to be sound, our index needs to have, at least, IRREVOCABLY_RESOLVED blocks
-    debug_assert!(height >= IRREVOCABLY_RESOLVED);
-
-    let last_n_blocks = get_last_n_blocks(chain, IRREVOCABLY_RESOLVED as usize).await;
-
-    let bitcoin_cli = Arc::new(BitcoindClient::new(server_url, Auth::None).unwrap());
-    let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
-    let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, height);
-
-    Responder::new(&last_n_blocks, height, carrier, gatekeeper, dbm)
+    create_responder_with_query(chain, gatekeeper, dbm, MockedServerQuery::Regular).await
 }
 
 pub(crate) async fn create_watcher(
     chain: &mut Blockchain,
     responder: Arc<Responder>,
     gatekeeper: Arc<Gatekeeper>,
-    bitcoind_mock: BitcoindMock,
     dbm: Arc<Mutex<DBM>>,
-) -> (Watcher, BitcoindStopper) {
+) -> Watcher {
     let last_n_blocks = get_last_n_blocks(chain, 6).await;
 
-    start_server(bitcoind_mock.server);
     let (tower_sk, tower_pk) = get_random_keypair();
     let tower_id = UserId(tower_pk);
-    (
-        Watcher::new(
-            gatekeeper,
-            responder,
-            &last_n_blocks,
-            chain.get_block_count(),
-            tower_sk,
-            tower_id,
-            dbm,
-        ),
-        bitcoind_mock.stopper,
+
+    Watcher::new(
+        gatekeeper,
+        responder,
+        &last_n_blocks,
+        chain.get_block_count(),
+        tower_sk,
+        tower_id,
+        dbm,
     )
 }
 #[derive(Clone)]
@@ -465,10 +469,7 @@ impl Default for ApiConfig {
     }
 }
 
-pub(crate) async fn create_api_with_config(
-    api_config: ApiConfig,
-) -> (Arc<InternalAPI>, BitcoindStopper) {
-    let bitcoind_mock = BitcoindMock::new(MockOptions::default());
+pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<InternalAPI> {
     let mut chain = Blockchain::default().with_height(START_HEIGHT);
 
     let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
@@ -479,31 +480,21 @@ pub(crate) async fn create_api_with_config(
         EXPIRY_DELTA,
         dbm.clone(),
     ));
-    let responder =
-        create_responder(&mut chain, gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
-    let (watcher, stopper) = create_watcher(
-        &mut chain,
-        Arc::new(responder),
-        gk.clone(),
-        bitcoind_mock,
-        dbm.clone(),
-    )
-    .await;
+    let responder = create_responder(&mut chain, gk.clone(), dbm.clone()).await;
+    let watcher = create_watcher(&mut chain, Arc::new(responder), gk.clone(), dbm.clone()).await;
 
     let bitcoind_reachable = Arc::new((Mutex::new(api_config.bitcoind_reachable), Condvar::new()));
     let (shutdown_trigger, _) = triggered::trigger();
-    (
-        Arc::new(InternalAPI::new(
-            Arc::new(watcher),
-            vec![msgs::NetworkAddress::from_ipv4("address".to_string(), 21)],
-            bitcoind_reachable,
-            shutdown_trigger,
-        )),
-        stopper,
-    )
+
+    Arc::new(InternalAPI::new(
+        Arc::new(watcher),
+        vec![msgs::NetworkAddress::from_ipv4("address".to_string(), 21)],
+        bitcoind_reachable,
+        shutdown_trigger,
+    ))
 }
 
-pub(crate) async fn create_api() -> (Arc<InternalAPI>, BitcoindStopper) {
+pub(crate) async fn create_api() -> Arc<InternalAPI> {
     create_api_with_config(ApiConfig::default()).await
 }
 
@@ -528,10 +519,19 @@ impl Drop for BitcoindStopper {
     }
 }
 
+// Since [`CloseHandle`] doesn't implement debug, we can't derive it on [`BitcoindStopper`].
+// Implement a dummy one instead. This is just to be able to include [`BitcoindStopper`]
+// as a field in debug deriving structs.
+impl Debug for BitcoindStopper {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Ok(())
+    }
+}
+
 pub(crate) struct BitcoindMock {
     pub url: String,
     pub server: Server,
-    stopper: BitcoindStopper,
+    pub stopper: BitcoindStopper,
 }
 
 #[derive(Default)]
