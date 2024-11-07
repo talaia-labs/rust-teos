@@ -118,6 +118,10 @@ async fn main() {
                 Err(e) => handle_error(e),
             };
         }
+        Command::SignMessage(m) => {
+            let sig = client.sign_message(Request::new(m.message)).await;
+            println!("{}", sig.unwrap().into_inner());
+        }
         Command::Stop => {
             println!("Shutting down tower");
             client.stop(Request::new(())).await.unwrap();
