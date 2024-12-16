@@ -1,6 +1,7 @@
 //! Logic related to the Gatekeeper, the component in charge of managing access to the tower resources.
 
 use lightning::chain;
+use lightning_invoice::Invoice;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,9 +14,10 @@ use teos_common::UserId;
 
 use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
+use crate::fees::ValidatePayment;
 
 /// Data regarding a user subscription with the tower.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UserInfo {
     /// Number of appointment slots available for a given user.
     pub(crate) available_slots: u32,
@@ -23,15 +25,24 @@ pub(crate) struct UserInfo {
     pub(crate) subscription_start: u32,
     /// Block height where the user subscription expires.
     pub(crate) subscription_expiry: u32,
+    /// If this watchtower requires payments, we store an invoice that the user needs to pay.
+    /// Note: We store the invoice as a string instead of the full invoice so that UserInfo can successfully implement the "Copy" trait.
+    pub(crate) invoice: Option<Invoice>,
 }
 
 impl UserInfo {
     /// Creates a new [UserInfo] instance.
-    pub fn new(available_slots: u32, subscription_start: u32, subscription_expiry: u32) -> Self {
+    pub fn new(
+        available_slots: u32,
+        subscription_start: u32,
+        subscription_expiry: u32,
+        invoice: Option<Invoice>,
+    ) -> Self {
         UserInfo {
             available_slots,
             subscription_start,
             subscription_expiry,
+            invoice,
         }
     }
 }
@@ -49,6 +60,21 @@ pub(crate) struct NotEnoughSlots;
 /// This is currently set to [u32::MAX].
 #[derive(Debug, PartialEq)]
 pub(crate) struct MaxSlotsReached;
+
+/// Error raised if a user is trying to pay the tower, but the tower isn't accepting payments.
+#[derive(Debug, PartialEq)]
+pub(crate) struct PaymentsNotAccepted;
+
+// Errors encountered when using the add_update_user command.
+#[derive(Debug)]
+pub enum UpdateUserError {
+    // Error raised if the user subscription slots limit has been reached.
+    MaxSlotsReached,
+    // Error raised if a user is trying to pay the tower, but the tower isn't accepting payments.
+    PaymentsNotAccepted,
+    // User is trying to register with the tower, but they haven't paid an invoice yet.
+    UnpaidInvoice
+}
 
 /// Component in charge of managing access to the tower resources.
 ///
@@ -71,6 +97,8 @@ pub struct Gatekeeper {
     registered_users: Mutex<HashMap<UserId, UserInfo>>,
     /// A [DBM] (database manager) instance. Used to persist appointment data into disk.
     dbm: Arc<Mutex<DBM>>,
+    /// If fee mode is on, this validates payments made to the watchtower.
+    validator: Option<Arc<Mutex<dyn ValidatePayment + Send>>>,
 }
 
 impl Gatekeeper {
@@ -81,6 +109,7 @@ impl Gatekeeper {
         subscription_duration: u32,
         expiry_delta: u32,
         dbm: Arc<Mutex<DBM>>,
+        validator: Option<Arc<Mutex<dyn ValidatePayment + Send>>>,
     ) -> Self {
         let registered_users = dbm.lock().unwrap().load_all_users();
         Gatekeeper {
@@ -90,6 +119,7 @@ impl Gatekeeper {
             expiry_delta,
             registered_users: Mutex::new(registered_users),
             dbm,
+            validator,
         }
     }
 
@@ -144,7 +174,7 @@ impl Gatekeeper {
     pub(crate) fn add_update_user(
         &self,
         user_id: UserId,
-    ) -> Result<RegistrationReceipt, MaxSlotsReached> {
+    ) -> Result<RegistrationReceipt, UpdateUserError> {
         let block_count = self.last_known_block_height.load(Ordering::Acquire);
 
         // TODO: For now, new calls to `add_update_user` add subscription_slots to the current count and reset the expiry time
@@ -152,30 +182,39 @@ impl Gatekeeper {
         let user_info = match registered_users.get_mut(&user_id) {
             // User already exists, updating the info
             Some(user_info) => {
-                user_info.available_slots = user_info
-                    .available_slots
-                    .checked_add(self.subscription_slots)
-                    .ok_or(MaxSlotsReached)?;
-                user_info.subscription_expiry = user_info
-                    .subscription_expiry
-                    .checked_add(self.subscription_duration)
-                    .unwrap_or(u32::MAX);
-                self.dbm.lock().unwrap().update_user(user_id, user_info);
-
-                user_info
+                if let Some(validator) = &self.validator {
+                    match &user_info.invoice {
+                        Some(invoice) => {
+                            let paid = validator.lock().unwrap().validate(invoice.clone());
+                            if paid {
+                                self.add_slots_to_user(user_id, user_info)?;
+                                user_info
+                            } else {
+                                return Err(UpdateUserError::UnpaidInvoice)
+                            }
+                        },
+                        None => {
+                            return Err(UpdateUserError::UnpaidInvoice)
+                        }
+                    }
+                } else {
+                    self.add_slots_to_user(user_id, user_info)?;
+                    user_info
+                }
             }
             // New user
             None => {
-                let user_info = UserInfo::new(
+                if let Some(_) = &self.validator {
+                    return Err(UpdateUserError::UnpaidInvoice)
+                }
+
+                let user_info = self.add_new_user(
+                    user_id,
                     self.subscription_slots,
                     block_count,
                     block_count + self.subscription_duration,
+                    None,
                 );
-                self.dbm
-                    .lock()
-                    .unwrap()
-                    .store_user(user_id, &user_info)
-                    .unwrap();
 
                 registered_users.insert(user_id, user_info);
                 registered_users.get_mut(&user_id).unwrap()
@@ -188,6 +227,89 @@ impl Gatekeeper {
             user_info.subscription_start,
             user_info.subscription_expiry,
         ))
+    }
+
+    pub(crate) fn add_new_user(
+        &self,
+        user_id: UserId,
+        available_slots: u32,
+        subscription_start: u32,
+        subscription_expiry: u32,
+        invoice: Option<Invoice>,
+    ) -> UserInfo {
+        let user_info = UserInfo::new(
+            available_slots,
+            subscription_start,
+            subscription_expiry,
+            invoice,
+        );
+
+        self.dbm
+            .lock()
+            .unwrap()
+            .store_user(user_id, &user_info)
+            .unwrap();
+
+        user_info
+    }
+
+    pub(crate) fn add_update_invoice(
+        &self,
+        user_id: UserId,
+    ) -> Result<Invoice, PaymentsNotAccepted> {
+        let mut registered_users = self.registered_users.lock().unwrap();
+        match registered_users.get_mut(&user_id) {
+            Some(user_info) => {
+                match &user_info.invoice {
+                    Some(invoice) => {
+                        // If the current invoice on file isn't expired, we'll send it back to the user.
+                        // Otherwise, we'll generate a new one.
+                        if invoice.is_expired() {
+                            if let Some(validator) = &self.validator {
+                                Ok(validator.lock().unwrap().get_invoice())
+                            } else {
+                                Err(PaymentsNotAccepted)
+                            }
+                        } else {
+                            Ok(invoice.clone())
+                        }
+                    }
+                    None => {
+                        if let Some(validator) = &self.validator {
+                            Ok(validator.lock().unwrap().get_invoice())
+                        } else {
+                            Err(PaymentsNotAccepted)
+                        }
+                    }
+                }
+            }
+            None => {
+                let invoice = if let Some(validator) = &self.validator {
+                    validator.lock().unwrap().get_invoice()
+                } else {
+                    return Err(PaymentsNotAccepted);
+                };
+                let user_info = self.add_new_user(user_id, 0, 0, 0, Some(invoice.clone()));
+                registered_users.insert(user_id, user_info);
+
+                Ok(invoice)
+            }
+        }
+    }
+
+    pub(crate) fn add_slots_to_user(&self, user_id: UserId, user_info: &mut UserInfo) -> Result<(), UpdateUserError> {
+        user_info.available_slots = user_info
+            .available_slots
+            .checked_add(self.subscription_slots)
+            .ok_or(UpdateUserError::MaxSlotsReached)?;
+        
+        user_info.subscription_expiry = user_info
+            .subscription_expiry
+            .checked_add(self.subscription_duration)
+            .unwrap_or(u32::MAX);
+        self.dbm.lock().unwrap().update_user(user_id, user_info);
+
+        Ok(())
     }
 
     /// Adds an appointment to a given user, or updates it if already present in the system (and belonging to the requester).
@@ -273,7 +395,7 @@ impl Gatekeeper {
                 let (user_id, blob_size) = dbm.get_appointment_user_and_length(*uuid).unwrap();
                 registered_users.get_mut(&user_id).unwrap().available_slots +=
                     compute_appointment_slots(blob_size, ENCRYPTED_BLOB_MAX_SIZE);
-                updated_users.insert(user_id, registered_users[&user_id]);
+                updated_users.insert(user_id, registered_users[&user_id].clone());
             }
             updated_users
         } else {
@@ -375,7 +497,14 @@ mod tests {
 
     fn init_gatekeeper(chain: &Blockchain) -> Gatekeeper {
         let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        Gatekeeper::new(chain.get_block_count(), SLOTS, DURATION, EXPIRY_DELTA, dbm)
+        Gatekeeper::new(
+            chain.get_block_count(),
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+            dbm,
+            None,
+        )
     }
 
     #[test]
@@ -390,6 +519,7 @@ mod tests {
             DURATION,
             EXPIRY_DELTA,
             dbm.clone(),
+            None,
         );
         assert!(gatekeeper.is_fresh());
 
@@ -413,8 +543,14 @@ mod tests {
         }
 
         // Create a new GK reusing the same DB and check that the data is loaded
-        let another_gk =
-            Gatekeeper::new(chain.get_block_count(), SLOTS, DURATION, EXPIRY_DELTA, dbm);
+        let another_gk = Gatekeeper::new(
+            chain.get_block_count(),
+            SLOTS,
+            DURATION,
+            EXPIRY_DELTA,
+            dbm,
+            None,
+        );
         assert!(!another_gk.is_fresh());
         assert_eq!(gatekeeper, another_gk);
     }
@@ -467,7 +603,8 @@ mod tests {
             UserInfo::new(
                 receipt.available_slots(),
                 receipt.subscription_start(),
-                receipt.subscription_expiry()
+                receipt.subscription_expiry(),
+                None
             )
         );
 
@@ -490,7 +627,8 @@ mod tests {
             UserInfo::new(
                 updated_receipt.available_slots(),
                 updated_receipt.subscription_start(),
-                updated_receipt.subscription_expiry()
+                updated_receipt.subscription_expiry(),
+                None
             )
         );
 
@@ -505,7 +643,7 @@ mod tests {
 
         assert!(matches!(
             gatekeeper.add_update_user(user_id),
-            Err(MaxSlotsReached)
+            Err(UpdateUserError::MaxSlotsReached)
         ));
 
         // Data in the database remains untouched
@@ -514,7 +652,8 @@ mod tests {
             UserInfo::new(
                 updated_receipt.available_slots(),
                 updated_receipt.subscription_start(),
-                updated_receipt.subscription_expiry()
+                updated_receipt.subscription_expiry(),
+                None
             )
         );
     }

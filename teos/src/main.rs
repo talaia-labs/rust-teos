@@ -273,6 +273,7 @@ async fn main() {
         conf.subscription_duration,
         conf.expiry_delta,
         dbm.clone(),
+        None,
     ));
 
     let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
@@ -369,6 +370,7 @@ async fn main() {
         addresses,
         bitcoind_reachable.clone(),
         shutdown_trigger,
+        None,
     ));
     let internal_api_cloned = internal_api.clone();
 

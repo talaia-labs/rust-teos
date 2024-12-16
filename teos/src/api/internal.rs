@@ -3,6 +3,7 @@ use tonic::{Code, Request, Response, Status};
 use triggered::Trigger;
 
 use crate::extended_appointment::UUID;
+use crate::fees::ValidatePayment;
 use crate::protos as msgs;
 use crate::protos::private_tower_services_server::PrivateTowerServices;
 use crate::protos::public_tower_services_server::PublicTowerServices;
@@ -28,6 +29,8 @@ pub struct InternalAPI {
     bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
     /// A signal indicating the tower is shuting down.
     shutdown_trigger: Trigger,
+    /// If fee mode is on, this validates payments made to the watchtower.
+    validator: Option<Arc<Mutex<dyn ValidatePayment + Send>>>,
 }
 
 impl InternalAPI {
@@ -37,12 +40,14 @@ impl InternalAPI {
         addresses: Vec<msgs::NetworkAddress>,
         bitcoind_reachable: Arc<(Mutex<bool>, Condvar)>,
         shutdown_trigger: Trigger,
+        validator: Option<Arc<Mutex<dyn ValidatePayment + Send>>>,
     ) -> Self {
         Self {
             watcher,
             addresses,
             bitcoind_reachable,
             shutdown_trigger,
+            validator,
         }
     }
 
@@ -95,6 +100,45 @@ impl PublicTowerServices for Arc<InternalAPI> {
                 "Subscription maximum slots count reached",
             )),
         }
+    }
+
+    /// Pay endpoint. Part of the public API. Internally calls the payment validator to generate an
+    /// invoice.
+    async fn pay(
+        &self,
+        request: Request<common_msgs::PayRequest>,
+    ) -> Result<Response<common_msgs::PayResponse>, Status> {
+        self.check_service_unavailable()?;
+        let req_data = request.into_inner();
+
+        if self.validator.is_none() {
+            return Err(Status::new(
+                Code::Unimplemented,
+                "Paying for watchtower service is unsupported",
+            ));
+        };
+
+        let user_id = UserId::from_slice(&req_data.user_id).map_err(|_| {
+            Status::new(
+                Code::InvalidArgument,
+                "Provided public key does not match expected format (33-byte compressed key)",
+            )
+        })?;
+
+        let invoice = match self.watcher.pay(user_id) {
+            Ok(invoice) => invoice,
+            Err(_) => {
+                return Err(Status::new(
+                    Code::Unimplemented,
+                    "Paying for watchtower service is unsupported",
+                ));
+            }
+        };
+
+        return Ok(Response::new(common_msgs::PayResponse {
+            user_id: req_data.user_id,
+            invoice: invoice.to_string(),
+        }));
     }
 
     /// Add appointment endpoint. Part of the public API. Internally calls [Watcher::add_appointment].
@@ -846,7 +890,8 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_register_max_slots() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(u32::MAX, DURATION)).await;
+        let (internal_api, _s) =
+            create_api_with_config(ApiConfig::new(u32::MAX, DURATION, false)).await;
 
         let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk).to_vec();
@@ -874,8 +919,10 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_register_service_unavailable() {
-        let (internal_api, _s) =
-            create_api_with_config(ApiConfig::new(u32::MAX, DURATION).bitcoind_unreachable()).await;
+        let (internal_api, _s) = create_api_with_config(
+            ApiConfig::new(u32::MAX, DURATION, false).bitcoind_unreachable(),
+        )
+        .await;
 
         let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk).to_vec();
@@ -887,6 +934,59 @@ mod tests_public_api {
             Err(status) => {
                 assert_eq!(status.code(), Code::Unavailable);
                 assert_eq!(status.message(), "Service currently unavailable")
+            }
+            _ => panic!("Test should have returned Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pay() {
+        let cfg = ApiConfig::new(SLOTS, DURATION, true);
+        let (internal_api, _s) = create_api_with_config(cfg).await;
+        let (_, user_pk) = get_random_keypair();
+
+        let response = internal_api
+            .pay(Request::new(common_msgs::PayRequest {
+                user_id: UserId(user_pk).to_vec(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(matches!(response, common_msgs::PayResponse { .. }));
+
+        // Check that when we hit it a second time, we get the same invoice as before.
+        let response2 = internal_api
+            .pay(Request::new(common_msgs::PayRequest {
+                user_id: UserId(user_pk).to_vec(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.invoice, response2.invoice);
+    }
+
+    #[tokio::test]
+    async fn test_pay_no_payments() {
+        // We'll test that if the tower payments aren't turned on, but a user tries to hit the pay endpoint,
+        // we get the expected error.
+        let cfg = ApiConfig::new(SLOTS, DURATION, false);
+        let (internal_api, _s) = create_api_with_config(cfg).await;
+        let (_, user_pk) = get_random_keypair();
+
+        match internal_api
+            .pay(Request::new(common_msgs::PayRequest {
+                user_id: UserId(user_pk).to_vec(),
+            }))
+            .await
+        {
+            Err(status) => {
+                assert_eq!(status.code(), Code::Unimplemented);
+                assert_eq!(
+                    status.message(),
+                    "Paying for watchtower service is unsupported"
+                )
             }
             _ => panic!("Test should have returned Err"),
         }
@@ -948,7 +1048,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_add_appointment_not_enough_slots() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(0, DURATION)).await;
+        let (internal_api, _s) = create_api_with_config(ApiConfig::new(0, DURATION, false)).await;
 
         // User is registered but has no slots
         let (user_sk, user_pk) = get_random_keypair();
@@ -977,7 +1077,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_add_appointment_subscription_expired() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
+        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0, false)).await;
 
         // User is registered but subscription is expired
         let (user_sk, user_pk) = get_random_keypair();
@@ -1042,8 +1142,10 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_add_appointment_service_unavailable() {
-        let (internal_api, _s) =
-            create_api_with_config(ApiConfig::new(u32::MAX, DURATION).bitcoind_unreachable()).await;
+        let (internal_api, _s) = create_api_with_config(
+            ApiConfig::new(u32::MAX, DURATION, false).bitcoind_unreachable(),
+        )
+        .await;
 
         let (user_sk, _) = get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
@@ -1154,7 +1256,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_appointment_subscription_expired() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
+        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0, false)).await;
 
         // Register the user
         let (user_sk, user_pk) = get_random_keypair();
@@ -1183,7 +1285,8 @@ mod tests_public_api {
     #[tokio::test]
     async fn test_get_appointment_service_unavailable() {
         let (internal_api, _s) =
-            create_api_with_config(ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()).await;
+            create_api_with_config(ApiConfig::new(SLOTS, DURATION, false).bitcoind_unreachable())
+                .await;
 
         let (user_sk, _) = get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
@@ -1229,7 +1332,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_subscription_info_non_registered() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
+        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0, false)).await;
 
         // The user is not registered
         let (user_sk, _) = get_random_keypair();
@@ -1252,7 +1355,7 @@ mod tests_public_api {
 
     #[tokio::test]
     async fn test_get_subscription_info_expired() {
-        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0)).await;
+        let (internal_api, _s) = create_api_with_config(ApiConfig::new(SLOTS, 0, false)).await;
 
         // The user is registered but the subscription has expired
         let (user_sk, user_pk) = get_random_keypair();
@@ -1277,7 +1380,8 @@ mod tests_public_api {
     #[tokio::test]
     async fn test_get_subscription_info_service_unavailable() {
         let (internal_api, _s) =
-            create_api_with_config(ApiConfig::new(SLOTS, DURATION).bitcoind_unreachable()).await;
+            create_api_with_config(ApiConfig::new(SLOTS, DURATION, false).bitcoind_unreachable())
+                .await;
 
         let (user_sk, _) = get_random_keypair();
         let message = "get subscription info".to_string();

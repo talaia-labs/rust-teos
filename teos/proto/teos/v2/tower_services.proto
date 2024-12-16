@@ -33,6 +33,7 @@ service PublicTowerServices {
   // Public tower services, only reachable from the public API.
 
   rpc register(common.teos.v2.RegisterRequest) returns (common.teos.v2.RegisterResponse) {}
+  rpc pay(common.teos.v2.PayRequest) returns (common.teos.v2.PayResponse) {}
   rpc add_appointment(common.teos.v2.AddAppointmentRequest) returns (common.teos.v2.AddAppointmentResponse) {}
   rpc get_appointment(common.teos.v2.GetAppointmentRequest) returns (common.teos.v2.GetAppointmentResponse) {}
   rpc get_subscription_info(common.teos.v2.GetSubscriptionInfoRequest) returns (common.teos.v2.GetSubscriptionInfoResponse) {}
