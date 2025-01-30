@@ -7,7 +7,7 @@ use rand::Rng;
 
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::SecretKey;
-use bitcoin::{consensus, Script, Transaction, TxOut, Txid};
+use bitcoin::{consensus, ScriptBuf, Transaction, TxOut, Txid, Amount};
 
 use crate::appointment::{Appointment, Locator};
 use crate::cryptography;
@@ -48,13 +48,14 @@ pub fn generate_random_appointment(dispute_txid: Option<&Txid>) -> Appointment {
 
     let tx_bytes = Vec::from_hex(TX_HEX).unwrap();
     let mut penalty_tx: Transaction = consensus::deserialize(&tx_bytes).unwrap();
+    let random_bytes: [u8; 81] = cryptography::get_random_bytes(get_random_int::<usize>() % 81).try_into().unwrap();
+    let script_string = format!("6a{}", hex::encode(random_bytes));
+    let script_pubkey = ScriptBuf::from(hex::decode(script_string).unwrap());
 
     // Append a random-sized OP_RETURN to make each transcation random in size.
     penalty_tx.output.push(TxOut {
-        value: 0,
-        script_pubkey: Script::new_op_return(&cryptography::get_random_bytes(
-            get_random_int::<usize>() % 81,
-        )),
+        value: Amount::from_sat(0),
+        script_pubkey,
     });
 
     let mut raw_locator: [u8; 16] = cryptography::get_random_bytes(16).try_into().unwrap();
