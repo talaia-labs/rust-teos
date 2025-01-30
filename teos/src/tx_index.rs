@@ -1,9 +1,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::hash::Hash;
+use std::ops::Deref;
 
 use bitcoin::hash_types::BlockHash;
-use bitcoin::{BlockHeader, Transaction, Txid};
+use bitcoin::{Transaction, Txid};
+use bitcoin::block::Header;
 use lightning_block_sync::poll::ValidatedBlock;
 
 use teos_common::appointment::Locator;
@@ -111,28 +113,38 @@ where
 
         for block in last_n_blocks.iter().rev() {
             if let Some(prev_block_hash) = tx_index.blocks.back() {
-                if block.header.prev_blockhash != *prev_block_hash {
-                    panic!("last_n_blocks contains unchained blocks");
+                match block.deref() {
+                    lightning_block_sync::BlockData::FullBlock(_) => {},
+                    lightning_block_sync::BlockData::HeaderOnly(header) => {
+                        if header.prev_blockhash != *prev_block_hash {
+                            panic!("last_n_blocks contains unchained blocks");
+                        }
+                    }
                 }
             };
 
-            let map = block
-                .txdata
-                .iter()
-                .map(|tx| {
-                    (
-                        K::from_txid(tx.txid()),
-                        match V::get_type() {
-                            Type::Transaction => V::from_data(Data::Transaction(tx.clone())),
-                            Type::BlockHash => {
-                                V::from_data(Data::BlockHash(block.header.block_hash()))
-                            }
-                        },
-                    )
-                })
-                .collect();
+            match block.deref() {
+                lightning_block_sync::BlockData::HeaderOnly(_) => {}
+                lightning_block_sync::BlockData::FullBlock(block) => {
+                    let map = block.txdata
+                    .iter()
+                    .map(|tx| {
+                        (
+                            K::from_txid(tx.txid()),
+                            match V::get_type() {
+                                Type::Transaction => V::from_data(Data::Transaction(tx.clone())),
+                                Type::BlockHash => {
+                                    V::from_data(Data::BlockHash(block.header.block_hash()))
+                                }
+                            },
+                        )
+                    })
+                    .collect();
 
-            tx_index.update(block.header, &map);
+                    tx_index.update(block.header, &map);
+                },
+            }
+
         }
 
         tx_index
@@ -155,7 +167,7 @@ where
     }
 
     /// Updates the index by adding data from a new block. Removes the oldest block if the index is full afterwards.
-    pub fn update(&mut self, block_header: BlockHeader, data: &HashMap<K, V>) {
+    pub fn update(&mut self, block_header: Header, data: &HashMap<K, V>) {
         self.blocks.push_back(block_header.block_hash());
 
         let ks = data
@@ -220,6 +232,7 @@ mod tests {
 
     use crate::test_utils::{get_last_n_blocks, Blockchain};
 
+    use bitcoin::hashes::serde_macros::serde_details::SerdeHash;
     use bitcoin::Block;
 
     impl<K, V> TxIndex<K, V>
@@ -248,7 +261,10 @@ mod tests {
         let last_six_blocks = get_last_n_blocks(&mut chain, 6).await;
         let blocks: Vec<Block> = last_six_blocks
             .iter()
-            .map(|block| block.deref().clone())
+            .map(|block| match block.deref() {
+                lightning_block_sync::BlockData::FullBlock(b) => b.clone(),
+                _ => panic!("Expected FullBlock"),
+            })
             .collect();
 
         let cache: TxIndex<Locator, Transaction> = TxIndex::new(&last_six_blocks, height);
@@ -281,15 +297,26 @@ mod tests {
 
         let cache: TxIndex<Locator, Transaction> = TxIndex::new(&last_n_blocks, height as u32);
 
-        assert_eq!(
-            cache.get_height(&first_block.block_hash()).unwrap(),
-            height - cache_size + 1
-        );
-        assert_eq!(cache.get_height(&last_block.block_hash()).unwrap(), height);
-        assert_eq!(
-            cache.get_height(&mid.block_hash()).unwrap(),
-            height - cache_size / 2
-        );
+        match first_block.deref() {
+            lightning_block_sync::BlockData::FullBlock(b) => {
+                assert_eq!(cache.get_height(&b.header.block_hash()).unwrap(), height - cache_size + 1);
+            }
+            _ => panic!("Expected FullBlock"),
+        }
+
+        match last_block.deref() {
+            lightning_block_sync::BlockData::FullBlock(b) => {
+                assert_eq!(cache.get_height(&b.header.block_hash()).unwrap(), height);
+            }
+            _ => panic!("Expected FullBlock"),
+        }
+
+        match mid.deref() {
+            lightning_block_sync::BlockData::FullBlock(b) => {
+                assert_eq!(cache.get_height(&b.header.block_hash()).unwrap(), height - cache_size / 2);
+            }
+            _ => panic!("Expected FullBlock"),
+        }
     }
 
     #[tokio::test]
@@ -302,8 +329,8 @@ mod tests {
             height as u32,
         );
 
-        let fake_hash = BlockHash::default();
-        assert!(cache.get_height(&fake_hash).is_none());
+        let fake_hash = &BlockHash::from_slice_delegated(&[0; 32]).unwrap();
+        assert!(cache.get_height(fake_hash).is_none());
     }
 
     #[tokio::test]
@@ -321,30 +348,54 @@ mod tests {
         let mut cache = TxIndex::new(&last_n_blocks, height);
 
         // Update the cache with the last block
-        let locator_tx_map = last_block
-            .txdata
-            .iter()
-            .map(|tx| (Locator::new(tx.txid()), tx.clone()))
-            .collect();
+        let locator_tx_map;
+        match last_block.deref() {
+            lightning_block_sync::BlockData::FullBlock(b) => {
+                locator_tx_map = b
+                .txdata
+                .iter()
+                .map(|tx| (Locator::new(tx.txid()), tx.clone()))
+                .collect();
+            }
+            _ => panic!("Expected FullBlock"),
+        }
 
-        cache.update(last_block.deref().header, &locator_tx_map);
+        let header = match last_block.deref() {
+            lightning_block_sync::BlockData::FullBlock(b) => b.header,
+            lightning_block_sync::BlockData::HeaderOnly(h) => h.clone()
+        };
+        cache.update(header, &locator_tx_map);
 
         // Check that the new data is in the cache
-        assert!(cache.blocks().contains(&last_block.block_hash()));
+        assert!(cache.blocks().contains(&header.block_hash()));
+
         for (locator, _) in locator_tx_map.iter() {
             assert!(cache.contains_key(locator));
         }
+
+        let block_hash = match last_block.deref() {
+            lightning_block_sync::BlockData::FullBlock(b) => b.header.block_hash(),
+            lightning_block_sync::BlockData::HeaderOnly(h) => h.block_hash(),
+        };
         assert_eq!(
-            cache.tx_in_block[&last_block.block_hash()],
+            cache.tx_in_block[&block_hash],
             locator_tx_map.keys().cloned().collect::<Vec<Locator>>()
         );
 
         // Check that the data from the first block has been evicted
-        assert!(!cache.blocks().contains(&first_block.block_hash()));
-        for tx in first_block.txdata.iter() {
-            assert!(!cache.contains_key(&Locator::new(tx.txid())));
-        }
-        assert!(!cache.tx_in_block.contains_key(&first_block.block_hash()));
+        let tx = match first_block.deref() {
+            lightning_block_sync::BlockData::FullBlock(b) => b.txdata[0].clone(),
+            lightning_block_sync::BlockData::HeaderOnly(_) => {
+                panic!("Expected FullBlock")
+            }
+        };
+        assert!(!cache.contains_key(&Locator::new(tx.txid())));
+
+        let block_hash = match first_block.deref() {
+            lightning_block_sync::BlockData::FullBlock(b) => b.header.block_hash(),
+            lightning_block_sync::BlockData::HeaderOnly(h) => h.block_hash(),
+        };
+        assert!(!cache.tx_in_block.contains_key(&block_hash));
     }
 
     #[tokio::test]
