@@ -18,8 +18,9 @@ use jsonrpc_http_server::{CloseHandle, Server, ServerBuilder};
 use bitcoincore_rpc::{Auth, Client as BitcoindClient};
 
 use bitcoin::blockdata::block::{Block, BlockHeader};
+use bitcoin::Amount;
 use bitcoin::blockdata::constants::genesis_block;
-use bitcoin::blockdata::script::{Builder, Script};
+use bitcoin::blockdata::script::{Builder, ScriptBuf};
 use bitcoin::blockdata::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use bitcoin::hash_types::BlockHash;
 use bitcoin::hash_types::Txid;
@@ -199,7 +200,7 @@ impl Blockchain {
             }
             None => vec![get_random_tx()],
         };
-        let hashes = txdata.iter().map(|obj| obj.txid().as_hash());
+        let hashes = txdata.iter().map(|obj| obj.txid().to_raw_hash());
         let mut header = BlockHeader {
             version: 0,
             prev_blockhash,
@@ -289,20 +290,20 @@ pub(crate) fn get_random_tx() -> Transaction {
     let prev_txid_bytes = get_random_bytes(32);
 
     Transaction {
-        version: 2,
-        lock_time: 0,
+        version: <bitcoin::Transaction as Example>::Version::Two,
+        lock_time: bitcoin::locktime::absolute::LockTime::from_height(0).unwrap(),
         input: vec![TxIn {
             previous_output: OutPoint::new(
                 Txid::from_slice(&prev_txid_bytes).unwrap(),
                 rng.gen_range(0..200),
             ),
-            script_sig: Script::new(),
+            script_sig: ScriptBuf::new(),
             witness: Witness::new(),
-            sequence: 0,
+            sequence: bitcoin::Sequence(0),
         }],
         output: vec![TxOut {
             script_pubkey: Builder::new().push_int(1).into_script(),
-            value: rng.gen_range(0..21000000000),
+            value: Amount::from_sat(rng.gen_range(0..21_000_000_000)),
         }],
     }
 }
