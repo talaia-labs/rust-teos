@@ -6,7 +6,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use crate::responder::ConfirmationStatus;
 use crate::{errors, rpc_errors};
 
+use bitcoin::consensus::Encodable;
 use bitcoin::{Transaction, Txid};
+use bitcoincore_rpc::bitcoin::hashes::hex::ToHex;
 use bitcoincore_rpc::{
     jsonrpc::error::Error::Rpc as RpcError, jsonrpc::error::Error::Transport as TransportError,
     Client as BitcoindClient, Error::JsonRpc as JsonRpcError, RpcApi,
@@ -190,6 +192,7 @@ mod tests {
     use teos_common::test_utils::{TXID_HEX, TX_HEX};
 
     use bitcoin::consensus;
+    use bitcoin::hashes::Hash;
     use bitcoin::hashes::hex::FromHex;
     use bitcoincore_rpc::Auth;
 
@@ -389,7 +392,9 @@ mod tests {
         start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         assert!(carrier.in_mempool(&txid));
     }
 
@@ -402,7 +407,9 @@ mod tests {
         start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         assert!(!carrier.in_mempool(&txid));
     }
 
@@ -417,7 +424,9 @@ mod tests {
         start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         assert!(!carrier.in_mempool(&txid));
     }
 
@@ -431,7 +440,9 @@ mod tests {
         start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         assert!(!carrier.in_mempool(&txid));
     }
 
@@ -444,7 +455,9 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable.clone(), start_height);
 
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         let delay = std::time::Duration::new(3, 0);
 
         thread::spawn(move || {
