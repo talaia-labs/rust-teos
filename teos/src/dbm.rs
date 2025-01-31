@@ -704,7 +704,7 @@ impl DBM {
     /// Stores the last known block into the database.
     pub(crate) fn store_last_known_block(&self, block_hash: &BlockHash) -> Result<(), Error> {
         let query = "INSERT OR REPLACE INTO last_known_block (id, block_hash) VALUES (0, ?)";
-        self.store_data(query, params![block_hash.to_vec()])
+        self.store_data(query, params![block_hash.to_string()])
     }
 
     /// Loads the last known block from the database.

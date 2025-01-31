@@ -4,8 +4,10 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::{consensus, BlockHash};
-use bitcoin::{BlockHeader, Transaction, Txid};
+use bitcoin::{Transaction, Txid};
+// use bitcoin::block::Header;
 use lightning::chain;
+use lightning::util::ser::Writeable;
 use lightning_block_sync::poll::ValidatedBlock;
 
 use teos_common::constants;
@@ -93,8 +95,8 @@ impl TransactionTracker {
 impl From<TransactionTracker> for common_msgs::Tracker {
     fn from(t: TransactionTracker) -> Self {
         common_msgs::Tracker {
-            dispute_txid: t.dispute_tx.txid().to_vec(),
-            penalty_txid: t.penalty_tx.txid().to_vec(),
+            dispute_txid: t.dispute_tx.txid().to_raw_hash().encode(),
+            penalty_txid: t.penalty_tx.txid().to_raw_hash().encode(),
             penalty_rawtx: consensus::serialize(&t.penalty_tx),
         }
     }
@@ -401,7 +403,7 @@ impl chain::Listen for Responder {
     /// rebroadcasting is performed for those that have missed too many.
     fn filtered_block_connected(
         &self,
-        header: &BlockHeader,
+        header: &bitcoin::block::Header,
         txdata: &chain::transaction::TransactionData,
         height: u32,
     ) {
@@ -444,7 +446,7 @@ impl chain::Listen for Responder {
     }
 
     /// Handles reorgs in the [Responder].
-    fn block_disconnected(&self, header: &BlockHeader, height: u32) {
+    fn block_disconnected(&self, header: &bitcoin::block::Header, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
         // Update the carrier and our tx_index.
         self.carrier.lock().unwrap().update_height(height);

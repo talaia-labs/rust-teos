@@ -6,9 +6,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use crate::responder::ConfirmationStatus;
 use crate::{errors, rpc_errors};
 
-use bitcoin::consensus::Encodable;
 use bitcoin::{Transaction, Txid};
-use bitcoincore_rpc::bitcoin::hashes::hex::ToHex;
+// use bitcoincore_rpc::bitcoin::hashes::hex::ToHex;
+// use hex::ToHex;
 use bitcoincore_rpc::{
     jsonrpc::error::Error::Rpc as RpcError, jsonrpc::error::Error::Transport as TransportError,
     Client as BitcoindClient, Error::JsonRpc as JsonRpcError, RpcApi,

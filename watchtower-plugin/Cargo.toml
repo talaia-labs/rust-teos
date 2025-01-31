@@ -25,7 +25,7 @@ tonic = { version = "0.11", features = [ "tls", "transport" ] }
 tokio = { version = "1.5", features = [ "rt-multi-thread", "fs" ] }
 
 # Bitcoin and Lightning
-bitcoin = "0.28.0"
+bitcoin = "0.32.5"
 cln-plugin = "0.1.2"
 
 # Local

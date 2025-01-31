@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bitcoin::secp256k1::SecretKey;
-use bitcoin::{BlockHeader, Transaction};
+use bitcoin::Transaction;
+use bitcoin::block::Header;
 use lightning::chain;
 use lightning_block_sync::poll::ValidatedBlock;
 
@@ -493,7 +494,7 @@ impl chain::Listen for Watcher {
     /// told by the [Gatekeeper].
     fn filtered_block_connected(
         &self,
-        header: &BlockHeader,
+        header: &Header,
         txdata: &chain::transaction::TransactionData,
         height: u32,
     ) {
@@ -522,7 +523,7 @@ impl chain::Listen for Watcher {
     /// Handle reorgs in the [Watcher].
     ///
     /// Fixes the [LocatorCache] by removing the disconnected data and updates the last_known_block_height.
-    fn block_disconnected(&self, header: &BlockHeader, height: u32) {
+    fn block_disconnected(&self, header: &Header, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
         self.locator_cache
             .lock()
