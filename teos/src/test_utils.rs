@@ -33,7 +33,7 @@ use lightning_block_sync::poll::{
     ChainPoller, Poll, Validate, ValidatedBlock, ValidatedBlockHeader,
 };
 use lightning_block_sync::{
-    AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError, UnboundedCache,
+    AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError, UnboundedCache, BlockData
 };
 
 use teos_common::constants::IRREVOCABLY_RESOLVED;
@@ -249,7 +249,7 @@ impl BlockSource for Blockchain {
         })
     }
 
-    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<(Block, Option<u32>)> {
+    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<BlockData> {
         Box::pin(async move {
             for (height, block) in self.blocks.iter().enumerate() {
                 if block.header.block_hash() == *header_hash {
@@ -258,8 +258,7 @@ impl BlockSource for Blockchain {
                             return Err(BlockSourceError::persistent("block not found"));
                         }
                     }
-
-                    return Ok(block.clone());
+                    return Ok(BlockData::FullBlock(block.clone()));
                 }
             }
             Err(BlockSourceError::transient("block not found"))

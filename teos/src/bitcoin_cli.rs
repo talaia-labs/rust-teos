@@ -13,18 +13,15 @@ use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::pin::Pin;
 
 use bitcoin::base64;
 use bitcoin::hash_types::{BlockHash, Txid};
-use hex::ToHex;
-use bitcoin::{Block, Transaction};
-use bitcoin::blockdata::block::Block as BlockData;
+use bitcoin::Transaction;
 use bitcoincore_rpc::Auth;
 use lightning::util::ser::Writeable;
 use lightning_block_sync::http::{HttpEndpoint, JsonResponse};
 use lightning_block_sync::rpc::RpcClient;
-use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError};
+use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockData};
 
 /// A simple implementation of a bitcoind client (`bitcoin-cli`) with the minimal functionality required by the tower.
 pub struct BitcoindClient<'a> {
@@ -54,7 +51,7 @@ impl BlockSource for &BitcoindClient<'_> {
     }
 
     /// Gets a block given its hash.
-    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<(BlockHash, Option<u32>)> {
+    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<'a, BlockData> {
         Box::pin(async move {
             let rpc = self.bitcoind_rpc_client.lock().await;
             rpc.get_block(header_hash).await
