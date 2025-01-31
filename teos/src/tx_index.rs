@@ -342,7 +342,7 @@ mod tests {
         // Store the last block to use it for an update and the first to check eviction
         // Notice that the list of blocks is ordered from last to first.
         let last_block = last_n_blocks.remove(0);
-        let first_block = last_n_blocks.last().unwrap().deref().clone();
+        let first_block = last_n_blocks.last().unwrap().deref();
 
         // Init the cache with the 6 block before the last
         let mut cache = TxIndex::new(&last_n_blocks, height);
@@ -383,7 +383,7 @@ mod tests {
         );
 
         // Check that the data from the first block has been evicted
-        let tx = match first_block.deref() {
+        let tx = match first_block {
             lightning_block_sync::BlockData::FullBlock(b) => b.txdata[0].clone(),
             lightning_block_sync::BlockData::HeaderOnly(_) => {
                 panic!("Expected FullBlock")
@@ -391,7 +391,7 @@ mod tests {
         };
         assert!(!cache.contains_key(&Locator::new(tx.txid())));
 
-        let block_hash = match first_block.deref() {
+        let block_hash = match first_block {
             lightning_block_sync::BlockData::FullBlock(b) => b.header.block_hash(),
             lightning_block_sync::BlockData::HeaderOnly(h) => h.block_hash(),
         };
