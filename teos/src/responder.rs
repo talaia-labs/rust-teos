@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 
 use bitcoin::{consensus, BlockHash};
 use bitcoin::{Transaction, Txid};
-// use bitcoin::block::Header;
 use lightning::chain;
 use lightning::util::ser::Writeable;
 use lightning_block_sync::poll::ValidatedBlock;
