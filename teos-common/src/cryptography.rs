@@ -1,9 +1,7 @@
 //! Cryptography module, used in the interaction between users and towers.
 
 use rand::distributions::Uniform;
-use rand::Rng;
-
-use chacha20poly1305::aead::{Aead, NewAead};
+use rand::Rng; use chacha20poly1305::aead::{Aead, NewAead};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 
 use bitcoin::consensus;
@@ -95,6 +93,8 @@ pub fn get_random_keypair() -> (SecretKey, PublicKey) {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use bitcoin::consensus;
     use bitcoin::hashes::hex::FromHex;
@@ -109,7 +109,7 @@ mod tests {
         let tx_bytes = Vec::from_hex(HEX_TX).unwrap();
 
         let tx: Transaction = consensus::deserialize(&tx_bytes).unwrap();
-        let txid = bitcoin::Txid::from_slice(&Vec::from_hex(HEX_TXID).unwrap()).unwrap();
+        let txid = bitcoin::Txid::from_str(HEX_TXID).unwrap();
         assert_eq!(encrypt(&tx, &txid).unwrap(), expected_enc_blob);
     }
 
@@ -118,7 +118,7 @@ mod tests {
         let expected_tx = consensus::deserialize(&Vec::from_hex(HEX_TX).unwrap()).unwrap();
 
         let encrypted_blob = Vec::from_hex(ENC_BLOB).unwrap();
-        let txid = bitcoin::Txid::from_slice(&Vec::from_hex(HEX_TXID).unwrap()).unwrap();
+        let txid = bitcoin::Txid::from_str(HEX_TXID).unwrap();
         assert_eq!(decrypt(&encrypted_blob, &txid).unwrap(), expected_tx);
     }
 }
