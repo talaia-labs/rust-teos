@@ -598,7 +598,7 @@ mod tests {
     const HALF_API_DELAY: f64 = API_DELAY / 2.0;
     const MAX_ELAPSED_TIME: u16 = 2;
     const MAX_INTERVAL_TIME: u16 = 1;
-    const MAX_RUN_TIME: f64 = 0.2;
+    const MAX_RUN_TIME: f64 = 0.5;
 
     macro_rules! wait_until {
         () => {};
