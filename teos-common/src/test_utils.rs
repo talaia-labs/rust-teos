@@ -48,7 +48,12 @@ pub fn generate_random_appointment(dispute_txid: Option<&Txid>) -> Appointment {
 
     let tx_bytes = Vec::from_hex(TX_HEX).unwrap();
     let mut penalty_tx: Transaction = consensus::deserialize(&tx_bytes).unwrap();
-    let random_bytes: [u8; 81] = cryptography::get_random_bytes(get_random_int::<usize>() % 81).try_into().unwrap();
+    // FIXME: might be cleaner?
+    // Add 1 to make sure it is not 0
+    let size = (get_random_int::<usize>() % 81) + 1;
+    let random_bytes = cryptography::get_random_bytes(size);
+    let mut fixed_bytes = [0u8; 81];
+    fixed_bytes[..random_bytes.len()].copy_from_slice(&random_bytes);
     let script_string = format!("6a{}", hex::encode(random_bytes));
     let script_pubkey = ScriptBuf::from(hex::decode(script_string).unwrap());
 

@@ -190,7 +190,6 @@ mod tests {
     use teos_common::test_utils::{TXID_HEX, TX_HEX};
 
     use bitcoin::consensus;
-    
     use bitcoin::hashes::hex::FromHex;
     use bitcoincore_rpc::Auth;
 
