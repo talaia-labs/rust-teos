@@ -130,7 +130,7 @@ where
                     .iter()
                     .map(|tx| {
                         (
-                            K::from_txid(tx.txid()),
+                            K::from_txid(tx.compute_txid()),
                             match V::get_type() {
                                 Type::Transaction => V::from_data(Data::Transaction(tx.clone())),
                                 Type::BlockHash => {
@@ -274,7 +274,7 @@ mod tests {
 
             let mut locators = Vec::new();
             for tx in block.txdata.iter() {
-                let locator = Locator::new(tx.txid());
+                let locator = Locator::new(tx.compute_txid());
                 assert!(cache.contains_key(&locator));
                 locators.push(locator);
             }
@@ -354,7 +354,7 @@ mod tests {
                 locator_tx_map = b
                 .txdata
                 .iter()
-                .map(|tx| (Locator::new(tx.txid()), tx.clone()))
+                .map(|tx| (Locator::new(tx.compute_txid()), tx.clone()))
                 .collect();
             }
             _ => panic!("Expected FullBlock"),
@@ -389,7 +389,7 @@ mod tests {
                 panic!("Expected FullBlock")
             }
         };
-        assert!(!cache.contains_key(&Locator::new(tx.txid())));
+        assert!(!cache.contains_key(&Locator::new(tx.compute_txid())));
 
         let block_hash = match first_block {
             lightning_block_sync::BlockData::FullBlock(b) => b.header.block_hash(),

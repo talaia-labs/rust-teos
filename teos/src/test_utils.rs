@@ -204,7 +204,7 @@ impl Blockchain {
             }
             None => vec![get_random_tx()],
         };
-        let hashes = txdata.iter().map(|obj| obj.txid().to_raw_hash());
+        let hashes = txdata.iter().map(|obj| obj.compute_txid().to_raw_hash());
         let mut header = bitcoin::block::Header {
             version: bitcoin::block::Version::from_consensus(0),
             prev_blockhash,

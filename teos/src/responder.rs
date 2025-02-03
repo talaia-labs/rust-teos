@@ -94,8 +94,8 @@ impl TransactionTracker {
 impl From<TransactionTracker> for common_msgs::Tracker {
     fn from(t: TransactionTracker) -> Self {
         common_msgs::Tracker {
-            dispute_txid: t.dispute_tx.txid().to_raw_hash().encode(),
-            penalty_txid: t.penalty_tx.txid().to_raw_hash().encode(),
+            dispute_txid: t.dispute_tx.compute_txid().to_raw_hash().encode(),
+            penalty_txid: t.penalty_tx.compute_txid().to_raw_hash().encode(),
             penalty_rawtx: consensus::serialize(&t.penalty_tx),
         }
     }
@@ -183,9 +183,9 @@ impl Responder {
         let tx_index = self.tx_index.lock().unwrap();
 
         // Check whether the transaction is in mempool or part of our internal txindex. Send it to our node otherwise.
-        let status = if let Some(block_hash) = tx_index.get(&breach.penalty_tx.txid()) {
+        let status = if let Some(block_hash) = tx_index.get(&breach.penalty_tx.compute_txid()) {
             ConfirmationStatus::ConfirmedIn(tx_index.get_height(block_hash).unwrap() as u32)
-        } else if carrier.in_mempool(&breach.penalty_tx.txid()) {
+        } else if carrier.in_mempool(&breach.penalty_tx.compute_txid()) {
             // If it's in mempool we assume it was just included
             ConfirmationStatus::InMempoolSince(carrier.block_height())
         } else {
@@ -293,7 +293,7 @@ impl Responder {
         // Republish all the dispute transactions of the reorged trackers.
         for uuid in reorged_trackers {
             let tracker = dbm.load_tracker(uuid).unwrap();
-            let dispute_txid = tracker.dispute_tx.txid();
+            let dispute_txid = tracker.dispute_tx.compute_txid();
             // Try to publish the dispute transaction.
             let should_publish_penalty = match carrier.send_transaction(&tracker.dispute_tx) {
                 ConfirmationStatus::InMempoolSince(_) => {
@@ -369,7 +369,7 @@ impl Responder {
             let tracker = dbm.load_tracker(uuid).unwrap();
             log::warn!(
                 "Penalty transaction has missed many confirmations: {}",
-                tracker.penalty_tx.txid()
+                tracker.penalty_tx.compute_txid()
             );
             // Rebroadcast the penalty transaction.
             let status = carrier.send_transaction(&tracker.penalty_tx);
@@ -411,7 +411,7 @@ impl chain::Listen for Responder {
 
         let txs = txdata
             .iter()
-            .map(|(_, tx)| (tx.txid(), header.block_hash()))
+            .map(|(_, tx)| (tx.compute_txid(), header.block_hash()))
             .collect();
         self.tx_index.lock().unwrap().update(*header, &txs);
 
@@ -491,7 +491,7 @@ mod tests {
 
     impl TransactionTracker {
         pub fn locator(&self) -> Locator {
-            Locator::new(self.dispute_tx.txid())
+            Locator::new(self.dispute_tx.compute_txid())
         }
 
         pub fn uuid(&self) -> UUID {
@@ -530,7 +530,7 @@ mod tests {
         pub(crate) fn add_dummy_tracker(&self, tracker: &TransactionTracker) {
             let (_, appointment) = generate_dummy_appointment_with_user(
                 tracker.user_id,
-                Some(&tracker.dispute_tx.txid()),
+                Some(&tracker.dispute_tx.compute_txid()),
             );
             store_appointment_and_its_user(&self.dbm.lock().unwrap(), &appointment);
             self.dbm
@@ -713,7 +713,7 @@ mod tests {
         let (user_id, uuid) = responder.store_dummy_appointment_to_db();
 
         let breach = get_random_breach();
-        let penalty_txid = breach.penalty_tx.txid();
+        let penalty_txid = breach.penalty_tx.compute_txid();
 
         // Add the tx to our txindex
         let target_block_hash = *responder.tx_index.lock().unwrap().blocks().get(2).unwrap();
@@ -914,7 +914,7 @@ mod tests {
                         ConfirmationStatus::InMempoolSince(i),
                     );
                     just_confirmed.insert(uuid);
-                    txids.insert(breach.penalty_tx.txid());
+                    txids.insert(breach.penalty_tx.compute_txid());
                 }
                 2 => {
                     responder.add_tracker(
@@ -1187,7 +1187,7 @@ mod tests {
             let user_id = users[i % 2];
             let dispute_tx = get_random_tx();
             let (uuid, appointment) =
-                generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+                generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
 
             responder
                 .gatekeeper
@@ -1215,7 +1215,7 @@ mod tests {
             for _ in 0..3 {
                 let dispute_tx = get_random_tx();
                 let (uuid, appointment) =
-                    generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+                    generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
                 responder
                     .gatekeeper
                     .add_update_appointment(user_id, uuid, &appointment)
@@ -1251,7 +1251,7 @@ mod tests {
         for i in 0..10 {
             let dispute_tx = get_random_tx();
             let (uuid, appointment) =
-                generate_dummy_appointment_with_user(standalone_user_id, Some(&dispute_tx.txid()));
+                generate_dummy_appointment_with_user(standalone_user_id, Some(&dispute_tx.compute_txid()));
             responder
                 .gatekeeper
                 .add_update_appointment(standalone_user_id, uuid, &appointment)
@@ -1287,7 +1287,7 @@ mod tests {
         for _ in 0..5 {
             let dispute_tx = get_random_tx();
             let (uuid, appointment) =
-                generate_dummy_appointment_with_user(standalone_user_id, Some(&dispute_tx.txid()));
+                generate_dummy_appointment_with_user(standalone_user_id, Some(&dispute_tx.compute_txid()));
             responder
                 .gatekeeper
                 .add_update_appointment(standalone_user_id, uuid, &appointment)
@@ -1318,7 +1318,7 @@ mod tests {
             .lock()
             .unwrap()
             .get_issued_receipts()
-            .insert(get_random_tx().txid(), ConfirmationStatus::ConfirmedIn(21));
+            .insert(get_random_tx().compute_txid(), ConfirmationStatus::ConfirmedIn(21));
 
         // Connecting a block should trigger all the state transitions
         let block = chain.generate(Some(
@@ -1434,7 +1434,7 @@ mod tests {
             // Generate appointment and also add it to the DB
             let dispute_tx = get_random_tx();
             let (uuid, appointment) =
-                generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+                generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
             responder
                 .dbm
                 .lock()
