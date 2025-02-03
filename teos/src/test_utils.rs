@@ -188,6 +188,7 @@ impl Blockchain {
     }
 
     pub fn generate(&mut self, txs: Option<Vec<Transaction>>) -> Block {
+        // FIXME: replace this magic number with something meaningul
         let bits = bitcoin::CompactTarget::from_consensus(553713663);
 
         let prev_block = self.blocks.last().unwrap();
