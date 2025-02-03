@@ -188,7 +188,7 @@ impl Blockchain {
     }
 
     pub fn generate(&mut self, txs: Option<Vec<Transaction>>) -> Block {
-        let bits = bitcoin::CompactTarget::from_consensus(0xff);
+        let bits = bitcoin::CompactTarget::from_consensus(553713663);
 
         let prev_block = self.blocks.last().unwrap();
         let prev_blockhash = prev_block.block_hash();
