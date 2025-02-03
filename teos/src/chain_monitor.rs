@@ -135,8 +135,8 @@ mod tests {
     use std::iter::FromIterator;
     use std::thread;
 
-    use bitcoin::Network;
     use bitcoin::BlockHash;
+    use bitcoin::Network;
     use lightning_block_sync::{poll::ChainPoller, SpvClient, UnboundedCache};
 
     use crate::test_utils::{Blockchain, START_HEIGHT};

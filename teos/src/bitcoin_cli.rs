@@ -9,10 +9,10 @@
  * at your option.
 */
 
+use base64::{engine::general_purpose, Engine as _};
 use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
-use base64::{engine::general_purpose, Engine as _};
 use tokio::sync::Mutex;
 
 use bitcoin::hash_types::{BlockHash, Txid};
@@ -21,7 +21,7 @@ use bitcoincore_rpc::Auth;
 use lightning::util::ser::Writeable;
 use lightning_block_sync::http::{HttpEndpoint, JsonResponse};
 use lightning_block_sync::rpc::RpcClient;
-use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockData};
+use lightning_block_sync::{AsyncBlockSourceResult, BlockData, BlockHeaderData, BlockSource};
 
 /// A simple implementation of a bitcoind client (`bitcoin-cli`) with the minimal functionality required by the tower.
 pub struct BitcoindClient<'a> {
@@ -51,7 +51,10 @@ impl BlockSource for &BitcoindClient<'_> {
     }
 
     /// Gets a block given its hash.
-    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<'a, BlockData> {
+    fn get_block<'a>(
+        &'a self,
+        header_hash: &'a BlockHash,
+    ) -> AsyncBlockSourceResult<'a, BlockData> {
         Box::pin(async move {
             let rpc = self.bitcoind_rpc_client.lock().await;
             rpc.get_block(header_hash).await
@@ -129,7 +132,8 @@ impl<'a> BitcoindClient<'a> {
     /// Gets a fresh RPC client.
     pub fn get_new_rpc_client(&self) -> std::io::Result<RpcClient> {
         let http_endpoint = HttpEndpoint::for_host(self.host.to_owned()).with_port(self.port);
-        let binding = general_purpose::URL_SAFE.encode(format!("{}:{}", self.rpc_user, self.rpc_password));
+        let binding =
+            general_purpose::URL_SAFE.encode(format!("{}:{}", self.rpc_user, self.rpc_password));
         let rpc_credentials = binding.as_str();
         Ok(RpcClient::new(&rpc_credentials, http_endpoint))
     }

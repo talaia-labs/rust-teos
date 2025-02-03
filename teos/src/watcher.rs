@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use bitcoin::block::Header;
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::Transaction;
-use bitcoin::block::Header;
 use lightning::chain;
 use lightning_block_sync::poll::ValidatedBlock;
 
@@ -384,7 +384,10 @@ impl Watcher {
             let uuids = self.dbm.lock().unwrap().load_uuids(locator);
             for uuid in uuids {
                 let appointment = self.dbm.lock().unwrap().load_appointment(uuid).unwrap();
-                match cryptography::decrypt(appointment.encrypted_blob(), &dispute_tx.compute_txid()) {
+                match cryptography::decrypt(
+                    appointment.encrypted_blob(),
+                    &dispute_tx.compute_txid(),
+                ) {
                     Ok(penalty_tx) => {
                         if let ConfirmationStatus::Rejected(_) = self.responder.handle_breach(
                             uuid,

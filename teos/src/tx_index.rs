@@ -3,9 +3,9 @@ use std::fmt;
 use std::hash::Hash;
 use std::ops::Deref;
 
+use bitcoin::block::Header;
 use bitcoin::hash_types::BlockHash;
 use bitcoin::{Transaction, Txid};
-use bitcoin::block::Header;
 use lightning_block_sync::poll::ValidatedBlock;
 
 use teos_common::appointment::Locator;
@@ -114,7 +114,7 @@ where
         for block in last_n_blocks.iter().rev() {
             if let Some(prev_block_hash) = tx_index.blocks.back() {
                 match block.deref() {
-                    lightning_block_sync::BlockData::FullBlock(_) => {},
+                    lightning_block_sync::BlockData::FullBlock(_) => {}
                     lightning_block_sync::BlockData::HeaderOnly(header) => {
                         if header.prev_blockhash != *prev_block_hash {
                             panic!("last_n_blocks contains unchained blocks");
@@ -126,25 +126,27 @@ where
             match block.deref() {
                 lightning_block_sync::BlockData::HeaderOnly(_) => {}
                 lightning_block_sync::BlockData::FullBlock(block) => {
-                    let map = block.txdata
-                    .iter()
-                    .map(|tx| {
-                        (
-                            K::from_txid(tx.compute_txid()),
-                            match V::get_type() {
-                                Type::Transaction => V::from_data(Data::Transaction(tx.clone())),
-                                Type::BlockHash => {
-                                    V::from_data(Data::BlockHash(block.header.block_hash()))
-                                }
-                            },
-                        )
-                    })
-                    .collect();
+                    let map = block
+                        .txdata
+                        .iter()
+                        .map(|tx| {
+                            (
+                                K::from_txid(tx.compute_txid()),
+                                match V::get_type() {
+                                    Type::Transaction => {
+                                        V::from_data(Data::Transaction(tx.clone()))
+                                    }
+                                    Type::BlockHash => {
+                                        V::from_data(Data::BlockHash(block.header.block_hash()))
+                                    }
+                                },
+                            )
+                        })
+                        .collect();
 
                     tx_index.update(block.header, &map);
-                },
+                }
             }
-
         }
 
         tx_index
@@ -299,7 +301,10 @@ mod tests {
 
         match first_block.deref() {
             lightning_block_sync::BlockData::FullBlock(b) => {
-                assert_eq!(cache.get_height(&b.header.block_hash()).unwrap(), height - cache_size + 1);
+                assert_eq!(
+                    cache.get_height(&b.header.block_hash()).unwrap(),
+                    height - cache_size + 1
+                );
             }
             _ => panic!("Expected FullBlock"),
         }
@@ -313,7 +318,10 @@ mod tests {
 
         match mid.deref() {
             lightning_block_sync::BlockData::FullBlock(b) => {
-                assert_eq!(cache.get_height(&b.header.block_hash()).unwrap(), height - cache_size / 2);
+                assert_eq!(
+                    cache.get_height(&b.header.block_hash()).unwrap(),
+                    height - cache_size / 2
+                );
             }
             _ => panic!("Expected FullBlock"),
         }
@@ -352,17 +360,17 @@ mod tests {
         match last_block.deref() {
             lightning_block_sync::BlockData::FullBlock(b) => {
                 locator_tx_map = b
-                .txdata
-                .iter()
-                .map(|tx| (Locator::new(tx.compute_txid()), tx.clone()))
-                .collect();
+                    .txdata
+                    .iter()
+                    .map(|tx| (Locator::new(tx.compute_txid()), tx.clone()))
+                    .collect();
             }
             _ => panic!("Expected FullBlock"),
         }
 
         let header = match last_block.deref() {
             lightning_block_sync::BlockData::FullBlock(b) => b.header,
-            lightning_block_sync::BlockData::HeaderOnly(h) => h.clone()
+            lightning_block_sync::BlockData::HeaderOnly(h) => h.clone(),
         };
         cache.update(header, &locator_tx_map);
 

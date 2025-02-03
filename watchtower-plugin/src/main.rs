@@ -8,9 +8,9 @@ use serde_json::json;
 use tokio::io::{stdin, stdout};
 use tokio::sync::mpsc::unbounded_channel;
 
+use cln_plugin::options::config_type::DefaultInteger;
 use cln_plugin::options::ConfigOption;
 use cln_plugin::{anyhow, Builder, Error, Plugin};
-use cln_plugin::options::config_type::DefaultInteger;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::net::http::Endpoint;
@@ -29,11 +29,12 @@ use watchtower_plugin::retrier::RetryManager;
 use watchtower_plugin::wt_client::{RevocationData, WTClient};
 use watchtower_plugin::{constants, TowerStatus};
 
-const DEV_WT_MAX_RETRY_INTERVAL_CONFIG: ConfigOption<DefaultInteger> = ConfigOption::new_i64_with_default(
-    constants::DEV_WT_MAX_RETRY_INTERVAL,
-    constants::DEFAULT_DEV_WT_MAX_RETRY_INTERVAL,
-    constants::DEV_WT_MAX_RETRY_INTERVAL_DESC,
-);
+const DEV_WT_MAX_RETRY_INTERVAL_CONFIG: ConfigOption<DefaultInteger> =
+    ConfigOption::new_i64_with_default(
+        constants::DEV_WT_MAX_RETRY_INTERVAL,
+        constants::DEFAULT_DEV_WT_MAX_RETRY_INTERVAL,
+        constants::DEV_WT_MAX_RETRY_INTERVAL_DESC,
+    );
 
 const WT_AUTO_RETRY_DELAY_CONFIG: ConfigOption<DefaultInteger> = ConfigOption::new_i64_with_default(
     constants::WT_AUTO_RETRY_DELAY,
@@ -638,28 +639,18 @@ async fn main() -> Result<(), Error> {
         .await,
     ));
 
-    let max_elapsed_time = u16::try_from(
-        midstate
-            .option(&WT_MAX_RETRY_TIME_CONFIG)
-            .unwrap(),
-    )
-    .inspect_err(|_| {
-        log::error!("{} out of range", constants::WT_MAX_RETRY_TIME);
-    })?;
+    let max_elapsed_time = u16::try_from(midstate.option(&WT_MAX_RETRY_TIME_CONFIG).unwrap())
+        .inspect_err(|_| {
+            log::error!("{} out of range", constants::WT_MAX_RETRY_TIME);
+        })?;
 
-    let auto_retry_delay = u32::try_from(
-        midstate
-            .option(&WT_AUTO_RETRY_DELAY_CONFIG)
-            .unwrap(),
-    )
-    .inspect_err(|_| {
-        log::error!("{} out of range", constants::WT_AUTO_RETRY_DELAY);
-    })?;
+    let auto_retry_delay = u32::try_from(midstate.option(&WT_AUTO_RETRY_DELAY_CONFIG).unwrap())
+        .inspect_err(|_| {
+            log::error!("{} out of range", constants::WT_AUTO_RETRY_DELAY);
+        })?;
 
     let max_interval_time = u16::try_from(
-        midstate
-            .option(&DEV_WT_MAX_RETRY_INTERVAL_CONFIG)
-            .unwrap(),
+        midstate.option(&DEV_WT_MAX_RETRY_INTERVAL_CONFIG).unwrap(),
     )
     .inspect_err(|_| {
         log::error!("{} out of range", constants::DEV_WT_MAX_RETRY_INTERVAL);

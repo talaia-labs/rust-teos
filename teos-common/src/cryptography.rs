@@ -1,8 +1,9 @@
 //! Cryptography module, used in the interaction between users and towers.
 
-use rand::distributions::Uniform;
-use rand::Rng; use chacha20poly1305::aead::{Aead, NewAead};
+use chacha20poly1305::aead::{Aead, NewAead};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use rand::distributions::Uniform;
+use rand::Rng;
 
 use bitcoin::consensus;
 use bitcoin::hashes::{sha256, Hash};

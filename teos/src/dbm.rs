@@ -1700,8 +1700,10 @@ mod tests {
             let tracker = get_random_tracker(user_id, status);
             dbm.store_tracker(uuid, &tracker).unwrap();
 
-            penalties_summaries
-                .insert(uuid, PenaltySummary::new(tracker.penalty_tx.compute_txid(), status));
+            penalties_summaries.insert(
+                uuid,
+                PenaltySummary::new(tracker.penalty_tx.compute_txid(), status),
+            );
         }
 
         assert_eq!(dbm.load_penalties_summaries(), penalties_summaries);

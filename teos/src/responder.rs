@@ -1250,8 +1250,10 @@ mod tests {
         let mut just_confirmed_trackers = Vec::new();
         for i in 0..10 {
             let dispute_tx = get_random_tx();
-            let (uuid, appointment) =
-                generate_dummy_appointment_with_user(standalone_user_id, Some(&dispute_tx.compute_txid()));
+            let (uuid, appointment) = generate_dummy_appointment_with_user(
+                standalone_user_id,
+                Some(&dispute_tx.compute_txid()),
+            );
             responder
                 .gatekeeper
                 .add_update_appointment(standalone_user_id, uuid, &appointment)
@@ -1286,8 +1288,10 @@ mod tests {
         let mut trackers_to_rebroadcast = Vec::new();
         for _ in 0..5 {
             let dispute_tx = get_random_tx();
-            let (uuid, appointment) =
-                generate_dummy_appointment_with_user(standalone_user_id, Some(&dispute_tx.compute_txid()));
+            let (uuid, appointment) = generate_dummy_appointment_with_user(
+                standalone_user_id,
+                Some(&dispute_tx.compute_txid()),
+            );
             responder
                 .gatekeeper
                 .add_update_appointment(standalone_user_id, uuid, &appointment)
@@ -1318,7 +1322,10 @@ mod tests {
             .lock()
             .unwrap()
             .get_issued_receipts()
-            .insert(get_random_tx().compute_txid(), ConfirmationStatus::ConfirmedIn(21));
+            .insert(
+                get_random_tx().compute_txid(),
+                ConfirmationStatus::ConfirmedIn(21),
+            );
 
         // Connecting a block should trigger all the state transitions
         let block = chain.generate(Some(

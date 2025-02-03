@@ -18,22 +18,23 @@ use jsonrpc_http_server::{CloseHandle, Server, ServerBuilder};
 use bitcoincore_rpc::{Auth, Client as BitcoindClient};
 
 use bitcoin::block::Block;
-use bitcoin::Amount;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::blockdata::script::{Builder, ScriptBuf};
 use bitcoin::blockdata::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use bitcoin::hash_types::BlockHash;
 use bitcoin::hash_types::Txid;
 use bitcoin::hashes::Hash;
-use bitcoin::Network;
-use bitcoin::pow::Work;
 use bitcoin::merkle_tree::calculate_root;
+use bitcoin::pow::Work;
+use bitcoin::Amount;
+use bitcoin::Network;
 use bitcoin::Witness;
 use lightning_block_sync::poll::{
     ChainPoller, Poll, Validate, ValidatedBlock, ValidatedBlockHeader,
 };
 use lightning_block_sync::{
-    AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError, UnboundedCache, BlockData
+    AsyncBlockSourceResult, BlockData, BlockHeaderData, BlockSource, BlockSourceError,
+    UnboundedCache,
 };
 
 use teos_common::constants::IRREVOCABLY_RESOLVED;

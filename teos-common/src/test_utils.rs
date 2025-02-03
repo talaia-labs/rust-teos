@@ -7,7 +7,7 @@ use rand::Rng;
 
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::SecretKey;
-use bitcoin::{consensus, ScriptBuf, Transaction, TxOut, Txid, Amount};
+use bitcoin::{consensus, Amount, ScriptBuf, Transaction, TxOut, Txid};
 
 use crate::appointment::{Appointment, Locator};
 use crate::cryptography;
