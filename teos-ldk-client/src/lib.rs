@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::io;
 
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
+
+use bincode;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::net::NetAddr;
@@ -19,7 +22,7 @@ pub mod wt_client;
 mod test_utils;
 
 /// The status the tower can be found at.
-#[derive(Clone, Serialize, PartialEq, Eq, Copy, Debug)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq, Copy, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum TowerStatus {
     Reachable,
@@ -194,7 +197,7 @@ impl From<TowerInfo> for TowerSummary {
 }
 
 /// Summarized data associated with a given tower.
-#[derive(Clone, Serialize, Debug, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub struct TowerInfo {
     pub net_addr: String,
     pub available_slots: u32,
@@ -245,10 +248,18 @@ impl TowerInfo {
     pub fn set_misbehaving_proof(&mut self, proof: MisbehaviorProof) {
         self.misbehaving_proof = Some(proof);
     }
+
+    fn to_vec(&self) -> Result<Vec<u8>, io::Error> {
+        bincode::serialize(self).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
+
+    fn from_slice(slice: &[u8]) -> Result<Self, io::Error> {
+        bincode::deserialize(slice).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
 }
 
 /// A misbehaving proof. Contains proof of a tower replying with a public key different from the advertised one.
-#[derive(Clone, Serialize, Debug, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub struct MisbehaviorProof {
     #[serde(with = "hex::serde")]
     pub locator: Locator,
