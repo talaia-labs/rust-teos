@@ -8,7 +8,6 @@ use teos_common::net::NetAddr;
 use teos_common::receipts::AppointmentReceipt;
 use teos_common::TowerId;
 
-pub mod constants;
 pub mod convert;
 pub mod storage;
 pub mod net;

@@ -9,7 +9,6 @@ use teos_common::protos as common_msgs;
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
-use crate::net::ProxyInfo;
 use crate::MisbehaviorProof;
 
 /// Represents a generic api response.
@@ -60,7 +59,6 @@ pub async fn register(
     tower_id: TowerId,
     user_id: UserId,
     tower_net_addr: &NetAddr,
-    proxy: &Option<ProxyInfo>,
 ) -> Result<RegistrationReceipt, RequestError> {
     log::info!("Registering in the Eye of Satoshi (tower_id={tower_id})");
     process_post_response(
@@ -70,7 +68,6 @@ pub async fn register(
             &common_msgs::RegisterRequest {
                 user_id: user_id.to_vec(),
             },
-            proxy,
         )
         .await,
     )
@@ -90,7 +87,6 @@ pub async fn register(
 pub async fn add_appointment(
     tower_id: TowerId,
     tower_net_addr: &NetAddr,
-    proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
 ) -> Result<(u32, AppointmentReceipt), AddAppointmentError> {
@@ -99,7 +95,7 @@ pub async fn add_appointment(
         appointment.locator
     );
     let (response, receipt) =
-        send_appointment(tower_id, tower_net_addr, proxy, appointment, signature).await?;
+        send_appointment(tower_id, tower_net_addr, appointment, signature).await?;
     log::debug!("Appointment accepted and signed by {tower_id}");
     log::debug!("Remaining slots: {}", response.available_slots);
     log::debug!("Start block: {}", response.start_block);
@@ -111,7 +107,6 @@ pub async fn add_appointment(
 pub async fn send_appointment(
     tower_id: TowerId,
     tower_net_addr: &NetAddr,
-    proxy: &Option<ProxyInfo>,
     appointment: &Appointment,
     signature: &str,
 ) -> Result<(common_msgs::AddAppointmentResponse, AppointmentReceipt), AddAppointmentError> {
@@ -125,7 +120,6 @@ pub async fn send_appointment(
             tower_net_addr,
             Endpoint::AddAppointment,
             &request_data,
-            proxy,
         )
         .await,
     )
@@ -158,31 +152,16 @@ pub async fn send_appointment(
 async fn request<S: Serialize>(
     tower_net_addr: &NetAddr,
     endpoint: Endpoint,
-    proxy: &Option<ProxyInfo>,
     method: Method,
     data: Option<S>,
 ) -> Result<Response, RequestError> {
-    let client = if let Some(proxy) = proxy {
-        if proxy.always_use || tower_net_addr.is_onion() {
-            reqwest::Client::builder()
-                .proxy(
-                    reqwest::Proxy::http(proxy.get_socks_addr())
-                        .map_err(|e| RequestError::ConnectionError(format!("{e}")))?,
-                )
-                .build()
-                .map_err(|e| RequestError::ConnectionError(format!("{e}")))?
-        } else {
-            reqwest::Client::new()
-        }
-    } else {
-        // If there is no proxy we only build the client as long as the address is not onion
-        if tower_net_addr.is_onion() {
-            return Err(RequestError::ConnectionError(
-                "Cannot connect to an onion address without a proxy".to_owned(),
-            ));
-        }
-        reqwest::Client::new()
-    };
+    // If there is no proxy we only build the client as long as the address is not onion
+    if tower_net_addr.is_onion() {
+        return Err(RequestError::ConnectionError(
+            "Cannot connect to an onion address without a proxy".to_owned(),
+        ));
+    }
+    let client = reqwest::Client::new();
 
     let mut request_builder = client.request(
         method,
@@ -209,17 +188,15 @@ pub async fn post_request<S: Serialize>(
     tower_net_addr: &NetAddr,
     endpoint: Endpoint,
     data: S,
-    proxy: &Option<ProxyInfo>,
 ) -> Result<Response, RequestError> {
-    request(tower_net_addr, endpoint, proxy, Method::POST, Some(data)).await
+    request(tower_net_addr, endpoint, Method::POST, Some(data)).await
 }
 
 pub async fn get_request(
     tower_net_addr: &NetAddr,
     endpoint: Endpoint,
-    proxy: &Option<ProxyInfo>,
 ) -> Result<Response, RequestError> {
-    request::<()>(tower_net_addr, endpoint, proxy, Method::GET, None).await
+    request::<()>(tower_net_addr, endpoint, Method::GET, None).await
 }
 
 /// Generic function to process the response of a given post request.
@@ -285,7 +262,6 @@ mod tests {
             TowerId(tower_pk),
             registration_receipt.user_id(),
             &NetAddr::new(server.url()),
-            &None,
         )
         .await
         .unwrap();
@@ -300,7 +276,6 @@ mod tests {
             get_random_user_id(),
             get_random_user_id(),
             &NetAddr::new("http://server_addr".to_owned()),
-            &None,
         )
         .await
         .unwrap_err();
@@ -323,7 +298,6 @@ mod tests {
             get_random_user_id(),
             get_random_user_id(),
             &NetAddr::new(server.url()),
-            &None,
         )
         .await
         .unwrap_err();
@@ -355,7 +329,6 @@ mod tests {
         let (response, receipt) = add_appointment(
             TowerId(tower_pk),
             &NetAddr::new(server.url()),
-            &None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -388,7 +361,6 @@ mod tests {
         let (response, receipt) = send_appointment(
             TowerId(tower_pk),
             &NetAddr::new(server.url()),
-            &None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -422,7 +394,6 @@ mod tests {
         let error = send_appointment(
             tower_id,
             &NetAddr::new(server.url()),
-            &None,
             &appointment,
             appointment_receipt.user_signature(),
         )
@@ -449,7 +420,6 @@ mod tests {
         let error = send_appointment(
             get_random_user_id(),
             &NetAddr::new("http://server_addr".to_owned()),
-            &None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -477,7 +447,6 @@ mod tests {
         let error = send_appointment(
             get_random_user_id(),
             &NetAddr::new(server.url()),
-            &None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -511,7 +480,6 @@ mod tests {
         let error = send_appointment(
             get_random_user_id(),
             &NetAddr::new(server.url()),
-            &None,
             &generate_random_appointment(None),
             "user_sig",
         )
@@ -537,7 +505,6 @@ mod tests {
         let response_post = request(
             &NetAddr::new(server.url()),
             Endpoint::Register,
-            &None,
             Method::POST,
             Some(json!("")),
         )
@@ -557,7 +524,6 @@ mod tests {
         let response_get = request::<()>(
             &NetAddr::new(server.url()),
             Endpoint::Ping,
-            &None,
             Method::GET,
             None,
         )
@@ -572,7 +538,6 @@ mod tests {
         assert!(request(
             &NetAddr::new("http://unreachable_url".to_owned()),
             Endpoint::Register,
-            &None,
             Method::POST,
             Some(json!("")),
         )
@@ -583,7 +548,6 @@ mod tests {
         assert!(request(
             &NetAddr::new("http://unreachable_url".to_owned()),
             Endpoint::Ping,
-            &None,
             Method::GET,
             None::<&str>,
         )
@@ -601,7 +565,7 @@ mod tests {
             .with_header("content-type", "application/json")
             .create_async()
             .await;
-        let response = get_request(&NetAddr::new(server.url()), Endpoint::Ping, &None).await;
+        let response = get_request(&NetAddr::new(server.url()), Endpoint::Ping).await;
 
         api_mock.assert_async().await;
 
@@ -613,7 +577,6 @@ mod tests {
         assert!(get_request(
             &NetAddr::new("http://unreachable_url".to_owned()),
             Endpoint::Ping,
-            &None,
         )
         .await
         .unwrap_err()
@@ -634,7 +597,6 @@ mod tests {
             &NetAddr::new(server.url()),
             Endpoint::Register,
             json!(""),
-            &None,
         )
         .await;
 
@@ -648,7 +610,6 @@ mod tests {
             &NetAddr::new("http://unreachable_url".to_owned()),
             Endpoint::Register,
             json!(""),
-            &None,
         )
         .await
         .unwrap_err()
@@ -674,7 +635,6 @@ mod tests {
                 &NetAddr::new(server.url()),
                 Endpoint::GetAppointment,
                 json!(""),
-                &None,
             )
             .await,
         )

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::net::NetAddr;
@@ -195,7 +195,7 @@ impl From<TowerInfo> for TowerSummary {
 }
 
 /// Summarized data associated with a given tower.
-#[derive(Clone, Serialize, Debug, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct TowerInfo {
     pub net_addr: String,
     pub available_slots: u32,
