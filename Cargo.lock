@@ -3055,6 +3055,23 @@ dependencies = [
 [[package]]
 name = "teos-ldk-client"
 version = "0.1.0"
+dependencies = [
+ "backoff",
+ "bitcoin",
+ "hex",
+ "home",
+ "lightning",
+ "log",
+ "mockito",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempdir",
+ "teos-common",
+ "tokio 1.43.0",
+ "tonic",
+]
 
 [[package]]
 name = "textwrap"
