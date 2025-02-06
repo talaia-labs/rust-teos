@@ -1,6 +1,6 @@
 //! Receipts issued  by towers and handed to users as commitment proof.
 
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 
 use bitcoin::secp256k1::SecretKey;
 
@@ -107,7 +107,7 @@ impl RegistrationReceipt {
 /// Proof that a certain state was backed up with the tower.
 ///
 /// Appointment receipts can be used alongside a registration receipt that covers it, and on chain data (a breach not being reacted with a penalty), to prove a tower has not reacted to a channel breach.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq, Serialize)]
 pub struct AppointmentReceipt {
     user_signature: String,
     start_block: u32,
