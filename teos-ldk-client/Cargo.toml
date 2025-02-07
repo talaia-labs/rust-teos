@@ -3,6 +3,11 @@ name = "teos-ldk-client"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["sqlite"]
+sqlite = []
+kv = []
+
 [dependencies]
 # General
 backoff = { version = "0.4.0", features = ["tokio"] }

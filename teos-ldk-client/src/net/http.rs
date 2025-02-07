@@ -116,12 +116,7 @@ pub async fn send_appointment(
     };
 
     match process_post_response(
-        post_request(
-            tower_net_addr,
-            Endpoint::AddAppointment,
-            &request_data,
-        )
-        .await,
+        post_request(tower_net_addr, Endpoint::AddAppointment, &request_data).await,
     )
     .await?
     {
@@ -593,12 +588,8 @@ mod tests {
             .create_async()
             .await;
 
-        let response = post_request(
-            &NetAddr::new(server.url()),
-            Endpoint::Register,
-            json!(""),
-        )
-        .await;
+        let response =
+            post_request(&NetAddr::new(server.url()), Endpoint::Register, json!("")).await;
 
         api_mock.assert_async().await;
         assert!(matches!(response, Ok(Response { .. })));

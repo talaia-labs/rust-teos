@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use bincode;
 
@@ -12,10 +12,10 @@ use teos_common::receipts::AppointmentReceipt;
 use teos_common::TowerId;
 
 pub mod convert;
-pub mod storage;
 pub mod net;
 pub mod retrier;
 mod ser;
+pub mod storage;
 pub mod wt_client;
 
 #[cfg(test)]

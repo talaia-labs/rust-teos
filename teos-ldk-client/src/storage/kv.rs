@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
-use lightning::util::persist::KVStore;
-use lightning::io::Error;
 use bitcoin::secp256k1::SecretKey;
-use teos_common::{TowerId, UserId};
-use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
+use lightning::io::Error;
+use lightning::util::persist::KVStore;
 use teos_common::appointment::{Appointment, Locator};
+use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
+use teos_common::{TowerId, UserId};
 
 use crate::{AppointmentStatus, MisbehaviorProof, TowerInfo, TowerStatus, TowerSummary};
 
@@ -30,10 +30,7 @@ pub(crate) struct Storage<T: KVStore> {
 
 impl<T: KVStore> Storage<T> {
     pub(crate) fn new(store: T, sk: String) -> Result<Self, Error> {
-        Ok(Storage {
-            store,
-            sk
-        })
+        Ok(Storage { store, sk })
     }
 
     /// Creates a composite key from multiple components
@@ -54,7 +51,12 @@ impl<T: KVStore> Storage<T> {
     ///
     /// This function MUST be guarded against inserting duplicate (tower_id, subscription_expiry) pairs.
     /// This is currently done in WTClient::add_update_tower.
-    pub fn store_tower_record(&mut self, tower_id: TowerId, net_addr: &str, receipt: &RegistrationReceipt) -> Result<(), Error> {
+    pub fn store_tower_record(
+        &mut self,
+        tower_id: TowerId,
+        net_addr: &str,
+        receipt: &RegistrationReceipt,
+    ) -> Result<(), Error> {
         let key = Self::make_key(&[&tower_id.to_string()]);
 
         let value = TowerInfo::new(
@@ -65,11 +67,14 @@ impl<T: KVStore> Storage<T> {
             HashMap::new(),
             Vec::new(),
             Vec::new(),
-        ).to_vec().unwrap();
+        )
+        .to_vec()
+        .unwrap();
 
         // TODO: encrypt
 
-        self.store.write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, &value)
+        self.store
+            .write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, &value)
     }
 
     /// Loads a tower record from the database.
@@ -88,8 +93,10 @@ impl<T: KVStore> Storage<T> {
 
         let mut tower_info = TowerInfo::from_slice(&value).unwrap();
         tower_info.appointments = self.load_appointment_receipts(tower_id);
-        tower_info.pending_appointments = self.load_appointments(tower_id, AppointmentStatus::Pending);
-        tower_info.invalid_appointments = self.load_appointments(tower_id, AppointmentStatus::Invalid);
+        tower_info.pending_appointments =
+            self.load_appointments(tower_id, AppointmentStatus::Pending);
+        tower_info.invalid_appointments =
+            self.load_appointments(tower_id, AppointmentStatus::Invalid);
 
         Some(tower_info)
     }
@@ -104,7 +111,8 @@ impl<T: KVStore> Storage<T> {
         // secondary namespance: "tower_record"
         // key: <tower_id>
         // value: ?
-        self.store.remove(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, true)
+        self.store
+            .remove(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, true)
     }
 
     /// Loads all tower records from the database.
@@ -115,29 +123,45 @@ impl<T: KVStore> Storage<T> {
     /// Loads the latest registration receipt for a given tower.
     ///
     /// Latests is determined by the one with the `subscription_expiry` further into the future.
-    pub fn load_registration_receipt(&self, tower_id: TowerId, user_id: UserId) -> Option<RegistrationReceipt> {
+    pub fn load_registration_receipt(
+        &self,
+        tower_id: TowerId,
+        user_id: UserId,
+    ) -> Option<RegistrationReceipt> {
         let key = Self::make_key(&[&tower_id.to_string()]);
 
-        self.store.read(PRIMARY_NAMESPACE, NS_REGISTRATION_RECEIPTS, &key)
+        self.store
+            .read(PRIMARY_NAMESPACE, NS_REGISTRATION_RECEIPTS, &key)
     }
 
-
     /// Stores an appointments receipt into the database representing an appointment accepted by a given tower.
-    pub fn store_appointment_receipt(&mut self, tower_id: TowerId, locator: Locator, available_slots: u32, receipt: &AppointmentReceipt) -> Result<(), Error> {
+    pub fn store_appointment_receipt(
+        &mut self,
+        tower_id: TowerId,
+        locator: Locator,
+        available_slots: u32,
+        receipt: &AppointmentReceipt,
+    ) -> Result<(), Error> {
         let key = Self::make_key(&[&tower_id.to_string(), &locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "appointment_receipt"
         // key: <tower_id> + <locator>
         // value: ?
-        self.store.write(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, &key, &value)
+        self.store
+            .write(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, &key, &value)
     }
 
     /// Loads a given appointment receipt of a given tower from the database.
-    pub fn load_appointment_receipt(&self, tower_id: TowerId, locator: Locator) -> Option<AppointmentReceipt> {
+    pub fn load_appointment_receipt(
+        &self,
+        tower_id: TowerId,
+        locator: Locator,
+    ) -> Option<AppointmentReceipt> {
         let key = Self::make_key(&[&tower_id.to_string(), &locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "appointment_receipt"
-        self.store.read(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, &key)
+        self.store
+            .read(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, &key)
     }
 
     /// Loads the appointment receipts associated to a given tower.
@@ -155,7 +179,11 @@ impl<T: KVStore> Storage<T> {
     ///
     /// The loaded locators can be loaded either from appointment_receipts, pending_appointments or invalid_appointments
     ///  depending on `status`.
-    pub fn load_appointment_locators(&self, tower_id: TowerId, status: AppointmentStatus) -> HashSet<Locator> {
+    pub fn load_appointment_locators(
+        &self,
+        tower_id: TowerId,
+        status: AppointmentStatus,
+    ) -> HashSet<Locator> {
         // primary namespace: "watchtower"
         // secondary namespance: "{status}_appointment_receipt"
         todo!();
@@ -187,11 +215,15 @@ impl<T: KVStore> Storage<T> {
     /// A pending appointment is an appointment that was sent to a tower when it was unreachable.
     /// This data is stored so it can be resent once the tower comes back online.
     /// Internally calls [Self::store_appointment].
-    pub fn store_pending_appointment(&self, tower_id: TowerId, appointment: &Appointment) -> Result<(), Error> {
+    pub fn store_pending_appointment(
+        &self,
+        tower_id: TowerId,
+        appointment: &Appointment,
+    ) -> Result<(), Error> {
         let key = Self::make_key(&[&tower_id.to_string(), &appointment.locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "pending_appointment"
-        // key: 
+        // key:
         // value: ?
         todo!();
     }
@@ -199,7 +231,11 @@ impl<T: KVStore> Storage<T> {
     /// Removes a pending appointment from the database.
     ///
     /// If the pending appointment is the only instance of the appointment, the appointment will also be deleted form the appointments table.
-    pub fn delete_pending_appointment(&self, tower_id: TowerId, locator: Locator) -> Result<(), Error> {
+    pub fn delete_pending_appointment(
+        &self,
+        tower_id: TowerId,
+        locator: Locator,
+    ) -> Result<(), Error> {
         let key = Self::make_key(&[&tower_id.to_string(), &locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "pending_appointment"
@@ -213,7 +249,11 @@ impl<T: KVStore> Storage<T> {
     /// An invalid appointment is an appointment that was rejected by the tower.
     /// Storing this data may allow us to see what was the issue and send the data later on.
     /// Internally calls [Self::store_appointment].
-    pub fn store_invalid_appointment(&mut self, tower_id: TowerId, appointment: &Appointment) -> Result<(), Error> {
+    pub fn store_invalid_appointment(
+        &mut self,
+        tower_id: TowerId,
+        appointment: &Appointment,
+    ) -> Result<(), Error> {
         let key = Self::make_key(&[&tower_id.to_string(), &appointment.locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "invalid_appointment"
@@ -226,7 +266,11 @@ impl<T: KVStore> Storage<T> {
     ///
     /// This is meant to be used only for pending and invalid appointments, if the method is called for
     /// accepted appointment, an empty collection will be returned.
-    pub fn load_appointments(&self, tower_id: TowerId, status: AppointmentStatus) -> Vec<Appointment> {
+    pub fn load_appointments(
+        &self,
+        tower_id: TowerId,
+        status: AppointmentStatus,
+    ) -> Vec<Appointment> {
         let key = Self::make_key(&[&tower_id.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "{status}_appointment_receipt"
@@ -239,7 +283,11 @@ impl<T: KVStore> Storage<T> {
     ///
     /// A misbehaving proof is proof that the tower has signed an appointment using a key different
     /// than the one advertised to the user when they registered.
-    pub fn store_misbehaving_proof(&self, tower_id: TowerId, proof: &MisbehaviorProof) -> Result<(), Error> {
+    pub fn store_misbehaving_proof(
+        &self,
+        tower_id: TowerId,
+        proof: &MisbehaviorProof,
+    ) -> Result<(), Error> {
         let key = Self::make_key(&[&tower_id.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "misbehaving_proof"

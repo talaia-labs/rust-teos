@@ -10,7 +10,7 @@ use backoff::{Error, ExponentialBackoff};
 use teos_common::appointment::Locator;
 use teos_common::cryptography;
 use teos_common::errors;
-use teos_common::UserId as TowerId;
+use teos_common::TowerId;
 
 use crate::net::http::{self, AddAppointmentError};
 use crate::wt_client::{RevocationData, WTClient};
@@ -574,6 +574,7 @@ impl Retrier {
 mod tests {
     use super::*;
 
+    use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use serde_json::json;
     use tempdir::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
@@ -583,9 +584,10 @@ mod tests {
     use teos_common::protos::AddAppointmentRequest;
     use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
     use teos_common::test_utils::{
-        generate_random_appointment, get_random_registration_receipt, get_random_user_id,
+        generate_random_appointment, get_random_registration_receipt,
         get_registration_receipt_from_previous,
     };
+    use teos_common::UserId;
 
     use crate::net::http::ApiError;
     use crate::test_utils::get_dummy_add_appointment_response;
@@ -623,12 +625,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_manage_retry_reachable() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let (tx, rx) = unbounded_channel();
-        let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
-        ));
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
 
+        let wt_client = Arc::new(Mutex::new(
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
+        ));
         let mut server = mockito::Server::new_async().await;
 
         // Add a tower with pending appointments
@@ -717,10 +726,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_manage_retry_unreachable() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let (tx, rx) = unbounded_channel();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
 
         // Add a tower with pending appointments
@@ -843,10 +860,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_manage_retry_rejected() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let (tx, rx) = unbounded_channel();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -946,10 +971,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_manage_retry_misbehaving() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let (tx, rx) = unbounded_channel();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -1037,10 +1070,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_manage_retry_abandoned() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let (tx, rx) = unbounded_channel();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let server = mockito::Server::new_async().await;
 
@@ -1079,10 +1120,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_manage_retry_subscription_error() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
         let (tx, rx) = unbounded_channel();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -1187,166 +1236,184 @@ mod tests {
         task.abort();
     }
 
-    // #[tokio::test]
-    // async fn test_manage_retry_while_idle() {
-    //     use crate::storage::Storage;
-    //     // Let's try adding a tower, setting it to idle and send revocation data in all its forms
-    //     // This replicates the three types of data the retrier can receive:
-    //     // - Initialization (from db) with stale data
-    //     // - Regular (fresh) data from `on_commitment_revocation`
-    //     // - A wake up call with no data
-    //
-    //     let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-    //     let (tx, rx) = unbounded_channel();
-    //
-    //     // Stale data is sent on WTClient initialization if found in the database. We'll force that to happen by populating the DB before initializing the WTClient
-    //     let (tower_sk, tower_pk) = cryptography::get_random_keypair();
-    //     let tower_id = TowerId(tower_pk);
-    //
-    //     let mut storage = Storage::new().unwrap();
-    //     let receipt = get_random_registration_receipt();
-    //     storage.store_tower_record(tower_id, "http://unreachable.tower", &receipt)
-    //         .unwrap();
-    //
-    //     let appointment = generate_random_appointment(None);
-    //     storage.store_pending_appointment(tower_id, &appointment)
-    //         .unwrap();
-    //
-    //     // Now we can create the WTClient and check that the data is pending
-    //     let wt_client = Arc::new(Mutex::new(
-    //         WTClient::new(tmp_path.path().to_path_buf(), tx.clone()).await,
-    //     ));
-    //
-    //     // Also create the retrier thread so retries can be managed
-    //     let wt_client_clone = wt_client.clone();
-    //     let task = tokio::spawn(async move {
-    //         RetryManager::new(
-    //             wt_client_clone,
-    //             rx,
-    //             MAX_ELAPSED_TIME,
-    //             LONG_AUTO_RETRY_DELAY,
-    //             MAX_INTERVAL_TIME,
-    //         )
-    //         .manage_retry()
-    //         .await
-    //     });
-    //
-    //     {
-    //         // After the retriers gives up, it should go idling and flag the tower as unreachable
-    //         tokio::time::sleep(Duration::from_secs_f64(
-    //             MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME,
-    //         ))
-    //         .await;
-    //         let state = wt_client.lock().unwrap();
-    //         assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
-    //
-    //         let tower = state.towers.get(&tower_id).unwrap();
-    //         assert!(tower.pending_appointments.contains(&appointment.locator));
-    //         assert_eq!(tower.status, TowerStatus::Unreachable);
-    //     }
-    //
-    //     // With the retrier idling all fresh data sent to it will be stored but it won't trigger a retry.
-    //     // (we can check the data was stored later on)
-    //     let appointment2 = generate_random_appointment(None);
-    //     wt_client
-    //         .lock()
-    //         .unwrap()
-    //         .add_pending_appointment(tower_id, &appointment2);
-    //     tx.send((tower_id, RevocationData::Fresh(appointment2.locator)))
-    //         .unwrap();
-    //
-    //     {
-    //         tokio::time::sleep(Duration::from_secs_f64(POLLING_TIME as f64 + MAX_RUN_TIME)).await;
-    //         let state = wt_client.lock().unwrap();
-    //         assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
-    //         let tower = state.towers.get(&tower_id).unwrap();
-    //         assert_eq!(tower.status, TowerStatus::Unreachable);
-    //     }
-    //
-    //     // Create the receipts, the responses and set the mocks
-    //     let mut appointment_receipt = AppointmentReceipt::new(
-    //         cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
-    //         42,
-    //     );
-    //     let mut appointment2_receipt = AppointmentReceipt::new(
-    //         cryptography::sign(&appointment2.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
-    //         42,
-    //     );
-    //     appointment_receipt.sign(&tower_sk);
-    //     appointment2_receipt.sign(&tower_sk);
-    //
-    //     // Mock a proper response
-    //     let mut server = mockito::Server::new_async().await;
-    //
-    //     let api_mock = server
-    //         .mock("POST", Endpoint::AddAppointment.path().as_str())
-    //         .with_status(200)
-    //         .with_header("content-type", "application/json")
-    //         .with_body_from_request(move |request| {
-    //             let body = serde_json::from_slice::<AddAppointmentRequest>(request.body().unwrap())
-    //                 .unwrap();
-    //
-    //             let response = if body.appointment.unwrap().locator == appointment.locator.to_vec()
-    //             {
-    //                 get_dummy_add_appointment_response(appointment.locator, &appointment_receipt)
-    //             } else {
-    //                 get_dummy_add_appointment_response(appointment2.locator, &appointment2_receipt)
-    //             };
-    //             json!(response).to_string().into()
-    //         })
-    //         .expect(2)
-    //         .create_async()
-    //         .await;
-    //
-    //     // Patch the tower address
-    //     wt_client
-    //         .lock()
-    //         .unwrap()
-    //         .towers
-    //         .get_mut(&tower_id)
-    //         .unwrap()
-    //         .set_net_addr(server.url());
-    //
-    //     // Check pending data is still there now, and is it not once the retrier succeeds
-    //     assert_eq!(
-    //         wt_client
-    //             .lock()
-    //             .unwrap()
-    //             .towers
-    //             .get(&tower_id)
-    //             .unwrap()
-    //             .pending_appointments
-    //             .len(),
-    //         2,
-    //     );
-    //
-    //     // Send a retry flag to the retrier to force a retry.
-    //     tx.send((tower_id, RevocationData::None)).unwrap();
-    //
-    //     // After retrying the pending pool has been emptied, meaning that both appointments went trough
-    //     tokio::time::sleep(Duration::from_secs_f64(POLLING_TIME as f64 + MAX_RUN_TIME)).await;
-    //     assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
-    //     assert!(wt_client
-    //         .lock()
-    //         .unwrap()
-    //         .towers
-    //         .get(&tower_id)
-    //         .unwrap()
-    //         .pending_appointments
-    //         .is_empty());
-    //     api_mock.assert_async().await;
-    //
-    //     task.abort();
-    // }
+    #[tokio::test]
+    async fn test_manage_retry_while_idle() {
+        use crate::storage::Storage;
+        // Let's try adding a tower, setting it to idle and send revocation data in all its forms
+        // This replicates the three types of data the retrier can receive:
+        // - Initialization (from db) with stale data
+        // - Regular (fresh) data from `on_commitment_revocation`
+        // - A wake up call with no data
+
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let (tx, rx) = unbounded_channel();
+
+        // Stale data is sent on WTClient initialization if found in the database. We'll force that to happen by populating the DB before initializing the WTClient
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
+
+        let mut storage = Storage::new(&tmp_path.path().join("watchtower.db")).unwrap();
+        let receipt = get_random_registration_receipt();
+        storage
+            .store_tower_record(tower_id, "http://unreachable.tower", &receipt)
+            .unwrap();
+
+        let appointment = generate_random_appointment(None);
+        storage
+            .store_pending_appointment(tower_id, &appointment)
+            .unwrap();
+
+        // Now we can create the WTClient and check that the data is pending
+        let wt_client = Arc::new(Mutex::new(
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
+        ));
+
+        // Also create the retrier thread so retries can be managed
+        let wt_client_clone = wt_client.clone();
+        let task = tokio::spawn(async move {
+            RetryManager::new(
+                wt_client_clone,
+                rx,
+                MAX_ELAPSED_TIME,
+                LONG_AUTO_RETRY_DELAY,
+                MAX_INTERVAL_TIME,
+            )
+            .manage_retry()
+            .await
+        });
+
+        {
+            // After the retriers gives up, it should go idling and flag the tower as unreachable
+            tokio::time::sleep(Duration::from_secs_f64(
+                MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME,
+            ))
+            .await;
+            let state = wt_client.lock().unwrap();
+            assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
+
+            let tower = state.towers.get(&tower_id).unwrap();
+            assert!(tower.pending_appointments.contains(&appointment.locator));
+            assert_eq!(tower.status, TowerStatus::Unreachable);
+        }
+
+        // With the retrier idling all fresh data sent to it will be stored but it won't trigger a retry.
+        // (we can check the data was stored later on)
+        let appointment2 = generate_random_appointment(None);
+        wt_client
+            .lock()
+            .unwrap()
+            .add_pending_appointment(tower_id, &appointment2);
+        tx.send((tower_id, RevocationData::Fresh(appointment2.locator)))
+            .unwrap();
+
+        {
+            tokio::time::sleep(Duration::from_secs_f64(POLLING_TIME as f64 + MAX_RUN_TIME)).await;
+            let state = wt_client.lock().unwrap();
+            assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
+            let tower = state.towers.get(&tower_id).unwrap();
+            assert_eq!(tower.status, TowerStatus::Unreachable);
+        }
+
+        // Create the receipts, the responses and set the mocks
+        let mut appointment_receipt = AppointmentReceipt::new(
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            42,
+        );
+        let mut appointment2_receipt = AppointmentReceipt::new(
+            cryptography::sign(&appointment2.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            42,
+        );
+        appointment_receipt.sign(&tower_sk);
+        appointment2_receipt.sign(&tower_sk);
+
+        // Mock a proper response
+        let mut server = mockito::Server::new_async().await;
+
+        let api_mock = server
+            .mock("POST", Endpoint::AddAppointment.path().as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |request| {
+                let body = serde_json::from_slice::<AddAppointmentRequest>(request.body().unwrap())
+                    .unwrap();
+
+                let response = if body.appointment.unwrap().locator == appointment.locator.to_vec()
+                {
+                    get_dummy_add_appointment_response(appointment.locator, &appointment_receipt)
+                } else {
+                    get_dummy_add_appointment_response(appointment2.locator, &appointment2_receipt)
+                };
+                json!(response).to_string().into()
+            })
+            .expect(2)
+            .create_async()
+            .await;
+
+        // Patch the tower address
+        wt_client
+            .lock()
+            .unwrap()
+            .towers
+            .get_mut(&tower_id)
+            .unwrap()
+            .set_net_addr(server.url());
+
+        // Check pending data is still there now, and is it not once the retrier succeeds
+        assert_eq!(
+            wt_client
+                .lock()
+                .unwrap()
+                .towers
+                .get(&tower_id)
+                .unwrap()
+                .pending_appointments
+                .len(),
+            2,
+        );
+
+        // Send a retry flag to the retrier to force a retry.
+        tx.send((tower_id, RevocationData::None)).unwrap();
+
+        // After retrying the pending pool has been emptied, meaning that both appointments went trough
+        tokio::time::sleep(Duration::from_secs_f64(POLLING_TIME as f64 + MAX_RUN_TIME)).await;
+        assert!(!wt_client.lock().unwrap().retriers.contains_key(&tower_id));
+        assert!(wt_client
+            .lock()
+            .unwrap()
+            .towers
+            .get(&tower_id)
+            .unwrap()
+            .pending_appointments
+            .is_empty());
+        api_mock.assert_async().await;
+
+        task.abort();
+    }
 
     #[tokio::test]
     async fn test_retry_tower() {
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
+
         let mut server = mockito::Server::new_async().await;
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
@@ -1391,9 +1458,17 @@ mod tests {
     async fn test_retry_tower_no_pending() {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let server = mockito::Server::new_async().await;
 
@@ -1414,9 +1489,17 @@ mod tests {
     async fn test_retry_tower_misbehaving() {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -1465,9 +1548,17 @@ mod tests {
     async fn test_retry_tower_unreachable() {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
@@ -1496,10 +1587,19 @@ mod tests {
     async fn test_retry_tower_subscription_error() {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
+
         let mut server = mockito::Server::new_async().await;
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
@@ -1549,10 +1649,19 @@ mod tests {
     async fn test_retry_tower_rejected() {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
+
         let mut server = mockito::Server::new_async().await;
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
@@ -1608,9 +1717,17 @@ mod tests {
     async fn test_retry_tower_abandoned() {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await,
+            WTClient::new(
+                tmp_path.path().to_path_buf(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin

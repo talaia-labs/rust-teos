@@ -12,7 +12,7 @@ use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
 use crate::retrier::RetrierStatus;
-use crate::storage::Storage;
+use crate::storage::{DBError, Storage};
 use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
 
 #[derive(Eq, PartialEq)]
@@ -58,7 +58,7 @@ impl std::fmt::Debug for RevocationData {
 /// Represents the watchtower client that is being used as the CoreLN plugin state.
 pub struct WTClient {
     /// A [Storage] instance.
-    pub storage: Storage,
+    pub storage: Storage, // should support both slqite or KVStorage?
     /// A collection of towers the client is registered to.
     pub towers: HashMap<TowerId, TowerSummary>,
     /// Queue of unreachable towers.
@@ -72,8 +72,10 @@ pub struct WTClient {
 }
 
 impl WTClient {
+    #[cfg(feature = "sqlite")]
     pub async fn new(
         data_dir: PathBuf,
+        user_sk: SecretKey,
         unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
     ) -> Self {
         // Create data dir if it does not exist
@@ -82,19 +84,41 @@ impl WTClient {
             std::process::exit(1);
         });
 
-        let storage = Storage::new().unwrap();
+        let storage = Storage::new(&data_dir.join("watchtower.db")).unwrap();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
 
-        let (user_sk, user_id) = if let Some(sk) = storage.load_client_key() {
-            (
-                sk,
-                UserId(PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
-            )
-        } else {
-            log::info!("Watchtower client keys not found. Creating a fresh set");
-            let (sk, pk) = cryptography::get_random_keypair();
-            storage.store_client_key(&sk).unwrap();
-            (sk, UserId(pk))
-        };
+        let towers = storage.load_towers();
+        for (tower_id, tower) in towers.iter() {
+            if tower.status.is_temporary_unreachable() {
+                unreachable_towers
+                    .send((
+                        *tower_id,
+                        RevocationData::Stale(tower.pending_appointments.iter().cloned().collect()),
+                    ))
+                    .unwrap();
+            }
+        }
+
+        log::info!("Plugin watchtower client initialized. User id = {user_id}");
+
+        WTClient {
+            towers,
+            unreachable_towers,
+            retriers: HashMap::new(),
+            storage,
+            user_sk,
+            user_id,
+        }
+    }
+
+    #[cfg(feature = "kv")]
+    pub async fn new<T: KVStore>(
+        store: T,
+        user_sk: SecretKey,
+        unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
+    ) -> Self {
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
+        let storage = Storage::new(store, user_sk).unwrap();
 
         let towers = storage.load_towers();
         for (tower_id, tower) in towers.iter() {
@@ -168,7 +192,8 @@ impl WTClient {
 
     /// Gets the latest registration receipt of a given tower.
     pub fn get_registration_receipt(&self, tower_id: TowerId) -> Option<RegistrationReceipt> {
-        self.storage.load_registration_receipt(tower_id, self.user_id)
+        self.storage
+            .load_registration_receipt(tower_id, self.user_id)
     }
 
     /// Loads a tower record from the database.
@@ -270,7 +295,9 @@ impl WTClient {
     /// Flags a given tower as misbehaving, storing the misbehaving proof in the database.
     pub fn flag_misbehaving_tower(&mut self, tower_id: TowerId, proof: MisbehaviorProof) {
         if let Some(tower) = self.towers.get_mut(&tower_id) {
-            self.storage.store_misbehaving_proof(tower_id, &proof).unwrap();
+            self.storage
+                .store_misbehaving_proof(tower_id, &proof)
+                .unwrap();
             tower.status = TowerStatus::Misbehaving;
         } else {
             log::error!("Cannot flag tower. Unknown tower_id: {tower_id}");
@@ -305,9 +332,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_update_load_tower() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         // Adding a new tower will add a summary to towers and the full data to the
         let mut receipt = get_random_registration_receipt();
@@ -399,9 +432,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_tower_status() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         // If the tower is unknown, get_tower_status returns None
         let tower_id = get_random_user_id();
@@ -422,9 +461,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_tower_status() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         // If the tower is unknown nothing will happen
         let unknown_tower = get_random_user_id();
@@ -452,9 +497,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_appointment_receipt() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
@@ -502,9 +553,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_pending_appointment() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         let tower_id = get_random_user_id();
 
@@ -545,9 +602,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_pending_appointment() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         let tower_id = get_random_user_id();
 
@@ -576,9 +639,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_invalid_appointment() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         let tower_id = get_random_user_id();
 
@@ -615,9 +684,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_move_pending_appointment_to_invalid() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         let tower_id = get_random_user_id();
 
@@ -659,9 +734,15 @@ mod tests {
     #[tokio::test]
     async fn test_move_pending_appointment_to_invalid_multiple_towers() {
         // Check that moving an appointment from pending to invalid can be done even if multiple towers have a reference to it
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         let tower_id = get_random_user_id();
         let another_tower_id = get_random_user_id();
@@ -733,9 +814,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_flag_misbehaving_tower() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
@@ -768,9 +855,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_tower() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         let receipt = get_random_registration_receipt();
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
@@ -813,13 +906,17 @@ mod tests {
             registration_receipt.available_slots(),
             &appointment_receipt,
         );
-        assert!(wt_client.storage.appointment_receipt_exists(locator, tower_id));
+        assert!(wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower_id));
 
         // Remove and check both the tower and the appointment
         wt_client.remove_tower(tower_id).unwrap();
         assert!(wt_client.load_tower_info(tower_id).is_none());
         assert!(!wt_client.towers.contains_key(&tower_id));
-        assert!(!wt_client.storage.appointment_receipt_exists(locator, tower_id));
+        assert!(!wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower_id));
     }
 
     #[tokio::test]
@@ -827,9 +924,15 @@ mod tests {
         // Lets test removing a tower that has associated data shared with another tower.
         // For instance, having an appointment that was sent to two towers, and then deleting one of them
         // should only remove the link between the tower and the appointment, but not delete the data.
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         let receipt = get_random_registration_receipt();
         let (tower1_sk, tower1_pk) = cryptography::get_random_keypair();
@@ -863,22 +966,36 @@ mod tests {
         );
 
         // Check that the data exists in both towers
-        assert!(wt_client.storage.appointment_receipt_exists(locator, tower1_id));
-        assert!(wt_client.storage.appointment_receipt_exists(locator, tower2_id));
+        assert!(wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower1_id));
+        assert!(wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower2_id));
 
         // Remove tower1 and check that the appointment receipt can still be found for tower2
         wt_client.remove_tower(tower1_id).unwrap();
         assert!(wt_client.load_tower_info(tower1_id).is_none());
 
-        assert!(!wt_client.storage.appointment_receipt_exists(locator, tower1_id));
-        assert!(wt_client.storage.appointment_receipt_exists(locator, tower2_id));
+        assert!(!wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower1_id));
+        assert!(wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower2_id));
     }
 
     #[tokio::test]
     async fn test_remove_inexistent_tower() {
-        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
-        let mut wt_client =
-            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let mut wt_client = WTClient::new(
+            tmp_path.path().to_path_buf(),
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
 
         assert!(matches!(
             wt_client.remove_tower(get_random_user_id()),
