@@ -35,15 +35,18 @@ const NS_INVALID_APPOINTMENTS: &str = "invalid_appointments";
 const NS_MISBEHAVIOR_PROOFS: &str = "misbehavior_proofs";
 
 pub struct Storage<T: KVStore> {
-    store: T,
+    store: Box<T>,
     sk: Vec<u8>,
 }
 
 // Implement methods to convert TowerInfo to vec<u8> and vice versa
 
-impl<T: KVStore> Storage<T> {
-    pub(crate) fn new(store: T, sk: Vec<u8>) -> Result<Self, DBError> {
-        Ok(Storage { store, sk })
+impl Storage {
+    pub fn new(store: impl T, sk: Vec<u8>) -> Result<Self, DBError> {
+        Ok(Storage {
+            store: Box::new(store),
+            sk
+        })
     }
 
     /// Creates a composite key from multiple components
