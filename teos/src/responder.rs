@@ -94,8 +94,8 @@ impl TransactionTracker {
 impl From<TransactionTracker> for common_msgs::Tracker {
     fn from(t: TransactionTracker) -> Self {
         common_msgs::Tracker {
-            dispute_txid: t.dispute_tx.compute_txid().to_raw_hash().encode(),
-            penalty_txid: t.penalty_tx.compute_txid().to_raw_hash().encode(),
+            dispute_txid: t.dispute_tx.compute_txid().encode(),
+            penalty_txid: t.penalty_tx.compute_txid().encode(),
             penalty_rawtx: consensus::serialize(&t.penalty_tx),
         }
     }

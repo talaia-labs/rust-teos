@@ -124,7 +124,9 @@ where
             };
 
             match block.deref() {
-                lightning_block_sync::BlockData::HeaderOnly(_) => {}
+                lightning_block_sync::BlockData::HeaderOnly(_) => {
+                    panic!("Expected FullBlock")
+                }
                 lightning_block_sync::BlockData::FullBlock(block) => {
                     let map = block
                         .txdata
@@ -356,21 +358,18 @@ mod tests {
         let mut cache = TxIndex::new(&last_n_blocks, height);
 
         // Update the cache with the last block
-        let locator_tx_map;
-        match last_block.deref() {
-            lightning_block_sync::BlockData::FullBlock(b) => {
-                locator_tx_map = b
-                    .txdata
-                    .iter()
-                    .map(|tx| (Locator::new(tx.compute_txid()), tx.clone()))
-                    .collect();
-            }
+        let locator_tx_map = match last_block.deref() {
+            lightning_block_sync::BlockData::FullBlock(b) => b
+                .txdata
+                .iter()
+                .map(|tx| (Locator::new(tx.compute_txid()), tx.clone()))
+                .collect(),
             _ => panic!("Expected FullBlock"),
-        }
+        };
 
         let header = match last_block.deref() {
             lightning_block_sync::BlockData::FullBlock(b) => b.header,
-            lightning_block_sync::BlockData::HeaderOnly(h) => h.clone(),
+            lightning_block_sync::BlockData::HeaderOnly(h) => *h,
         };
         cache.update(header, &locator_tx_map);
 

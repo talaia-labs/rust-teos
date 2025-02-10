@@ -410,7 +410,7 @@ pub(crate) async fn create_responder(
     let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
     let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, height);
 
-    Responder::new(&last_n_blocks.as_slice(), height, carrier, gatekeeper, dbm)
+    Responder::new(last_n_blocks.as_slice(), height, carrier, gatekeeper, dbm)
 }
 
 pub(crate) async fn create_watcher(
@@ -429,7 +429,7 @@ pub(crate) async fn create_watcher(
         Watcher::new(
             gatekeeper,
             responder,
-            &last_n_blocks.as_slice(),
+            last_n_blocks.as_slice(),
             chain.get_block_count(),
             tower_sk,
             tower_id,

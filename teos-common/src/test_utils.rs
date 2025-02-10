@@ -1,5 +1,6 @@
 use std::convert::TryInto;
 
+use bitcoin::script::PushBytesBuf;
 use hex::FromHex;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -48,14 +49,10 @@ pub fn generate_random_appointment(dispute_txid: Option<&Txid>) -> Appointment {
 
     let tx_bytes = Vec::from_hex(TX_HEX).unwrap();
     let mut penalty_tx: Transaction = consensus::deserialize(&tx_bytes).unwrap();
-    // FIXME: might be cleaner?
-    // Add 1 to make sure it is not 0
-    let size = (get_random_int::<usize>() % 81) + 1;
-    let random_bytes = cryptography::get_random_bytes(size);
-    let mut fixed_bytes = [0u8; 81];
-    fixed_bytes[..random_bytes.len()].copy_from_slice(&random_bytes);
-    let script_string = format!("6a{}", hex::encode(random_bytes));
-    let script_pubkey = ScriptBuf::from(hex::decode(script_string).unwrap());
+    let size = get_random_int::<usize>() % 81;
+    let mut push_bytes_buf = PushBytesBuf::new();
+    PushBytesBuf::extend_from_slice(&mut push_bytes_buf, &cryptography::get_random_bytes(size)).unwrap();
+    let script_pubkey = ScriptBuf::new_op_return(push_bytes_buf);
 
     // Append a random-sized OP_RETURN to make each transcation random in size.
     penalty_tx.output.push(TxOut {
