@@ -596,9 +596,9 @@ mod tests {
     const SHORT_AUTO_RETRY_DELAY: u32 = 3;
     const API_DELAY: f64 = 0.5;
     const HALF_API_DELAY: f64 = API_DELAY / 2.0;
-    const MAX_ELAPSED_TIME: u16 = 3;
+    const MAX_ELAPSED_TIME: u16 = 2;
     const MAX_INTERVAL_TIME: u16 = 1;
-    const MAX_RUN_TIME: f64 = 1.0;
+    const MAX_RUN_TIME: f64 = 0.2;
 
     macro_rules! wait_until {
         () => {};
@@ -1236,12 +1236,13 @@ mod tests {
         {
             // After the retriers gives up, it should go idling and flag the tower as unreachable
             tokio::time::sleep(Duration::from_secs_f64(
-                MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME,
+                MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME
             ))
             .await;
-            let state = wt_client.lock().unwrap();
-            assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
 
+            wait_until!(wt_client.lock().unwrap().get_retrier_status(&tower_id).unwrap().is_idle());
+
+            let state = wt_client.lock().unwrap();
             let tower = state.towers.get(&tower_id).unwrap();
             assert!(tower.pending_appointments.contains(&appointment.locator));
             assert_eq!(tower.status, TowerStatus::Unreachable);
