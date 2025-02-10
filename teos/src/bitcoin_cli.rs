@@ -9,7 +9,7 @@
  * at your option.
 */
 
-use base64::{engine::general_purpose, Engine as _};
+use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
@@ -103,9 +103,8 @@ impl<'a> BitcoindClient<'a> {
             }
         }?;
 
-        let binding = general_purpose::URL_SAFE.encode(format!("{}:{}", rpc_user, rpc_password));
-        let rpc_credentials = binding.as_str();
-        let bitcoind_rpc_client = RpcClient::new(rpc_credentials, http_endpoint);
+        let rpc_credentials = URL_SAFE.encode(format!("{}:{}", rpc_user, rpc_password));
+        let bitcoind_rpc_client = RpcClient::new(&rpc_credentials, http_endpoint);
 
         let client = Self {
             bitcoind_rpc_client: Arc::new(Mutex::new(bitcoind_rpc_client)),
@@ -133,7 +132,7 @@ impl<'a> BitcoindClient<'a> {
     pub fn get_new_rpc_client(&self) -> std::io::Result<RpcClient> {
         let http_endpoint = HttpEndpoint::for_host(self.host.to_owned()).with_port(self.port);
         let rpc_credentials =
-            general_purpose::URL_SAFE.encode(format!("{}:{}", self.rpc_user, self.rpc_password));
+            URL_SAFE.encode(format!("{}:{}", self.rpc_user, self.rpc_password));
         Ok(RpcClient::new(&rpc_credentials, http_endpoint))
     }
 
@@ -159,7 +158,7 @@ impl<'a> BitcoindClient<'a> {
     pub async fn get_raw_transaction(&self, txid: &Txid) -> Result<Transaction, std::io::Error> {
         let rpc = self.bitcoind_rpc_client.lock().await;
 
-        let txid_hex = serde_json::json!(txid.encode());
+        let txid_hex = serde_json::json!(txid.encode().raw_hex());
         rpc.call_method::<Transaction>("getrawtransaction", &[txid_hex])
             .await
     }
