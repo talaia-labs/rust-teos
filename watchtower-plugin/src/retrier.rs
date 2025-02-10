@@ -1236,11 +1236,16 @@ mod tests {
         {
             // After the retriers gives up, it should go idling and flag the tower as unreachable
             tokio::time::sleep(Duration::from_secs_f64(
-                MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME
+                MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME,
             ))
             .await;
 
-            wait_until!(wt_client.lock().unwrap().get_retrier_status(&tower_id).unwrap().is_idle());
+            wait_until!(wt_client
+                .lock()
+                .unwrap()
+                .get_retrier_status(&tower_id)
+                .unwrap()
+                .is_idle());
 
             let state = wt_client.lock().unwrap();
             let tower = state.towers.get(&tower_id).unwrap();

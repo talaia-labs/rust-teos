@@ -131,8 +131,7 @@ impl<'a> BitcoindClient<'a> {
     /// Gets a fresh RPC client.
     pub fn get_new_rpc_client(&self) -> std::io::Result<RpcClient> {
         let http_endpoint = HttpEndpoint::for_host(self.host.to_owned()).with_port(self.port);
-        let rpc_credentials =
-            URL_SAFE.encode(format!("{}:{}", self.rpc_user, self.rpc_password));
+        let rpc_credentials = URL_SAFE.encode(format!("{}:{}", self.rpc_user, self.rpc_password));
         Ok(RpcClient::new(&rpc_credentials, http_endpoint))
     }
 
