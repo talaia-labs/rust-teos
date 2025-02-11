@@ -1,5 +1,6 @@
-use crate::storage::storage::Persister;
 use std::collections::{HashMap, HashSet};
+use crate::storage::Storage;
+use crate::storage::storage::{Persister, StorageError};
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -630,10 +631,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -731,10 +734,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -865,10 +870,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -976,10 +983,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1075,10 +1084,12 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let (tx, rx) = unbounded_channel();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1125,10 +1136,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1255,7 +1268,8 @@ mod tests {
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
 
-        let mut storage = Storage::new(&tmp_path.path().join("watchtower.db")).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let mut storage = Box::new(Storage::new(&db_path).unwrap());
         let receipt = get_random_registration_receipt();
         storage
             .store_tower_record(tower_id, "http://unreachable.tower", &receipt)
@@ -1265,11 +1279,10 @@ mod tests {
         storage
             .store_pending_appointment(tower_id, &appointment)
             .unwrap();
-
         // Now we can create the WTClient and check that the data is pending
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                Box::new(Storage::new(&db_path).unwrap()),
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1405,10 +1418,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1462,10 +1477,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1493,10 +1510,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1552,10 +1571,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1591,10 +1612,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1653,10 +1676,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )
@@ -1721,10 +1746,12 @@ mod tests {
         let keypair = cryptography::get_random_keypair();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(
-                tmp_path.path().to_path_buf(),
+                storage,
                 keypair.0,
                 unbounded_channel().0,
             )

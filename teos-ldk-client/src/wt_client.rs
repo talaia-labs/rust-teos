@@ -62,14 +62,9 @@ impl std::fmt::Debug for RevocationData {
     }
 }
 
-/// Represents the watchtower client that is being used as the CoreLN plugin state.
 pub struct WTClient {
-    /// A [Storage] instance.
-    #[cfg(feature = "sqlite")]
-    pub storage: Storage, // should support both slqite or KVStorage?
-    /// A [Storage] instance.
-    #[cfg(feature = "kv")]
-    pub storage: Storage<KVStore>, // should support both slqite or KVStorage?
+    /// A database manager instance implementing the DatabaseManager trait
+    pub storage: Box<dyn Persister>,
     /// A collection of towers the client is registered to.
     pub towers: HashMap<TowerId, TowerSummary>,
     /// Queue of unreachable towers.
@@ -85,17 +80,10 @@ pub struct WTClient {
 impl WTClient {
     #[cfg(feature = "sqlite")]
     pub async fn new(
-        data_dir: PathBuf,
+        storage: Box<dyn Persister>,
         user_sk: SecretKey,
         unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
     ) -> Self {
-        // Create data dir if it does not exist
-        fs::create_dir_all(&data_dir).await.unwrap_or_else(|e| {
-            log::error!("Cannot create data dir: {e:?}");
-            std::process::exit(1);
-        });
-
-        let storage = Storage::new(&data_dir.join("watchtower.db")).unwrap();
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
 
         let towers = storage.load_towers();
@@ -122,38 +110,6 @@ impl WTClient {
         }
     }
 
-    #[cfg(feature = "kv")]
-    pub async fn new<T: KVStore>(
-        store: T,
-        user_sk: SecretKey,
-        unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
-    ) -> Self {
-        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
-        let storage = Storage::new(store, user_sk.secret_bytes().to_vec()).unwrap();
-
-        let towers = storage.load_towers();
-        for (tower_id, tower) in towers.iter() {
-            if tower.status.is_temporary_unreachable() {
-                unreachable_towers
-                    .send((
-                        *tower_id,
-                        RevocationData::Stale(tower.pending_appointments.iter().cloned().collect()),
-                    ))
-                    .unwrap();
-            }
-        }
-
-        log::info!("Plugin watchtower client initialized. User id = {user_id}");
-
-        WTClient {
-            towers,
-            unreachable_towers,
-            retriers: HashMap::new(),
-            storage,
-            user_sk,
-            user_id,
-        }
-    }
 
     /// Adds or updates a tower entry.
     pub fn add_update_tower(
@@ -327,690 +283,730 @@ impl WTClient {
         }
     }
 }
-//
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     use tempdir::TempDir;
-//     use tokio::sync::mpsc::unbounded_channel;
-//
-//     use teos_common::test_utils::{
-//         generate_random_appointment, get_random_appointment_receipt,
-//         get_random_registration_receipt, get_random_user_id,
-//         get_registration_receipt_from_previous,
-//     };
-//
-//     #[tokio::test]
-//     async fn test_add_update_load_tower() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         // Adding a new tower will add a summary to towers and the full data to the
-//         let mut receipt = get_random_registration_receipt();
-//         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
-//         let tower_id = TowerId(tower_pk);
-//         let tower_info = TowerInfo::empty(
-//             "talaia.watch".to_owned(),
-//             receipt.available_slots(),
-//             receipt.subscription_start(),
-//             receipt.subscription_expiry(),
-//         );
-//
-//         wt_client
-//             .add_update_tower(tower_id, &tower_info.net_addr, &receipt)
-//             .unwrap();
-//         assert_eq!(
-//             wt_client.towers.get(&tower_id),
-//             Some(&TowerSummary::from(tower_info.clone()))
-//         );
-//         assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
-//
-//         // Calling the method again with updated information should also updated the records in memory and the database
-//         receipt = get_registration_receipt_from_previous(&receipt);
-//
-//         let updated_tower_info = TowerInfo::empty(
-//             "talaia.watch".to_owned(),
-//             receipt.available_slots(),
-//             receipt.subscription_start(),
-//             receipt.subscription_expiry(),
-//         );
-//         wt_client
-//             .add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt)
-//             .unwrap();
-//
-//         assert_eq!(
-//             wt_client.towers.get(&tower_id),
-//             Some(&TowerSummary::from(updated_tower_info.clone()))
-//         );
-//         assert_eq!(
-//             wt_client.load_tower_info(tower_id).unwrap(),
-//             updated_tower_info
-//         );
-//
-//         // If we try to update without increasing both the end_time and the slots, this will fail
-//         let mut receipt_same_slots = RegistrationReceipt::new(
-//             receipt.user_id(),
-//             receipt.available_slots(),
-//             receipt.subscription_start(),
-//             receipt.subscription_expiry() + 1,
-//         );
-//         receipt_same_slots.sign(&tower_sk);
-//         let mut receipt_same_expiry = RegistrationReceipt::new(
-//             receipt.user_id(),
-//             receipt.available_slots() + 1,
-//             receipt.subscription_start(),
-//             receipt.subscription_expiry(),
-//         );
-//         receipt_same_expiry.sign(&tower_sk);
-//
-//         assert!(matches!(
-//             wt_client.add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt),
-//             Err(SubscriptionError::Expiry)
-//         ));
-//         assert!(matches!(
-//             wt_client.add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt_same_slots),
-//             Err(SubscriptionError::Slots)
-//         ));
-//         assert!(matches!(
-//             wt_client.add_update_tower(
-//                 tower_id,
-//                 &updated_tower_info.net_addr,
-//                 &receipt_same_expiry
-//             ),
-//             Err(SubscriptionError::Expiry)
-//         ));
-//
-//         // Decrease the slots count (simulate exhaustion) and update with more than the current count it should work
-//         let locator = generate_random_appointment(None).locator;
-//         wt_client.add_appointment_receipt(
-//             tower_id,
-//             locator,
-//             0,
-//             &get_random_appointment_receipt(tower_sk),
-//         );
-//         wt_client
-//             .add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt_same_slots)
-//             .unwrap();
-//     }
-//
-//     #[tokio::test]
-//     async fn test_get_tower_status() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         // If the tower is unknown, get_tower_status returns None
-//         let tower_id = get_random_user_id();
-//         assert!(wt_client.get_tower_status(&tower_id).is_none());
-//
-//         // Add a tower
-//         let receipt = get_random_registration_receipt();
-//         wt_client
-//             .add_update_tower(tower_id, "talaia.watch", &receipt)
-//             .unwrap();
-//
-//         // If the tower is known, get_tower_status matches getting the same data from the towers collection
-//         assert_eq!(
-//             wt_client.towers.get(&tower_id).unwrap().status,
-//             wt_client.get_tower_status(&tower_id).unwrap()
-//         )
-//     }
-//
-//     #[tokio::test]
-//     async fn test_set_tower_status() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         // If the tower is unknown nothing will happen
-//         let unknown_tower = get_random_user_id();
-//         wt_client.set_tower_status(unknown_tower, TowerStatus::Reachable);
-//         assert!(!wt_client.towers.contains_key(&unknown_tower));
-//
-//         // If the tower is known, the status will be updated.
-//         let receipt = get_random_registration_receipt();
-//         let tower_id = get_random_user_id();
-//         wt_client
-//             .add_update_tower(tower_id, "talaia.watch", &receipt)
-//             .unwrap();
-//
-//         for status in [
-//             TowerStatus::Reachable,
-//             TowerStatus::TemporaryUnreachable,
-//             TowerStatus::Unreachable,
-//             TowerStatus::SubscriptionError,
-//             TowerStatus::Misbehaving,
-//         ] {
-//             wt_client.set_tower_status(tower_id, status);
-//             assert_eq!(status, wt_client.get_tower_status(&tower_id).unwrap());
-//         }
-//     }
-//
-//     #[tokio::test]
-//     async fn test_add_appointment_receipt() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
-//         let tower_id = TowerId(tower_pk);
-//
-//         let locator = generate_random_appointment(None).locator;
-//         let registration_receipt = get_random_registration_receipt();
-//         let appointment_receipt = get_random_appointment_receipt(tower_sk);
-//
-//         // If we call this on an unknown tower it will simply do nothing
-//         wt_client.add_appointment_receipt(
-//             tower_id,
-//             locator,
-//             registration_receipt.available_slots(),
-//             &appointment_receipt,
-//         );
-//         assert!(!wt_client.towers.contains_key(&tower_id));
-//
-//         // Add the tower to the state and try again
-//         let tower_info = TowerInfo::new(
-//             "talaia.watch".to_owned(),
-//             registration_receipt.available_slots(),
-//             registration_receipt.subscription_start(),
-//             registration_receipt.subscription_expiry(),
-//             HashMap::from([(locator, appointment_receipt.signature().unwrap())]),
-//             Vec::new(),
-//             Vec::new(),
-//         );
-//         wt_client
-//             .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
-//             .unwrap();
-//         wt_client.add_appointment_receipt(
-//             tower_id,
-//             locator,
-//             registration_receipt.available_slots(),
-//             &appointment_receipt,
-//         );
-//
-//         assert!(wt_client.towers.contains_key(&tower_id));
-//         assert_eq!(
-//             wt_client.towers.get(&tower_id).unwrap(),
-//             &TowerSummary::from(tower_info.clone())
-//         );
-//         assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
-//     }
-//
-//     #[tokio::test]
-//     async fn test_add_pending_appointment() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         let tower_id = get_random_user_id();
-//
-//         let registration_receipt = get_random_registration_receipt();
-//         let appointment = generate_random_appointment(None);
-//
-//         // If we call this on an unknown tower it will simply do nothing
-//         wt_client.add_pending_appointment(tower_id, &appointment);
-//         assert!(!wt_client.towers.contains_key(&tower_id));
-//
-//         // Add the tower to the state and try again
-//         let tower_info = TowerInfo::new(
-//             "talaia.watch".to_owned(),
-//             registration_receipt.available_slots(),
-//             registration_receipt.subscription_start(),
-//             registration_receipt.subscription_expiry(),
-//             HashMap::new(),
-//             vec![appointment.clone()],
-//             Vec::new(),
-//         );
-//
-//         wt_client
-//             .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
-//             .unwrap();
-//         wt_client.add_pending_appointment(tower_id, &appointment);
-//
-//         assert!(wt_client.towers.contains_key(&tower_id));
-//         assert_eq!(
-//             wt_client.towers.get(&tower_id).unwrap(),
-//             &TowerSummary::from(tower_info.clone())
-//         );
-//         // When towers data is loaded from the database, it is assumed to be reachable.
-//         assert_eq!(
-//             wt_client.load_tower_info(tower_id).unwrap(),
-//             tower_info.with_status(TowerStatus::TemporaryUnreachable)
-//         );
-//     }
-//
-//     #[tokio::test]
-//     async fn test_remove_pending_appointment() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         let tower_id = get_random_user_id();
-//
-//         let registration_receipt = get_random_registration_receipt();
-//         let appointment = generate_random_appointment(None);
-//
-//         // If we call this on an unknown tower it will simply do nothing
-//         wt_client.remove_pending_appointment(tower_id, appointment.locator);
-//
-//         // Add the tower to the state and try again
-//         wt_client
-//             .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
-//             .unwrap();
-//         wt_client.add_pending_appointment(tower_id, &appointment);
-//
-//         wt_client.remove_pending_appointment(tower_id, appointment.locator);
-//         assert!(!wt_client
-//             .towers
-//             .get(&tower_id)
-//             .unwrap()
-//             .pending_appointments
-//             .contains(&appointment.locator));
-//         // This bit is tested exhaustively in the Storage.
-//         assert!(!wt_client.storage.appointment_exists(appointment.locator));
-//     }
-//
-//     #[tokio::test]
-//     async fn test_add_invalid_appointment() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         let tower_id = get_random_user_id();
-//
-//         let registration_receipt = get_random_registration_receipt();
-//         let appointment = generate_random_appointment(None);
-//
-//         // If we call this on an unknown tower it will simply do nothing
-//         wt_client.add_invalid_appointment(tower_id, &appointment);
-//         assert!(!wt_client.towers.contains_key(&tower_id));
-//
-//         // Add the tower to the state and try again
-//         let tower_info = TowerInfo::new(
-//             "talaia.watch".to_owned(),
-//             registration_receipt.available_slots(),
-//             registration_receipt.subscription_start(),
-//             registration_receipt.subscription_expiry(),
-//             HashMap::new(),
-//             Vec::new(),
-//             vec![appointment.clone()],
-//         );
-//
-//         wt_client
-//             .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
-//             .unwrap();
-//         wt_client.add_invalid_appointment(tower_id, &appointment);
-//
-//         assert!(wt_client.towers.contains_key(&tower_id));
-//         assert_eq!(
-//             wt_client.towers.get(&tower_id).unwrap(),
-//             &TowerSummary::from(tower_info.clone())
-//         );
-//         assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
-//     }
-//
-//     #[tokio::test]
-//     async fn test_move_pending_appointment_to_invalid() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         let tower_id = get_random_user_id();
-//
-//         let registration_receipt = get_random_registration_receipt();
-//         let appointment = generate_random_appointment(None);
-//
-//         wt_client
-//             .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
-//             .unwrap();
-//         wt_client.add_pending_appointment(tower_id, &appointment);
-//
-//         // Check that the appointment can be moved from pending to invalid
-//         wt_client.add_invalid_appointment(tower_id, &appointment);
-//         wt_client.remove_pending_appointment(tower_id, appointment.locator);
-//
-//         assert!(!wt_client
-//             .towers
-//             .get(&tower_id)
-//             .unwrap()
-//             .pending_appointments
-//             .contains(&appointment.locator));
-//         assert!(wt_client
-//             .towers
-//             .get(&tower_id)
-//             .unwrap()
-//             .invalid_appointments
-//             .contains(&appointment.locator));
-//         assert!(!wt_client
-//             .storage
-//             .load_appointment_locators(tower_id, crate::AppointmentStatus::Pending)
-//             .contains(&appointment.locator));
-//         assert!(wt_client
-//             .storage
-//             .load_appointment_locators(tower_id, crate::AppointmentStatus::Invalid)
-//             .contains(&appointment.locator));
-//         assert!(wt_client.storage.appointment_exists(appointment.locator));
-//     }
-//
-//     #[tokio::test]
-//     async fn test_move_pending_appointment_to_invalid_multiple_towers() {
-//         // Check that moving an appointment from pending to invalid can be done even if multiple towers have a reference to it
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         let tower_id = get_random_user_id();
-//         let another_tower_id = get_random_user_id();
-//         let tower_net_addr = "talaia.watch";
-//
-//         let registration_receipt = get_random_registration_receipt();
-//         let appointment = generate_random_appointment(None);
-//
-//         wt_client
-//             .add_update_tower(tower_id, tower_net_addr, &registration_receipt)
-//             .unwrap();
-//         wt_client
-//             .add_update_tower(another_tower_id, tower_net_addr, &registration_receipt)
-//             .unwrap();
-//         wt_client.add_pending_appointment(tower_id, &appointment);
-//         wt_client.add_pending_appointment(another_tower_id, &appointment);
-//
-//         // Check that the appointment can be moved from pending to invalid
-//         wt_client.add_invalid_appointment(tower_id, &appointment);
-//         wt_client.remove_pending_appointment(tower_id, appointment.locator);
-//
-//         // TOWER_ID CHECKS
-//         assert!(!wt_client
-//             .towers
-//             .get(&tower_id)
-//             .unwrap()
-//             .pending_appointments
-//             .contains(&appointment.locator));
-//         assert!(wt_client
-//             .towers
-//             .get(&tower_id)
-//             .unwrap()
-//             .invalid_appointments
-//             .contains(&appointment.locator));
-//         assert!(!wt_client
-//             .storage
-//             .load_appointment_locators(tower_id, crate::AppointmentStatus::Pending)
-//             .contains(&appointment.locator));
-//         assert!(wt_client
-//             .storage
-//             .load_appointment_locators(tower_id, crate::AppointmentStatus::Invalid)
-//             .contains(&appointment.locator));
-//
-//         // ANOTHER_TOWER_ID CHECKS
-//         assert!(wt_client
-//             .towers
-//             .get(&another_tower_id)
-//             .unwrap()
-//             .pending_appointments
-//             .contains(&appointment.locator));
-//         assert!(!wt_client
-//             .towers
-//             .get(&another_tower_id)
-//             .unwrap()
-//             .invalid_appointments
-//             .contains(&appointment.locator));
-//         assert!(wt_client
-//             .storage
-//             .load_appointment_locators(another_tower_id, crate::AppointmentStatus::Pending)
-//             .contains(&appointment.locator));
-//         assert!(!wt_client
-//             .storage
-//             .load_appointment_locators(another_tower_id, crate::AppointmentStatus::Invalid)
-//             .contains(&appointment.locator));
-//
-//         // GENERAL
-//         assert!(wt_client.storage.appointment_exists(appointment.locator));
-//     }
-//
-//     #[tokio::test]
-//     async fn test_flag_misbehaving_tower() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
-//         let tower_id = TowerId(tower_pk);
-//
-//         // If we call this on an unknown tower it will simply do nothing
-//         let appointment = generate_random_appointment(None);
-//         let receipt = get_random_appointment_receipt(tower_sk);
-//         let proof = MisbehaviorProof::new(appointment.locator, receipt, get_random_user_id());
-//         wt_client.flag_misbehaving_tower(tower_id, proof.clone());
-//         assert!(!wt_client.towers.contains_key(&tower_id));
-//
-//         // // Add the tower to the state and try again
-//         let registration_receipt = get_random_registration_receipt();
-//         wt_client
-//             .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
-//             .unwrap();
-//         wt_client.flag_misbehaving_tower(tower_id, proof.clone());
-//
-//         // Check data in memory
-//         let tower_summary = wt_client.towers.get(&tower_id);
-//         assert!(tower_summary.is_some());
-//         assert!(tower_summary.unwrap().status.is_misbehaving());
-//
-//         // Check data in DB
-//         let loaded_info = wt_client.load_tower_info(tower_id).unwrap();
-//         assert!(loaded_info.status.is_misbehaving());
-//         assert_eq!(loaded_info.misbehaving_proof, Some(proof));
-//         assert!(loaded_info.appointments.contains_key(&appointment.locator));
-//     }
-//
-//     #[tokio::test]
-//     async fn test_remove_tower() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         let receipt = get_random_registration_receipt();
-//         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
-//         let tower_id = TowerId(tower_pk);
-//         let tower_info = TowerInfo::empty(
-//             "talaia.watch".to_owned(),
-//             receipt.available_slots(),
-//             receipt.subscription_start(),
-//             receipt.subscription_expiry(),
-//         );
-//
-//         // Add the tower and check it is there
-//         wt_client
-//             .add_update_tower(tower_id, &tower_info.net_addr, &receipt)
-//             .unwrap();
-//         assert_eq!(
-//             wt_client.towers.get(&tower_id),
-//             Some(&TowerSummary::from(tower_info.clone()))
-//         );
-//         assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
-//
-//         // Remove the tower and check it is not there anymore
-//         wt_client.remove_tower(tower_id).unwrap();
-//         assert!(wt_client.load_tower_info(tower_id).is_none());
-//         assert!(!wt_client.towers.contains_key(&tower_id));
-//
-//         // Try again but this time with an associated appointment to check that it also gets removed
-//         wt_client
-//             .add_update_tower(tower_id, &tower_info.net_addr, &receipt)
-//             .unwrap();
-//
-//         let locator = generate_random_appointment(None).locator;
-//         let registration_receipt = get_random_registration_receipt();
-//         let appointment_receipt = get_random_appointment_receipt(tower_sk);
-//
-//         // If we call this on an unknown tower it will simply do nothing
-//         wt_client.add_appointment_receipt(
-//             tower_id,
-//             locator,
-//             registration_receipt.available_slots(),
-//             &appointment_receipt,
-//         );
-//         assert!(wt_client
-//             .storage
-//             .appointment_receipt_exists(locator, tower_id));
-//
-//         // Remove and check both the tower and the appointment
-//         wt_client.remove_tower(tower_id).unwrap();
-//         assert!(wt_client.load_tower_info(tower_id).is_none());
-//         assert!(!wt_client.towers.contains_key(&tower_id));
-//         assert!(!wt_client
-//             .storage
-//             .appointment_receipt_exists(locator, tower_id));
-//     }
-//
-//     #[tokio::test]
-//     async fn test_remove_tower_shared_appointment() {
-//         // Lets test removing a tower that has associated data shared with another tower.
-//         // For instance, having an appointment that was sent to two towers, and then deleting one of them
-//         // should only remove the link between the tower and the appointment, but not delete the data.
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         let receipt = get_random_registration_receipt();
-//         let (tower1_sk, tower1_pk) = cryptography::get_random_keypair();
-//         let tower1_id = TowerId(tower1_pk);
-//         let (tower2_sk, tower2_pk) = cryptography::get_random_keypair();
-//         let tower2_id = TowerId(tower2_pk);
-//
-//         wt_client
-//             .add_update_tower(tower1_id, "talaia.watch", &receipt)
-//             .unwrap();
-//         wt_client
-//             .add_update_tower(tower2_id, "talaia.watch", &receipt)
-//             .unwrap();
-//
-//         let locator = generate_random_appointment(None).locator;
-//         let registration_receipt = get_random_registration_receipt();
-//         let appointment_receipt_1 = get_random_appointment_receipt(tower1_sk);
-//         let appointment_receipt_2 = get_random_appointment_receipt(tower2_sk);
-//
-//         wt_client.add_appointment_receipt(
-//             tower1_id,
-//             locator,
-//             registration_receipt.available_slots(),
-//             &appointment_receipt_1,
-//         );
-//         wt_client.add_appointment_receipt(
-//             tower2_id,
-//             locator,
-//             registration_receipt.available_slots(),
-//             &appointment_receipt_2,
-//         );
-//
-//         // Check that the data exists in both towers
-//         assert!(wt_client
-//             .storage
-//             .appointment_receipt_exists(locator, tower1_id));
-//         assert!(wt_client
-//             .storage
-//             .appointment_receipt_exists(locator, tower2_id));
-//
-//         // Remove tower1 and check that the appointment receipt can still be found for tower2
-//         wt_client.remove_tower(tower1_id).unwrap();
-//         assert!(wt_client.load_tower_info(tower1_id).is_none());
-//
-//         assert!(!wt_client
-//             .storage
-//             .appointment_receipt_exists(locator, tower1_id));
-//         assert!(wt_client
-//             .storage
-//             .appointment_receipt_exists(locator, tower2_id));
-//     }
-//
-//     #[tokio::test]
-//     async fn test_remove_inexistent_tower() {
-//         let keypair = cryptography::get_random_keypair();
-//         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
-//         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
-//         let mut wt_client = WTClient::new(
-//             tmp_path.path().to_path_buf(),
-//             keypair.0,
-//             unbounded_channel().0,
-//         )
-//         .await;
-//
-//         assert!(matches!(
-//             wt_client.remove_tower(get_random_user_id()),
-//             Err(StorageError::NotFound)
-//         ));
-//     }
-// }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempdir::TempDir;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use teos_common::test_utils::{
+        generate_random_appointment, get_random_appointment_receipt,
+        get_random_registration_receipt, get_random_user_id,
+        get_registration_receipt_from_previous,
+    };
+
+    #[tokio::test]
+    async fn test_add_update_load_tower() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+        
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        // Adding a new tower will add a summary to towers and the full data to the
+        let mut receipt = get_random_registration_receipt();
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
+        let tower_info = TowerInfo::empty(
+            "talaia.watch".to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+
+        wt_client
+            .add_update_tower(tower_id, &tower_info.net_addr, &receipt)
+            .unwrap();
+        assert_eq!(
+            wt_client.towers.get(&tower_id),
+            Some(&TowerSummary::from(tower_info.clone()))
+        );
+        assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
+
+        // Calling the method again with updated information should also updated the records in memory and the database
+        receipt = get_registration_receipt_from_previous(&receipt);
+
+        let updated_tower_info = TowerInfo::empty(
+            "talaia.watch".to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        wt_client
+            .add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt)
+            .unwrap();
+
+        assert_eq!(
+            wt_client.towers.get(&tower_id),
+            Some(&TowerSummary::from(updated_tower_info.clone()))
+        );
+        assert_eq!(
+            wt_client.load_tower_info(tower_id).unwrap(),
+            updated_tower_info
+        );
+
+        // If we try to update without increasing both the end_time and the slots, this will fail
+        let mut receipt_same_slots = RegistrationReceipt::new(
+            receipt.user_id(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry() + 1,
+        );
+        receipt_same_slots.sign(&tower_sk);
+        let mut receipt_same_expiry = RegistrationReceipt::new(
+            receipt.user_id(),
+            receipt.available_slots() + 1,
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        receipt_same_expiry.sign(&tower_sk);
+
+        assert!(matches!(
+            wt_client.add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt),
+            Err(SubscriptionError::Expiry)
+        ));
+        assert!(matches!(
+            wt_client.add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt_same_slots),
+            Err(SubscriptionError::Slots)
+        ));
+        assert!(matches!(
+            wt_client.add_update_tower(
+                tower_id,
+                &updated_tower_info.net_addr,
+                &receipt_same_expiry
+            ),
+            Err(SubscriptionError::Expiry)
+        ));
+
+        // Decrease the slots count (simulate exhaustion) and update with more than the current count it should work
+        let locator = generate_random_appointment(None).locator;
+        wt_client.add_appointment_receipt(
+            tower_id,
+            locator,
+            0,
+            &get_random_appointment_receipt(tower_sk),
+        );
+        wt_client
+            .add_update_tower(tower_id, &updated_tower_info.net_addr, &receipt_same_slots)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_tower_status() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        ).await;
+
+        // If the tower is unknown, get_tower_status returns None
+        let tower_id = get_random_user_id();
+        assert!(wt_client.get_tower_status(&tower_id).is_none());
+
+        // Add a tower
+        let receipt = get_random_registration_receipt();
+        wt_client
+            .add_update_tower(tower_id, "talaia.watch", &receipt)
+            .unwrap();
+
+        // If the tower is known, get_tower_status matches getting the same data from the towers collection
+        assert_eq!(
+            wt_client.towers.get(&tower_id).unwrap().status,
+            wt_client.get_tower_status(&tower_id).unwrap()
+        )
+    }
+
+    #[tokio::test]
+    async fn test_set_tower_status() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        // If the tower is unknown nothing will happen
+        let unknown_tower = get_random_user_id();
+        wt_client.set_tower_status(unknown_tower, TowerStatus::Reachable);
+        assert!(!wt_client.towers.contains_key(&unknown_tower));
+
+        // If the tower is known, the status will be updated.
+        let receipt = get_random_registration_receipt();
+        let tower_id = get_random_user_id();
+        wt_client
+            .add_update_tower(tower_id, "talaia.watch", &receipt)
+            .unwrap();
+
+        for status in [
+            TowerStatus::Reachable,
+            TowerStatus::TemporaryUnreachable,
+            TowerStatus::Unreachable,
+            TowerStatus::SubscriptionError,
+            TowerStatus::Misbehaving,
+        ] {
+            wt_client.set_tower_status(tower_id, status);
+            assert_eq!(status, wt_client.get_tower_status(&tower_id).unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_receipt() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
+
+        let locator = generate_random_appointment(None).locator;
+        let registration_receipt = get_random_registration_receipt();
+        let appointment_receipt = get_random_appointment_receipt(tower_sk);
+
+        // If we call this on an unknown tower it will simply do nothing
+        wt_client.add_appointment_receipt(
+            tower_id,
+            locator,
+            registration_receipt.available_slots(),
+            &appointment_receipt,
+        );
+        assert!(!wt_client.towers.contains_key(&tower_id));
+
+        // Add the tower to the state and try again
+        let tower_info = TowerInfo::new(
+            "talaia.watch".to_owned(),
+            registration_receipt.available_slots(),
+            registration_receipt.subscription_start(),
+            registration_receipt.subscription_expiry(),
+            HashMap::from([(locator, appointment_receipt.signature().unwrap())]),
+            Vec::new(),
+            Vec::new(),
+        );
+        wt_client
+            .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
+            .unwrap();
+        wt_client.add_appointment_receipt(
+            tower_id,
+            locator,
+            registration_receipt.available_slots(),
+            &appointment_receipt,
+        );
+
+        assert!(wt_client.towers.contains_key(&tower_id));
+        assert_eq!(
+            wt_client.towers.get(&tower_id).unwrap(),
+            &TowerSummary::from(tower_info.clone())
+        );
+        assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
+    }
+
+    #[tokio::test]
+    async fn test_add_pending_appointment() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        let tower_id = get_random_user_id();
+
+        let registration_receipt = get_random_registration_receipt();
+        let appointment = generate_random_appointment(None);
+
+        // If we call this on an unknown tower it will simply do nothing
+        wt_client.add_pending_appointment(tower_id, &appointment);
+        assert!(!wt_client.towers.contains_key(&tower_id));
+
+        // Add the tower to the state and try again
+        let tower_info = TowerInfo::new(
+            "talaia.watch".to_owned(),
+            registration_receipt.available_slots(),
+            registration_receipt.subscription_start(),
+            registration_receipt.subscription_expiry(),
+            HashMap::new(),
+            vec![appointment.clone()],
+            Vec::new(),
+        );
+
+        wt_client
+            .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
+            .unwrap();
+        wt_client.add_pending_appointment(tower_id, &appointment);
+
+        assert!(wt_client.towers.contains_key(&tower_id));
+        assert_eq!(
+            wt_client.towers.get(&tower_id).unwrap(),
+            &TowerSummary::from(tower_info.clone())
+        );
+        // When towers data is loaded from the database, it is assumed to be reachable.
+        assert_eq!(
+            wt_client.load_tower_info(tower_id).unwrap(),
+            tower_info.with_status(TowerStatus::TemporaryUnreachable)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_remove_pending_appointment() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        let tower_id = get_random_user_id();
+
+        let registration_receipt = get_random_registration_receipt();
+        let appointment = generate_random_appointment(None);
+
+        // If we call this on an unknown tower it will simply do nothing
+        wt_client.remove_pending_appointment(tower_id, appointment.locator);
+
+        // Add the tower to the state and try again
+        wt_client
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
+            .unwrap();
+        wt_client.add_pending_appointment(tower_id, &appointment);
+
+        wt_client.remove_pending_appointment(tower_id, appointment.locator);
+        assert!(!wt_client
+            .towers
+            .get(&tower_id)
+            .unwrap()
+            .pending_appointments
+            .contains(&appointment.locator));
+        // This bit is tested exhaustively in the Storage.
+        assert!(!wt_client.storage.appointment_exists(appointment.locator));
+    }
+
+    #[tokio::test]
+    async fn test_add_invalid_appointment() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        let tower_id = get_random_user_id();
+
+        let registration_receipt = get_random_registration_receipt();
+        let appointment = generate_random_appointment(None);
+
+        // If we call this on an unknown tower it will simply do nothing
+        wt_client.add_invalid_appointment(tower_id, &appointment);
+        assert!(!wt_client.towers.contains_key(&tower_id));
+
+        // Add the tower to the state and try again
+        let tower_info = TowerInfo::new(
+            "talaia.watch".to_owned(),
+            registration_receipt.available_slots(),
+            registration_receipt.subscription_start(),
+            registration_receipt.subscription_expiry(),
+            HashMap::new(),
+            Vec::new(),
+            vec![appointment.clone()],
+        );
+
+        wt_client
+            .add_update_tower(tower_id, &tower_info.net_addr, &registration_receipt)
+            .unwrap();
+        wt_client.add_invalid_appointment(tower_id, &appointment);
+
+        assert!(wt_client.towers.contains_key(&tower_id));
+        assert_eq!(
+            wt_client.towers.get(&tower_id).unwrap(),
+            &TowerSummary::from(tower_info.clone())
+        );
+        assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
+    }
+
+    #[tokio::test]
+    async fn test_move_pending_appointment_to_invalid() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        let tower_id = get_random_user_id();
+
+        let registration_receipt = get_random_registration_receipt();
+        let appointment = generate_random_appointment(None);
+
+        wt_client
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
+            .unwrap();
+        wt_client.add_pending_appointment(tower_id, &appointment);
+
+        // Check that the appointment can be moved from pending to invalid
+        wt_client.add_invalid_appointment(tower_id, &appointment);
+        wt_client.remove_pending_appointment(tower_id, appointment.locator);
+
+        assert!(!wt_client
+            .towers
+            .get(&tower_id)
+            .unwrap()
+            .pending_appointments
+            .contains(&appointment.locator));
+        assert!(wt_client
+            .towers
+            .get(&tower_id)
+            .unwrap()
+            .invalid_appointments
+            .contains(&appointment.locator));
+        assert!(!wt_client
+            .storage
+            .load_appointment_locators(tower_id, crate::AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(wt_client
+            .storage
+            .load_appointment_locators(tower_id, crate::AppointmentStatus::Invalid)
+            .contains(&appointment.locator));
+        assert!(wt_client.storage.appointment_exists(appointment.locator));
+    }
+
+    #[tokio::test]
+    async fn test_move_pending_appointment_to_invalid_multiple_towers() {
+        // Check that moving an appointment from pending to invalid can be done even if multiple towers have a reference to it
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        let tower_id = get_random_user_id();
+        let another_tower_id = get_random_user_id();
+        let tower_net_addr = "talaia.watch";
+
+        let registration_receipt = get_random_registration_receipt();
+        let appointment = generate_random_appointment(None);
+
+        wt_client
+            .add_update_tower(tower_id, tower_net_addr, &registration_receipt)
+            .unwrap();
+        wt_client
+            .add_update_tower(another_tower_id, tower_net_addr, &registration_receipt)
+            .unwrap();
+        wt_client.add_pending_appointment(tower_id, &appointment);
+        wt_client.add_pending_appointment(another_tower_id, &appointment);
+
+        // Check that the appointment can be moved from pending to invalid
+        wt_client.add_invalid_appointment(tower_id, &appointment);
+        wt_client.remove_pending_appointment(tower_id, appointment.locator);
+
+        // TOWER_ID CHECKS
+        assert!(!wt_client
+            .towers
+            .get(&tower_id)
+            .unwrap()
+            .pending_appointments
+            .contains(&appointment.locator));
+        assert!(wt_client
+            .towers
+            .get(&tower_id)
+            .unwrap()
+            .invalid_appointments
+            .contains(&appointment.locator));
+        assert!(!wt_client
+            .storage
+            .load_appointment_locators(tower_id, crate::AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(wt_client
+            .storage
+            .load_appointment_locators(tower_id, crate::AppointmentStatus::Invalid)
+            .contains(&appointment.locator));
+
+        // ANOTHER_TOWER_ID CHECKS
+        assert!(wt_client
+            .towers
+            .get(&another_tower_id)
+            .unwrap()
+            .pending_appointments
+            .contains(&appointment.locator));
+        assert!(!wt_client
+            .towers
+            .get(&another_tower_id)
+            .unwrap()
+            .invalid_appointments
+            .contains(&appointment.locator));
+        assert!(wt_client
+            .storage
+            .load_appointment_locators(another_tower_id, crate::AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(!wt_client
+            .storage
+            .load_appointment_locators(another_tower_id, crate::AppointmentStatus::Invalid)
+            .contains(&appointment.locator));
+
+        // GENERAL
+        assert!(wt_client.storage.appointment_exists(appointment.locator));
+    }
+
+    #[tokio::test]
+    async fn test_flag_misbehaving_tower() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
+
+        // If we call this on an unknown tower it will simply do nothing
+        let appointment = generate_random_appointment(None);
+        let receipt = get_random_appointment_receipt(tower_sk);
+        let proof = MisbehaviorProof::new(appointment.locator, receipt, get_random_user_id());
+        wt_client.flag_misbehaving_tower(tower_id, proof.clone());
+        assert!(!wt_client.towers.contains_key(&tower_id));
+
+        // // Add the tower to the state and try again
+        let registration_receipt = get_random_registration_receipt();
+        wt_client
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
+            .unwrap();
+        wt_client.flag_misbehaving_tower(tower_id, proof.clone());
+
+        // Check data in memory
+        let tower_summary = wt_client.towers.get(&tower_id);
+        assert!(tower_summary.is_some());
+        assert!(tower_summary.unwrap().status.is_misbehaving());
+
+        // Check data in DB
+        let loaded_info = wt_client.load_tower_info(tower_id).unwrap();
+        assert!(loaded_info.status.is_misbehaving());
+        assert_eq!(loaded_info.misbehaving_proof, Some(proof));
+        assert!(loaded_info.appointments.contains_key(&appointment.locator));
+    }
+
+    #[tokio::test]
+    async fn test_remove_tower() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        let receipt = get_random_registration_receipt();
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
+        let tower_info = TowerInfo::empty(
+            "talaia.watch".to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+
+        // Add the tower and check it is there
+        wt_client
+            .add_update_tower(tower_id, &tower_info.net_addr, &receipt)
+            .unwrap();
+        assert_eq!(
+            wt_client.towers.get(&tower_id),
+            Some(&TowerSummary::from(tower_info.clone()))
+        );
+        assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
+
+        // Remove the tower and check it is not there anymore
+        wt_client.remove_tower(tower_id).unwrap();
+        assert!(wt_client.load_tower_info(tower_id).is_none());
+        assert!(!wt_client.towers.contains_key(&tower_id));
+
+        // Try again but this time with an associated appointment to check that it also gets removed
+        wt_client
+            .add_update_tower(tower_id, &tower_info.net_addr, &receipt)
+            .unwrap();
+
+        let locator = generate_random_appointment(None).locator;
+        let registration_receipt = get_random_registration_receipt();
+        let appointment_receipt = get_random_appointment_receipt(tower_sk);
+
+        // If we call this on an unknown tower it will simply do nothing
+        wt_client.add_appointment_receipt(
+            tower_id,
+            locator,
+            registration_receipt.available_slots(),
+            &appointment_receipt,
+        );
+        // FIXME
+        assert!(wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower_id));
+
+        // Remove and check both the tower and the appointment
+        wt_client.remove_tower(tower_id).unwrap();
+        assert!(wt_client.load_tower_info(tower_id).is_none());
+        assert!(!wt_client.towers.contains_key(&tower_id));
+        // FIXME
+        assert!(!wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower_id));
+    }
+
+    #[tokio::test]
+    async fn test_remove_tower_shared_appointment() {
+        // Lets test removing a tower that has associated data shared with another tower.
+        // For instance, having an appointment that was sent to two towers, and then deleting one of them
+        // should only remove the link between the tower and the appointment, but not delete the data.
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        let receipt = get_random_registration_receipt();
+        let (tower1_sk, tower1_pk) = cryptography::get_random_keypair();
+        let tower1_id = TowerId(tower1_pk);
+        let (tower2_sk, tower2_pk) = cryptography::get_random_keypair();
+        let tower2_id = TowerId(tower2_pk);
+
+        wt_client
+            .add_update_tower(tower1_id, "talaia.watch", &receipt)
+            .unwrap();
+        wt_client
+            .add_update_tower(tower2_id, "talaia.watch", &receipt)
+            .unwrap();
+
+        let locator = generate_random_appointment(None).locator;
+        let registration_receipt = get_random_registration_receipt();
+        let appointment_receipt_1 = get_random_appointment_receipt(tower1_sk);
+        let appointment_receipt_2 = get_random_appointment_receipt(tower2_sk);
+
+        wt_client.add_appointment_receipt(
+            tower1_id,
+            locator,
+            registration_receipt.available_slots(),
+            &appointment_receipt_1,
+        );
+        wt_client.add_appointment_receipt(
+            tower2_id,
+            locator,
+            registration_receipt.available_slots(),
+            &appointment_receipt_2,
+        );
+
+        // Check that the data exists in both towers
+        assert!(wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower1_id));
+        assert!(wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower2_id));
+
+        // Remove tower1 and check that the appointment receipt can still be found for tower2
+        wt_client.remove_tower(tower1_id).unwrap();
+        assert!(wt_client.load_tower_info(tower1_id).is_none());
+
+        assert!(!wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower1_id));
+        assert!(wt_client
+            .storage
+            .appointment_receipt_exists(locator, tower2_id));
+    }
+
+    #[tokio::test]
+    async fn test_remove_inexistent_tower() {
+        let keypair = cryptography::get_random_keypair();
+        let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
+        let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
+        let db_path = tmp_path.path().join("watchtower.db");
+        let storage = Box::new(Storage::new(&db_path).unwrap());
+
+        let mut wt_client = WTClient::new(
+            storage,
+            keypair.0,
+            unbounded_channel().0,
+        )
+        .await;
+
+        match wt_client.remove_tower(get_random_user_id()) {
+            Ok(_) => panic!("Tower record was removed when it shouldn't have"),
+            Err(_) => {}
+        }
+    }
+}

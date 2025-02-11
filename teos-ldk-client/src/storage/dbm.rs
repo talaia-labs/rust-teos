@@ -635,6 +635,27 @@ impl Persister for DBM {
 
         Ok(())
     }
+
+    fn appointment_exists(&self, locator: Locator) -> bool {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT * FROM appointments WHERE locator=? ")
+            .unwrap();
+        stmt.exists(params![locator.to_vec()]).unwrap()
+    }
+
+    fn appointment_receipt_exists(
+        &self,
+        locator: Locator,
+        tower_id: TowerId,
+    ) -> bool {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT * FROM appointment_receipts WHERE locator=?1 AND tower_id=?2 ")
+            .unwrap();
+        stmt.exists(params![locator.to_vec(), tower_id.to_vec()])
+            .unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -655,29 +676,8 @@ mod tests {
 
             Ok(dbm)
         }
-
-        pub(crate) fn appointment_exists(&self, locator: Locator) -> bool {
-            let mut stmt = self
-                .connection
-                .prepare("SELECT * FROM appointments WHERE locator=? ")
-                .unwrap();
-            stmt.exists(params![locator.to_vec()]).unwrap()
-        }
-
-        pub(crate) fn appointment_receipt_exists(
-            &self,
-            locator: Locator,
-            tower_id: TowerId,
-        ) -> bool {
-            let mut stmt = self
-                .connection
-                .prepare("SELECT * FROM appointment_receipts WHERE locator=?1 AND tower_id=?2 ")
-                .unwrap();
-            stmt.exists(params![locator.to_vec(), tower_id.to_vec()])
-                .unwrap()
-        }
     }
-
+    
     #[test]
     fn test_create_tables() {
         let connection = Connection::open_in_memory().unwrap();

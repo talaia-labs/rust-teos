@@ -34,7 +34,7 @@ impl fmt::Display for StorageError {
 impl std::error::Error for StorageError {}
 
 /// Trait defining the interface for database operations
-pub trait Persister {
+pub trait Persister: Send {
     /// Stores a tower record into the database alongside the corresponding registration receipt.
     ///
     /// This function MUST be guarded against inserting duplicate (tower_id, subscription_expiry) pairs.
@@ -156,4 +156,8 @@ pub trait Persister {
         tower_id: TowerId,
         proof: &MisbehaviorProof,
     ) -> Result<(), StorageError>;
+
+    fn appointment_exists(&self, locator: Locator) -> bool; 
+
+    fn appointment_receipt_exists(&self, locator: Locator, tower_id: TowerId) -> bool;
 }
