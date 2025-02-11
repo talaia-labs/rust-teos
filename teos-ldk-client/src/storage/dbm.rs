@@ -6,12 +6,19 @@ use std::path::PathBuf;
 use rusqlite::{params, Connection, Error as SqliteError};
 
 use teos_common::appointment::{Appointment, Locator};
-use teos_common::dbm::{DatabaseConnection, DatabaseManager, Error};
+use teos_common::dbm::{DatabaseConnection, DatabaseManager};
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
+use crate::storage::storage::{Persister, StorageError};
+
 use crate::{AppointmentStatus, MisbehaviorProof, TowerInfo, TowerStatus, TowerSummary};
-pub use teos_common::dbm::Error as DBError;
+
+impl From<SqliteError> for StorageError {
+    fn from(error: SqliteError) -> Self {
+        StorageError::Other(error.to_string())
+    }
+}
 
 const TABLES: [&str; 8] = [
     "CREATE TABLE IF NOT EXISTS towers (
@@ -112,30 +119,99 @@ impl DBM {
         Ok(dbm)
     }
 
+    /// Checks whether a misbehaving proof exists for a given tower.
+    fn exists_misbehaving_proof(&self, tower_id: TowerId) -> bool {
+        let mut misbehaving_stmt = self
+            .connection
+            .prepare("SELECT tower_id FROM misbehaving_proofs WHERE tower_id = ?")
+            .unwrap();
+        misbehaving_stmt.exists([tower_id.to_vec()]).unwrap()
+    }
+
+    /// Loads the misbehaving proof for a given tower from the database (if found).
+    fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
+        let mut misbehaving_stmt = self
+            .connection
+            .prepare("SELECT locator, recovered_id FROM misbehaving_proofs WHERE tower_id = ?")
+            .unwrap();
+
+        misbehaving_stmt
+            .query_row([tower_id.to_vec()], |row| {
+                let locator = Locator::from_slice(&row.get::<_, Vec<u8>>(0).unwrap()).unwrap();
+                let recovered_id = TowerId::from_slice(&row.get::<_, Vec<u8>>(1).unwrap()).unwrap();
+                Ok((locator, recovered_id))
+            })
+            .map(|(locator, recovered_id)| {
+                let mut receipt_stmt = self
+                    .connection
+                    .prepare(
+                        "SELECT start_block, user_signature, tower_signature 
+                        FROM appointment_receipts 
+                        WHERE locator = ?1 AND tower_id = ?2",
+                    )
+                    .unwrap();
+                let receipt = receipt_stmt
+                    .query_row([locator.to_vec(), tower_id.to_vec()], |row| {
+                        let start_block = row.get::<_, u32>(0).unwrap();
+                        let user_signature = row.get::<_, String>(1).unwrap();
+                        let tower_signature = row.get::<_, String>(2).unwrap();
+                        Ok(AppointmentReceipt::with_signature(
+                            user_signature,
+                            start_block,
+                            tower_signature,
+                        ))
+                    })
+                    .unwrap();
+                MisbehaviorProof::new(locator, receipt, recovered_id)
+            })
+            .ok()
+    }
+
+    /// Stores an appointment into the database.
+    ///
+    /// Appointments are only stored as a whole when they are pending or invalid.
+    /// Accepted appointments are simplified in the form of an appointment receipt.
+    fn store_appointment(
+        tx: &rusqlite::Transaction,
+        appointment: &Appointment,
+    ) -> Result<usize, SqliteError> {
+        tx.execute(
+            "INSERT INTO appointments (locator, encrypted_blob, to_self_delay) VALUES (?1, ?2, ?3)",
+            params![
+                appointment.locator.to_vec(),
+                appointment.encrypted_blob,
+                appointment.to_self_delay
+            ],
+        )
+    }
+
+}
+
+impl Persister for DBM {
     /// Stores a tower record into the database alongside the corresponding registration receipt.
     ///
     /// This function MUST be guarded against inserting duplicate (tower_id, subscription_expiry) pairs.
     /// This is currently done in WTClient::add_update_tower.
-    pub fn store_tower_record(
+    fn store_tower_record(
         &mut self,
         tower_id: TowerId,
         net_addr: &str,
         receipt: &RegistrationReceipt,
-    ) -> Result<(), Error> {
+    ) -> Result<(), StorageError> {
         let tx = self.get_mut_connection().transaction().unwrap();
         tx.execute(
             "INSERT INTO towers (tower_id, net_addr, available_slots) 
                 VALUES (?1, ?2, ?3) 
                 ON CONFLICT (tower_id) DO UPDATE SET net_addr = ?2, available_slots = ?3",
             params![tower_id.to_vec(), net_addr, receipt.available_slots()],
-        )
-        .map_err(Error::Unknown)?;
+        )?;
         tx.execute(
                 "INSERT INTO registration_receipts (tower_id, available_slots, subscription_start, subscription_expiry, signature) 
                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![tower_id.to_vec(), receipt.available_slots(), receipt.subscription_start(), receipt.subscription_expiry(), receipt.signature()]).map_err( Error::Unknown)?;
+                params![tower_id.to_vec(), receipt.available_slots(), receipt.subscription_start(), receipt.subscription_expiry(), receipt.signature()])?;
 
-        tx.commit().map_err(Error::Unknown)
+        tx.commit()?;
+        Ok(())
     }
 
     /// Loads a tower record from the database.
@@ -143,7 +219,7 @@ impl DBM {
     /// Tower records are composed from the tower information and the appointment data. The latter is split in:
     /// accepted appointments (represented by appointment receipts), pending appointments and invalid appointments.
     /// In the case that the tower has misbehaved, then a misbehaving proof is also attached to the record.
-    pub fn load_tower_record(&self, tower_id: TowerId) -> Option<TowerInfo> {
+    fn load_tower_record(&self, tower_id: TowerId) -> Option<TowerInfo> {
         let mut stmt = self
         .connection
         .prepare("SELECT t.net_addr, t.available_slots, r.subscription_start, r.subscription_expiry 
@@ -184,7 +260,7 @@ impl DBM {
     /// Loads the latest registration receipt for a given tower.
     ///
     /// Latests is determined by the one with the `subscription_expiry` further into the future.
-    pub fn load_registration_receipt(
+    fn load_registration_receipt(
         &self,
         tower_id: TowerId,
         user_id: UserId,
@@ -217,13 +293,16 @@ impl DBM {
     ///
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
     /// reference to them.
-    pub fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), Error> {
+    fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), StorageError> {
         let query = "DELETE FROM towers WHERE tower_id=?";
-        self.remove_data(query, params![tower_id.to_vec()])
+        match self.connection.execute(query, params![tower_id.to_vec()]) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(StorageError::Other(e.to_string())),
+        }
     }
 
     /// Loads all tower records from the database.
-    pub fn load_towers(&self) -> HashMap<TowerId, TowerSummary> {
+    fn load_towers(&self) -> HashMap<TowerId, TowerSummary> {
         let mut towers = HashMap::new();
         let mut stmt = self
             .connection
@@ -271,13 +350,13 @@ impl DBM {
     }
 
     /// Stores an appointments receipt into the database representing an appointment accepted by a given tower.
-    pub fn store_appointment_receipt(
+    fn store_appointment_receipt(
         &mut self,
         tower_id: TowerId,
         locator: Locator,
         available_slots: u32,
         receipt: &AppointmentReceipt,
-    ) -> Result<(), SqliteError> {
+    ) -> Result<(), StorageError> {
         let tx = self.get_mut_connection().transaction().unwrap();
         tx.execute(
             "INSERT INTO appointment_receipts (locator, tower_id, start_block, user_signature, tower_signature) 
@@ -294,11 +373,12 @@ impl DBM {
             "UPDATE towers SET available_slots=?1 WHERE tower_id=?2",
             params![available_slots, tower_id.to_vec()],
         )?;
-        tx.commit()
+        tx.commit()?;
+        Ok(())
     }
 
     /// Loads a given appointment receipt of a given tower from the database.
-    pub fn load_appointment_receipt(
+    fn load_appointment_receipt(
         &self,
         tower_id: TowerId,
         locator: Locator,
@@ -326,7 +406,7 @@ impl DBM {
     ///
     /// TODO: Currently this is only loading a summary of the receipt, if we need to really load all the information
     /// for any reason this method may need to be renamed.
-    pub fn load_appointment_receipts(&self, tower_id: TowerId) -> HashMap<Locator, String> {
+    fn load_appointment_receipts(&self, tower_id: TowerId) -> HashMap<Locator, String> {
         let mut receipts = HashMap::new();
         let mut stmt = self
             .connection
@@ -348,7 +428,7 @@ impl DBM {
     ///
     /// The loaded locators can be loaded either from appointment_receipts, pending_appointments or invalid_appointments
     ///  depending on `status`.
-    pub fn load_appointment_locators(
+    fn load_appointment_locators(
         &self,
         tower_id: TowerId,
         status: AppointmentStatus,
@@ -375,7 +455,7 @@ impl DBM {
     }
 
     /// Loads an appointment from the database.
-    pub fn load_appointment(&self, locator: Locator) -> Option<Appointment> {
+    fn load_appointment(&self, locator: Locator) -> Option<Appointment> {
         let mut stmt = self
             .connection
             .prepare("SELECT encrypted_blob, to_self_delay FROM appointments WHERE locator = ?")
@@ -390,34 +470,16 @@ impl DBM {
         .ok()
     }
 
-    /// Stores an appointment into the database.
-    ///
-    /// Appointments are only stored as a whole when they are pending or invalid.
-    /// Accepted appointments are simplified in the form of an appointment receipt.
-    fn store_appointment(
-        tx: &rusqlite::Transaction,
-        appointment: &Appointment,
-    ) -> Result<usize, SqliteError> {
-        tx.execute(
-            "INSERT INTO appointments (locator, encrypted_blob, to_self_delay) VALUES (?1, ?2, ?3)",
-            params![
-                appointment.locator.to_vec(),
-                appointment.encrypted_blob,
-                appointment.to_self_delay
-            ],
-        )
-    }
-
     /// Stores a pending appointment into the database.
     ///
     /// A pending appointment is an appointment that was sent to a tower when it was unreachable.
     /// This data is stored so it can be resent once the tower comes back online.
     /// Internally calls [Self::store_appointment].
-    pub fn store_pending_appointment(
+    fn store_pending_appointment(
         &mut self,
         tower_id: TowerId,
         appointment: &Appointment,
-    ) -> Result<(), SqliteError> {
+    ) -> Result<(), StorageError> {
         let tx = self.get_mut_connection().transaction().unwrap();
 
         // If the appointment already exists (because it was added by another tower as either pending or invalid) we simply
@@ -428,17 +490,19 @@ impl DBM {
             params![appointment.locator.to_vec(), tower_id.to_vec(),],
         )?;
 
-        tx.commit()
+        tx.commit()?;
+
+        Ok(())
     }
 
     /// Removes a pending appointment from the database.
     ///
     /// If the pending appointment is the only instance of the appointment, the appointment will also be deleted form the appointments table.
-    pub fn delete_pending_appointment(
+    fn delete_pending_appointment(
         &mut self,
         tower_id: TowerId,
         locator: Locator,
-    ) -> Result<(), SqliteError> {
+    ) -> Result<(), StorageError> {
         // We will delete data from pending_appointments or from appointments depending on whether the later has a single reference
         // to it or not. If that's the case, deleting the entry from appointments will trigger a cascade deletion of the entry in pending.
         // If there are other references, this will be deleted when removing the last one.
@@ -474,7 +538,9 @@ impl DBM {
                 params![locator.to_vec(), tower_id.to_vec()],
             )?;
         };
-        tx.commit()
+        tx.commit()?;
+
+        Ok(())
     }
 
     /// Stores an invalid appointment into the database.
@@ -482,11 +548,11 @@ impl DBM {
     /// An invalid appointment is an appointment that was rejected by the tower.
     /// Storing this data may allow us to see what was the issue and send the data later on.
     /// Internally calls [Self::store_appointment].
-    pub fn store_invalid_appointment(
+    fn store_invalid_appointment(
         &mut self,
         tower_id: TowerId,
         appointment: &Appointment,
-    ) -> Result<(), SqliteError> {
+    ) -> Result<(), StorageError> {
         let tx = self.get_mut_connection().transaction().unwrap();
 
         // If the appointment already exists (because it was added by another tower as either pending or invalid) we simply
@@ -497,14 +563,16 @@ impl DBM {
             params![appointment.locator.to_vec(), tower_id.to_vec(),],
         )?;
 
-        tx.commit()
+        tx.commit()?;
+
+        Ok(())
     }
 
     /// Loads non finalized appointments from the database for a given tower based on a status flag.
     ///
     /// This is meant to be used only for pending and invalid appointments, if the method is called for
     /// accepted appointment, an empty collection will be returned.
-    pub fn load_appointments(
+    fn load_appointments(
         &self,
         tower_id: TowerId,
         status: AppointmentStatus,
@@ -537,11 +605,11 @@ impl DBM {
     ///
     /// A misbehaving proof is proof that the tower has signed an appointment using a key different
     /// than the one advertised to the user when they registered.
-    pub fn store_misbehaving_proof(
+    fn store_misbehaving_proof(
         &mut self,
         tower_id: TowerId,
         proof: &MisbehaviorProof,
-    ) -> Result<(), SqliteError> {
+    ) -> Result<(), StorageError> {
         let tx = self.get_mut_connection().transaction().unwrap();
         tx.execute(
             "INSERT INTO appointment_receipts (tower_id, locator, start_block, user_signature, tower_signature) 
@@ -563,55 +631,9 @@ impl DBM {
             ],
         )?;
 
-        tx.commit()
-    }
+        tx.commit()?;
 
-    /// Loads the misbehaving proof for a given tower from the database (if found).
-    fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
-        let mut misbehaving_stmt = self
-            .connection
-            .prepare("SELECT locator, recovered_id FROM misbehaving_proofs WHERE tower_id = ?")
-            .unwrap();
-
-        misbehaving_stmt
-            .query_row([tower_id.to_vec()], |row| {
-                let locator = Locator::from_slice(&row.get::<_, Vec<u8>>(0).unwrap()).unwrap();
-                let recovered_id = TowerId::from_slice(&row.get::<_, Vec<u8>>(1).unwrap()).unwrap();
-                Ok((locator, recovered_id))
-            })
-            .map(|(locator, recovered_id)| {
-                let mut receipt_stmt = self
-                    .connection
-                    .prepare(
-                        "SELECT start_block, user_signature, tower_signature 
-                        FROM appointment_receipts 
-                        WHERE locator = ?1 AND tower_id = ?2",
-                    )
-                    .unwrap();
-                let receipt = receipt_stmt
-                    .query_row([locator.to_vec(), tower_id.to_vec()], |row| {
-                        let start_block = row.get::<_, u32>(0).unwrap();
-                        let user_signature = row.get::<_, String>(1).unwrap();
-                        let tower_signature = row.get::<_, String>(2).unwrap();
-                        Ok(AppointmentReceipt::with_signature(
-                            user_signature,
-                            start_block,
-                            tower_signature,
-                        ))
-                    })
-                    .unwrap();
-                MisbehaviorProof::new(locator, receipt, recovered_id)
-            })
-            .ok()
-    }
-
-    /// Checks whether a misbehaving proof exists for a given tower.
-    fn exists_misbehaving_proof(&self, tower_id: TowerId) -> bool {
-        let mut misbehaving_stmt = self
-            .connection
-            .prepare("SELECT tower_id FROM misbehaving_proofs WHERE tower_id = ?")
-            .unwrap();
-        misbehaving_stmt.exists([tower_id.to_vec()]).unwrap()
+        Ok(())
     }
 }
 
@@ -821,10 +843,10 @@ mod tests {
     fn test_remove_tower_record_inexistent() {
         let dbm = DBM::in_memory().unwrap();
 
-        assert!(matches!(
-            dbm.remove_tower_record(get_random_user_id()),
-            Err(Error::NotFound)
-        ));
+        match dbm.remove_tower_record(get_random_user_id()) {
+            Ok(_) => panic!("Tower record was removed when it shouldn't have"),
+            Err(_) => {}
+        }
     }
 
     #[test]

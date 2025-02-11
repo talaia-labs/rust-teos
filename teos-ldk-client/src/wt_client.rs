@@ -1,3 +1,4 @@
+use crate::storage::storage::{Persister, StorageError};
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 
@@ -16,7 +17,7 @@ use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
 use crate::retrier::RetrierStatus;
-use crate::storage::{DBError, Storage};
+use crate::storage::Storage;
 #[cfg(feature = "kv")]
 use lightning::util::persist::KVStore;
 use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
@@ -317,12 +318,12 @@ impl WTClient {
     /// Removes a tower from the client (both memory and database).
     ///
     /// Any data associated to the tower will be deleted (i.e. links to appointments)
-    pub fn remove_tower(&mut self, tower_id: TowerId) -> Result<(), DBError> {
+    pub fn remove_tower(&mut self, tower_id: TowerId) -> Result<(), StorageError> {
         if self.towers.contains_key(&tower_id) {
             self.towers.remove(&tower_id);
             self.storage.remove_tower_record(tower_id)
         } else {
-            Err(DBError::NotFound)
+            Err(StorageError::NotFound("foo".to_string()))
         }
     }
 }
@@ -1009,7 +1010,7 @@ impl WTClient {
 //
 //         assert!(matches!(
 //             wt_client.remove_tower(get_random_user_id()),
-//             Err(DBError::NotFound)
+//             Err(StorageError::NotFound)
 //         ));
 //     }
 // }

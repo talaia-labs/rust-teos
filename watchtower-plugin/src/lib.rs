@@ -20,7 +20,7 @@ pub mod wt_client;
 mod test_utils;
 
 /// The status the tower can be found at.
-#[derive(Clone, Serialize, PartialEq, Eq, Copy, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Copy, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum TowerStatus {
     Reachable,
@@ -249,7 +249,7 @@ impl TowerInfo {
 }
 
 /// A misbehaving proof. Contains proof of a tower replying with a public key different from the advertised one.
-#[derive(Clone, Serialize, Debug, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub struct MisbehaviorProof {
     #[serde(with = "hex::serde")]
     pub locator: Locator,

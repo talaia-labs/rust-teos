@@ -39,6 +39,20 @@ pub struct Storage<T: KVStore> {
     sk: Vec<u8>,
 }
 
+/// Creates a composite key from multiple components
+fn make_key(components: &[&str]) -> String {
+    components.join(":")
+}
+
+/// Gets the appropriate namespace based on appointment status
+fn get_appointment_namespace(status: AppointmentStatus) -> &'static str {
+    match status {
+        AppointmentStatus::Accepted => NS_APPOINTMENT_RECEIPTS,
+        AppointmentStatus::Pending => NS_PENDING_APPOINTMENTS,
+        AppointmentStatus::Invalid => NS_INVALID_APPOINTMENTS,
+    }
+}
+
 // Implement methods to convert TowerInfo to vec<u8> and vice versa
 
 impl Storage {
@@ -47,20 +61,6 @@ impl Storage {
             store: Box::new(store),
             sk
         })
-    }
-
-    /// Creates a composite key from multiple components
-    fn make_key(components: &[&str]) -> String {
-        components.join(":")
-    }
-
-    /// Gets the appropriate namespace based on appointment status
-    fn get_appointment_namespace(status: AppointmentStatus) -> &'static str {
-        match status {
-            AppointmentStatus::Accepted => NS_APPOINTMENT_RECEIPTS,
-            AppointmentStatus::Pending => NS_PENDING_APPOINTMENTS,
-            AppointmentStatus::Invalid => NS_INVALID_APPOINTMENTS,
-        }
     }
 
     /// Stores a tower record into the database alongside the corresponding registration receipt.
@@ -73,7 +73,7 @@ impl Storage {
         net_addr: &str,
         receipt: &RegistrationReceipt,
     ) -> Result<(), DBError> {
-        let key = Self::make_key(&[&tower_id.to_string()]);
+        let key = make_key(&[&tower_id.to_string()]);
 
         let value = TowerInfo::new(
             net_addr.to_string(),
@@ -99,7 +99,7 @@ impl Storage {
     /// accepted appointments (represented by appointment receipts), pending appointments and invalid appointments.
     /// In the case that the tower has misbehaved, then a misbehaving proof is also attached to the record.
     pub fn load_tower_record(&self, tower_id: TowerId) -> Option<TowerInfo> {
-        let key = Self::make_key(&[&tower_id.to_string()]);
+        let key = make_key(&[&tower_id.to_string()]);
         let value = match self.store.read(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key) {
             Ok(v) => v,
             Err(_) => return None,
@@ -122,7 +122,7 @@ impl Storage {
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
     /// reference to them.
     pub fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), DBError> {
-        let key = Self::make_key(&[&tower_id.to_string()]);
+        let key = make_key(&[&tower_id.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "tower_record"
         // key: <tower_id>
@@ -144,7 +144,7 @@ impl Storage {
         tower_id: TowerId,
         user_id: UserId,
     ) -> Option<RegistrationReceipt> {
-        // let key = Self::make_key(&[&tower_id.to_string()]);
+        // let key = make_key(&[&tower_id.to_string()]);
         //
         // self.store
         //     .read(PRIMARY_NAMESPACE, NS_REGISTRATION_RECEIPTS, &key);
@@ -159,7 +159,7 @@ impl Storage {
         available_slots: u32,
         receipt: &AppointmentReceipt,
     ) -> Result<(), DBError> {
-        let key = Self::make_key(&[&tower_id.to_string(), &locator.to_string()]);
+        let key = make_key(&[&tower_id.to_string(), &locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "appointment_receipt"
         // key: <tower_id> + <locator>
@@ -174,7 +174,7 @@ impl Storage {
         tower_id: TowerId,
         locator: Locator,
     ) -> Option<AppointmentReceipt> {
-        // let key = Self::make_key(&[&tower_id.to_string(), &locator.to_string()]);
+        // let key = make_key(&[&tower_id.to_string(), &locator.to_string()]);
         // // primary namespace: "watchtower"
         // // secondary namespance: "appointment_receipt"
         // self.store
@@ -220,7 +220,7 @@ impl Storage {
     /// Appointments are only stored as a whole when they are pending or invalid.
     /// Accepted appointments are simplified in the form of an appointment receipt.
     fn store_appointment(&self, appointment: &Appointment) -> Result<usize, DBError> {
-        let key = Self::make_key(&[&appointment.locator.to_string()]);
+        let key = make_key(&[&appointment.locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "appointment"
         // key:
@@ -238,7 +238,7 @@ impl Storage {
         tower_id: TowerId,
         appointment: &Appointment,
     ) -> Result<(), DBError> {
-        let key = Self::make_key(&[&tower_id.to_string(), &appointment.locator.to_string()]);
+        let key = make_key(&[&tower_id.to_string(), &appointment.locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "pending_appointment"
         // key:
@@ -254,7 +254,7 @@ impl Storage {
         tower_id: TowerId,
         locator: Locator,
     ) -> Result<(), DBError> {
-        let key = Self::make_key(&[&tower_id.to_string(), &locator.to_string()]);
+        let key = make_key(&[&tower_id.to_string(), &locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "pending_appointment"
         // key: ?
@@ -272,7 +272,7 @@ impl Storage {
         tower_id: TowerId,
         appointment: &Appointment,
     ) -> Result<(), DBError> {
-        let key = Self::make_key(&[&tower_id.to_string(), &appointment.locator.to_string()]);
+        let key = make_key(&[&tower_id.to_string(), &appointment.locator.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "invalid_appointment"
         // key: ?
@@ -289,7 +289,7 @@ impl Storage {
         tower_id: TowerId,
         status: AppointmentStatus,
     ) -> Vec<Appointment> {
-        let key = Self::make_key(&[&tower_id.to_string()]);
+        let key = make_key(&[&tower_id.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "{status}_appointment_receipt"
         // key: ?
@@ -306,7 +306,7 @@ impl Storage {
         tower_id: TowerId,
         proof: &MisbehaviorProof,
     ) -> Result<(), DBError> {
-        let key = Self::make_key(&[&tower_id.to_string()]);
+        let key = make_key(&[&tower_id.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "misbehaving_proof"
         // key: ?
@@ -316,7 +316,7 @@ impl Storage {
 
     /// Loads the misbehaving proof for a given tower from the database (if found).
     fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
-        let key = Self::make_key(&[&tower_id.to_string()]);
+        let key = make_key(&[&tower_id.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "misbehaving_proof"
         // key: ?
@@ -325,7 +325,7 @@ impl Storage {
 
     /// Checks whether a misbehaving proof exists for a given tower.
     fn exists_misbehaving_proof(&self, tower_id: TowerId) -> bool {
-        let key = Self::make_key(&[&tower_id.to_string()]);
+        let key = make_key(&[&tower_id.to_string()]);
         // primary namespace: "watchtower"
         // secondary namespance: "misbehaving_proof"
         // key: ?
