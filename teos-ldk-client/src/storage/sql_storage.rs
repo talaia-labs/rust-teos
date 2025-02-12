@@ -1,4 +1,3 @@
-#[cfg(feature = "sqlite")]
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::path::PathBuf;
