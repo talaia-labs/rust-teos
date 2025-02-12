@@ -1,6 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use crate::storage::Storage;
-use crate::storage::storage::{Persister, StorageError};
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -576,6 +574,9 @@ impl Retrier {
 mod tests {
     use super::*;
 
+    use crate::storage::storage::Persister;
+    use crate::storage::Storage;
+
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use serde_json::json;
     use tempdir::TempDir;
@@ -635,12 +636,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -738,12 +734,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
 
         // Add a tower with pending appointments
@@ -874,12 +865,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -987,12 +973,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -1088,12 +1069,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
         let server = mockito::Server::new_async().await;
 
@@ -1140,12 +1116,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -1422,12 +1393,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
 
         let mut server = mockito::Server::new_async().await;
@@ -1481,12 +1447,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
         let server = mockito::Server::new_async().await;
 
@@ -1514,12 +1475,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -1575,12 +1531,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
@@ -1616,12 +1567,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
 
         let mut server = mockito::Server::new_async().await;
@@ -1680,12 +1626,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
 
         let mut server = mockito::Server::new_async().await;
@@ -1750,12 +1691,7 @@ mod tests {
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(
-                storage,
-                keypair.0,
-                unbounded_channel().0,
-            )
-            .await,
+            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
         ));
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin

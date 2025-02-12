@@ -141,11 +141,7 @@ pub trait Persister: Send {
     ///
     /// This is meant to be used only for pending and invalid appointments, if the method is called for
     /// accepted appointment, an empty collection will be returned.
-    fn load_appointments(
-        &self,
-        tower_id: TowerId,
-        status: AppointmentStatus,
-    ) -> Vec<Appointment>;
+    fn load_appointments(&self, tower_id: TowerId, status: AppointmentStatus) -> Vec<Appointment>;
 
     /// Stores a misbehaving proof into the database.
     ///
@@ -157,7 +153,7 @@ pub trait Persister: Send {
         proof: &MisbehaviorProof,
     ) -> Result<(), StorageError>;
 
-    fn appointment_exists(&self, locator: Locator) -> bool; 
+    fn appointment_exists(&self, locator: Locator) -> bool;
 
     fn appointment_receipt_exists(&self, locator: Locator, tower_id: TowerId) -> bool;
 }

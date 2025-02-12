@@ -4,8 +4,6 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use bincode;
-
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::net::NetAddr;
 use teos_common::receipts::AppointmentReceipt;

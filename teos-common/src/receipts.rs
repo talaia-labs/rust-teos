@@ -1,6 +1,6 @@
 //! Receipts issued  by towers and handed to users as commitment proof.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use bitcoin::secp256k1::SecretKey;
 

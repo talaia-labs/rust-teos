@@ -184,7 +184,6 @@ impl DBM {
             ],
         )
     }
-
 }
 
 impl Persister for DBM {
@@ -572,11 +571,7 @@ impl Persister for DBM {
     ///
     /// This is meant to be used only for pending and invalid appointments, if the method is called for
     /// accepted appointment, an empty collection will be returned.
-    fn load_appointments(
-        &self,
-        tower_id: TowerId,
-        status: AppointmentStatus,
-    ) -> Vec<Appointment> {
+    fn load_appointments(&self, tower_id: TowerId, status: AppointmentStatus) -> Vec<Appointment> {
         let table = match status {
             AppointmentStatus::Accepted => return Vec::new(),
             AppointmentStatus::Pending => "pending_appointments",
@@ -644,11 +639,7 @@ impl Persister for DBM {
         stmt.exists(params![locator.to_vec()]).unwrap()
     }
 
-    fn appointment_receipt_exists(
-        &self,
-        locator: Locator,
-        tower_id: TowerId,
-    ) -> bool {
+    fn appointment_receipt_exists(&self, locator: Locator, tower_id: TowerId) -> bool {
         let mut stmt = self
             .connection
             .prepare("SELECT * FROM appointment_receipts WHERE locator=?1 AND tower_id=?2 ")
@@ -677,7 +668,7 @@ mod tests {
             Ok(dbm)
         }
     }
-    
+
     #[test]
     fn test_create_tables() {
         let connection = Connection::open_in_memory().unwrap();
@@ -843,9 +834,8 @@ mod tests {
     fn test_remove_tower_record_inexistent() {
         let dbm = DBM::in_memory().unwrap();
 
-        match dbm.remove_tower_record(get_random_user_id()) {
-            Ok(_) => panic!("Tower record was removed when it shouldn't have"),
-            Err(_) => {}
+        if dbm.remove_tower_record(get_random_user_id()).is_ok() {
+            panic!("Tower record was removed when it shouldn't have")
         }
     }
 

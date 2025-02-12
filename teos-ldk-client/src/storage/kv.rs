@@ -19,7 +19,6 @@ use bitcoin::hashes::{sha256, Hash};
 // use bitcoin::{Transaction, Txid};
 // use lightning::util::message_signing;
 
-
 use crate::{AppointmentStatus, MisbehaviorProof, TowerInfo, TowerStatus, TowerSummary};
 
 // Primary namespace for all watchtower-related data
@@ -59,7 +58,7 @@ impl Storage {
     pub fn new(store: impl T, sk: Vec<u8>) -> Result<Self, DBError> {
         Ok(Storage {
             store: Box::new(store),
-            sk
+            sk,
         })
     }
 
@@ -340,10 +339,7 @@ impl Storage {
 /// - `[0; 12]` as IV.
 ///
 /// The message to be encrypted is expected to be the penalty transaction.
-fn encrypt(
-    message: &Vec<u8>,
-    secret: &Vec<u8>,
-) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
+fn encrypt(message: &Vec<u8>, secret: &Vec<u8>) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
     // Defaults is [0; 12]
     let nonce = Nonce::default();
     let k = sha256::Hash::hash(secret);
@@ -361,7 +357,10 @@ fn encrypt(
 /// - `[0; 12]` as IV.
 ///
 ///  The result is expected to be a penalty transaction.
-fn decrypt(encrypted_blob: &[u8], secret: &Vec<u8>) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
+fn decrypt(
+    encrypted_blob: &[u8],
+    secret: &Vec<u8>,
+) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
     // Defaults is [0; 12]
     let nonce = Nonce::default();
     let k = sha256::Hash::hash(secret);
@@ -408,7 +407,8 @@ mod tests {
         );
 
         // Check the loaded data matches the in memory data
-        storage.store_tower_record(tower_id, net_addr, &receipt)
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
             .unwrap();
         assert_eq!(storage.load_tower_record(tower_id).unwrap(), tower_info);
     }

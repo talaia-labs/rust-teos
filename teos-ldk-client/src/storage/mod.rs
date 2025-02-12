@@ -18,9 +18,9 @@ pub use dbm::DBM as Storage;
 #[cfg(feature = "kv")]
 mod kv;
 #[cfg(feature = "kv")]
-pub(crate) use kv::Storage;
-#[cfg(feature = "kv")]
 pub use kv::DBError;
+#[cfg(feature = "kv")]
+pub(crate) use kv::Storage;
 
 #[cfg(test)]
 #[cfg(feature = "kv")]

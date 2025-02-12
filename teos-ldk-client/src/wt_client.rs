@@ -2,25 +2,18 @@ use crate::storage::storage::{Persister, StorageError};
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 
-#[cfg(feature = "sqlite")]
-use std::path::PathBuf;
-#[cfg(feature = "sqlite")]
-use tokio::fs;
 use tokio::sync::mpsc::UnboundedSender;
 
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 
 use teos_common::appointment::{Appointment, Locator};
-#[cfg(feature = "sqlite")]
-use teos_common::cryptography;
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
 use crate::retrier::RetrierStatus;
-use crate::storage::Storage;
+use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
 #[cfg(feature = "kv")]
 use lightning::util::persist::KVStore;
-use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
 
 #[derive(Eq, PartialEq)]
 pub enum RevocationData {
@@ -109,7 +102,6 @@ impl WTClient {
             user_id,
         }
     }
-
 
     /// Adds or updates a tower entry.
     pub fn add_update_tower(
@@ -288,7 +280,9 @@ impl WTClient {
 mod tests {
     use super::*;
 
+    use crate::storage::Storage;
     use tempdir::TempDir;
+    use teos_common::cryptography;
     use tokio::sync::mpsc::unbounded_channel;
 
     use teos_common::test_utils::{
@@ -304,13 +298,8 @@ mod tests {
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
-        
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         // Adding a new tower will add a summary to towers and the full data to the
         let mut receipt = get_random_registration_receipt();
@@ -408,11 +397,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        ).await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         // If the tower is unknown, get_tower_status returns None
         let tower_id = get_random_user_id();
@@ -439,12 +424,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         // If the tower is unknown nothing will happen
         let unknown_tower = get_random_user_id();
@@ -478,12 +458,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
@@ -537,12 +512,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
 
@@ -589,12 +559,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
 
@@ -629,12 +594,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
 
@@ -677,12 +637,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
 
@@ -730,12 +685,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         let tower_id = get_random_user_id();
         let another_tower_id = get_random_user_id();
@@ -813,12 +763,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
@@ -857,12 +802,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         let receipt = get_random_registration_receipt();
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
@@ -931,12 +871,7 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
         let receipt = get_random_registration_receipt();
         let (tower1_sk, tower1_pk) = cryptography::get_random_keypair();
@@ -997,16 +932,10 @@ mod tests {
         let db_path = tmp_path.path().join("watchtower.db");
         let storage = Box::new(Storage::new(&db_path).unwrap());
 
-        let mut wt_client = WTClient::new(
-            storage,
-            keypair.0,
-            unbounded_channel().0,
-        )
-        .await;
+        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
-        match wt_client.remove_tower(get_random_user_id()) {
-            Ok(_) => panic!("Tower record was removed when it shouldn't have"),
-            Err(_) => {}
+        if wt_client.remove_tower(get_random_user_id()).is_ok() {
+            panic!("Tower record was removed when it shouldn't have")
         }
     }
 }
