@@ -271,7 +271,7 @@ impl WTClient {
             self.towers.remove(&tower_id);
             self.storage.remove_tower_record(tower_id)
         } else {
-            Err(PersisterError::NotFound("foo".to_string()))
+            Err(PersisterError::NotFound(format!("tower_id: {tower_id}")))
         }
     }
 }
@@ -934,8 +934,11 @@ mod tests {
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
-        if wt_client.remove_tower(get_random_user_id()).is_ok() {
-            panic!("Tower record was removed when it shouldn't have")
-        }
+        let tower_id = get_random_user_id();
+        let err = wt_client.remove_tower(tower_id).unwrap_err();
+        assert_eq!(
+            err,
+            PersisterError::NotFound(format!("tower_id: {tower_id}"))
+        );
     }
 }

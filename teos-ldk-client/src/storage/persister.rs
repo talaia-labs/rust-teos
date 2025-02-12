@@ -8,7 +8,7 @@ use teos_common::{TowerId, UserId};
 use crate::{AppointmentStatus, MisbehaviorProof, TowerInfo, TowerSummary};
 
 /// A general storage error type that can be used across different storage implementations
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum PersisterError {
     /// Error when storing data
     StoreError(String),

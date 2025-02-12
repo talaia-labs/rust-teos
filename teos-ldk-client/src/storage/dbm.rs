@@ -294,9 +294,12 @@ impl Persister for DBM {
     /// reference to them.
     fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), PersisterError> {
         let query = "DELETE FROM towers WHERE tower_id=?";
-        match self.connection.execute(query, params![tower_id.to_vec()]) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(PersisterError::Other(e.to_string())),
+        match self.load_tower_record(tower_id) {
+            None => Err(PersisterError::NotFound(format!("tower_id: {tower_id}"))),
+            Some(_tower) => match self.connection.execute(query, params![tower_id.to_vec()]) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(PersisterError::Other(e.to_string())),
+            },
         }
     }
 
@@ -834,9 +837,12 @@ mod tests {
     fn test_remove_tower_record_inexistent() {
         let dbm = DBM::in_memory().unwrap();
 
-        if dbm.remove_tower_record(get_random_user_id()).is_ok() {
-            panic!("Tower record was removed when it shouldn't have")
-        }
+        let tower_id = get_random_user_id();
+        let err = dbm.remove_tower_record(tower_id).unwrap_err();
+        assert_eq!(
+            err,
+            PersisterError::NotFound(format!("tower_id: {tower_id}"))
+        );
     }
 
     #[test]

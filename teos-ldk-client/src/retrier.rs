@@ -1255,13 +1255,14 @@ mod tests {
             WTClient::new(
                 Box::new(Storage::new(&db_path).unwrap()),
                 keypair.0,
-                unbounded_channel().0,
+                tx.clone(),
             )
             .await,
         ));
 
         // Also create the retrier thread so retries can be managed
         let wt_client_clone = wt_client.clone();
+
         let task = tokio::spawn(async move {
             RetryManager::new(
                 wt_client_clone,
@@ -1280,9 +1281,15 @@ mod tests {
                 MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME,
             ))
             .await;
-            let state = wt_client.lock().unwrap();
-            assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
 
+            wait_until!(wt_client
+                .lock()
+                .unwrap()
+                .get_retrier_status(&tower_id)
+                .unwrap()
+                .is_idle());
+
+            let state = wt_client.lock().unwrap();
             let tower = state.towers.get(&tower_id).unwrap();
             assert!(tower.pending_appointments.contains(&appointment.locator));
             assert_eq!(tower.status, TowerStatus::Unreachable);
