@@ -1,4 +1,4 @@
-pub mod storage;
+pub mod persister;
 
 #[cfg(all(not(feature = "sqlite"), not(feature = "kv")))]
 compile_error!(

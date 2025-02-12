@@ -1,4 +1,4 @@
-use crate::storage::storage::{Persister, StorageError};
+use crate::storage::persister::{Persister, PersisterError};
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 
@@ -266,12 +266,12 @@ impl WTClient {
     /// Removes a tower from the client (both memory and database).
     ///
     /// Any data associated to the tower will be deleted (i.e. links to appointments)
-    pub fn remove_tower(&mut self, tower_id: TowerId) -> Result<(), StorageError> {
+    pub fn remove_tower(&mut self, tower_id: TowerId) -> Result<(), PersisterError> {
         if self.towers.contains_key(&tower_id) {
             self.towers.remove(&tower_id);
             self.storage.remove_tower_record(tower_id)
         } else {
-            Err(StorageError::NotFound("foo".to_string()))
+            Err(PersisterError::NotFound("foo".to_string()))
         }
     }
 }

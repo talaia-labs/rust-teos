@@ -9,7 +9,7 @@ use crate::{AppointmentStatus, MisbehaviorProof, TowerInfo, TowerSummary};
 
 /// A general storage error type that can be used across different storage implementations
 #[derive(Debug)]
-pub enum StorageError {
+pub enum PersisterError {
     /// Error when storing data
     StoreError(String),
     /// Error when retrieving data
@@ -20,18 +20,18 @@ pub enum StorageError {
     Other(String),
 }
 
-impl fmt::Display for StorageError {
+impl fmt::Display for PersisterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StorageError::StoreError(msg) => write!(f, "Storage store error: {}", msg),
-            StorageError::RetrievalError(msg) => write!(f, "Storage retrieval error: {}", msg),
-            StorageError::NotFound(msg) => write!(f, "Data not found: {}", msg),
-            StorageError::Other(msg) => write!(f, "Storage error: {}", msg),
+            PersisterError::StoreError(msg) => write!(f, "Storage store error: {}", msg),
+            PersisterError::RetrievalError(msg) => write!(f, "Storage retrieval error: {}", msg),
+            PersisterError::NotFound(msg) => write!(f, "Data not found: {}", msg),
+            PersisterError::Other(msg) => write!(f, "Storage error: {}", msg),
         }
     }
 }
 
-impl std::error::Error for StorageError {}
+impl std::error::Error for PersisterError {}
 
 /// Trait defining the interface for database operations
 pub trait Persister: Send {
@@ -44,7 +44,7 @@ pub trait Persister: Send {
         tower_id: TowerId,
         net_addr: &str,
         receipt: &RegistrationReceipt,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), PersisterError>;
 
     /// Loads a tower record from the database.
     ///
@@ -66,7 +66,7 @@ pub trait Persister: Send {
     ///
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
     /// reference to them.
-    fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), StorageError>;
+    fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), PersisterError>;
 
     /// Loads all tower records from the database.
     fn load_towers(&self) -> HashMap<TowerId, TowerSummary>;
@@ -78,7 +78,7 @@ pub trait Persister: Send {
         locator: Locator,
         available_slots: u32,
         receipt: &AppointmentReceipt,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), PersisterError>;
 
     /// Loads a given appointment receipt of a given tower from the database.
     fn load_appointment_receipt(
@@ -115,7 +115,7 @@ pub trait Persister: Send {
         &mut self,
         tower_id: TowerId,
         appointment: &Appointment,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), PersisterError>;
 
     /// Removes a pending appointment from the database.
     ///
@@ -124,7 +124,7 @@ pub trait Persister: Send {
         &mut self,
         tower_id: TowerId,
         locator: Locator,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), PersisterError>;
 
     /// Stores an invalid appointment into the database.
     ///
@@ -135,7 +135,7 @@ pub trait Persister: Send {
         &mut self,
         tower_id: TowerId,
         appointment: &Appointment,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), PersisterError>;
 
     /// Loads non finalized appointments from the database for a given tower based on a status flag.
     ///
@@ -151,7 +151,7 @@ pub trait Persister: Send {
         &mut self,
         tower_id: TowerId,
         proof: &MisbehaviorProof,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), PersisterError>;
 
     fn appointment_exists(&self, locator: Locator) -> bool;
 

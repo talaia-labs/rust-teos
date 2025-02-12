@@ -10,13 +10,13 @@ use teos_common::dbm::{DatabaseConnection, DatabaseManager};
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
-use crate::storage::storage::{Persister, StorageError};
+use crate::storage::persister::{Persister, PersisterError};
 
 use crate::{AppointmentStatus, MisbehaviorProof, TowerInfo, TowerStatus, TowerSummary};
 
-impl From<SqliteError> for StorageError {
+impl From<SqliteError> for PersisterError {
     fn from(error: SqliteError) -> Self {
-        StorageError::Other(error.to_string())
+        PersisterError::Other(error.to_string())
     }
 }
 
@@ -196,7 +196,7 @@ impl Persister for DBM {
         tower_id: TowerId,
         net_addr: &str,
         receipt: &RegistrationReceipt,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), PersisterError> {
         let tx = self.get_mut_connection().transaction().unwrap();
         tx.execute(
             "INSERT INTO towers (tower_id, net_addr, available_slots) 
@@ -292,11 +292,11 @@ impl Persister for DBM {
     ///
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
     /// reference to them.
-    fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), StorageError> {
+    fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), PersisterError> {
         let query = "DELETE FROM towers WHERE tower_id=?";
         match self.connection.execute(query, params![tower_id.to_vec()]) {
             Ok(_) => Ok(()),
-            Err(e) => Err(StorageError::Other(e.to_string())),
+            Err(e) => Err(PersisterError::Other(e.to_string())),
         }
     }
 
@@ -355,7 +355,7 @@ impl Persister for DBM {
         locator: Locator,
         available_slots: u32,
         receipt: &AppointmentReceipt,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), PersisterError> {
         let tx = self.get_mut_connection().transaction().unwrap();
         tx.execute(
             "INSERT INTO appointment_receipts (locator, tower_id, start_block, user_signature, tower_signature) 
@@ -478,7 +478,7 @@ impl Persister for DBM {
         &mut self,
         tower_id: TowerId,
         appointment: &Appointment,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), PersisterError> {
         let tx = self.get_mut_connection().transaction().unwrap();
 
         // If the appointment already exists (because it was added by another tower as either pending or invalid) we simply
@@ -501,7 +501,7 @@ impl Persister for DBM {
         &mut self,
         tower_id: TowerId,
         locator: Locator,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), PersisterError> {
         // We will delete data from pending_appointments or from appointments depending on whether the later has a single reference
         // to it or not. If that's the case, deleting the entry from appointments will trigger a cascade deletion of the entry in pending.
         // If there are other references, this will be deleted when removing the last one.
@@ -551,7 +551,7 @@ impl Persister for DBM {
         &mut self,
         tower_id: TowerId,
         appointment: &Appointment,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), PersisterError> {
         let tx = self.get_mut_connection().transaction().unwrap();
 
         // If the appointment already exists (because it was added by another tower as either pending or invalid) we simply
@@ -604,7 +604,7 @@ impl Persister for DBM {
         &mut self,
         tower_id: TowerId,
         proof: &MisbehaviorProof,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), PersisterError> {
         let tx = self.get_mut_connection().transaction().unwrap();
         tx.execute(
             "INSERT INTO appointment_receipts (tower_id, locator, start_block, user_signature, tower_signature) 

@@ -574,7 +574,7 @@ impl Retrier {
 mod tests {
     use super::*;
 
-    use crate::storage::storage::Persister;
+    use crate::storage::persister::Persister;
     use crate::storage::Storage;
 
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
