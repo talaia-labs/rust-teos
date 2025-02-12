@@ -12,8 +12,6 @@ use teos_common::{TowerId, UserId};
 
 use crate::retrier::RetrierStatus;
 use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
-#[cfg(feature = "kv")]
-use lightning::util::persist::KVStore;
 
 #[derive(Eq, PartialEq)]
 pub enum RevocationData {
@@ -280,7 +278,7 @@ impl WTClient {
 mod tests {
     use super::*;
 
-    use crate::storage::Storage;
+    use crate::storage::{create_storage, StorageConfig, StorageType};
     use tempdir::TempDir;
     use teos_common::cryptography;
     use tokio::sync::mpsc::unbounded_channel;
@@ -297,7 +295,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -395,7 +397,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -422,7 +428,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -456,7 +466,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -510,7 +524,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -557,7 +575,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -592,7 +614,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -635,7 +661,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -683,7 +713,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -761,7 +795,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -800,7 +838,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -869,7 +911,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
@@ -930,7 +976,11 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = Box::new(Storage::new(&db_path).unwrap());
+        let storage = create_storage(StorageConfig {
+            storage_type: StorageType::SQL,
+            db_path: Some(db_path),
+        })
+        .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
 
