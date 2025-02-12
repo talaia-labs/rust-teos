@@ -574,7 +574,7 @@ impl Retrier {
 mod tests {
     use super::*;
 
-    use crate::storage::{create_storage, StorageConfig, StorageType};
+    use crate::storage::{create_storage, StorageConfig};
 
     use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use serde_json::json;
@@ -632,11 +632,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -734,11 +730,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -869,11 +861,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -981,11 +969,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -1081,11 +1065,7 @@ mod tests {
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let (tx, rx) = unbounded_channel();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -1132,11 +1112,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -1262,12 +1238,7 @@ mod tests {
         let tower_id = TowerId(tower_pk);
 
         let db_path = tmp_path.path().join("watchtower.db");
-
-        let mut storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let mut storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
         let receipt = get_random_registration_receipt();
         storage
             .store_tower_record(tower_id, "http://unreachable.tower", &receipt)
@@ -1419,11 +1390,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -1477,11 +1444,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -1509,11 +1472,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -1569,11 +1528,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -1609,11 +1564,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -1672,11 +1623,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,
@@ -1741,11 +1688,7 @@ mod tests {
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &keypair.0));
         let tmp_path = TempDir::new(&format!("watchtower_{}", user_id)).unwrap();
         let db_path = tmp_path.path().join("watchtower.db");
-        let storage = create_storage(StorageConfig {
-            storage_type: StorageType::SQL,
-            db_path: Some(db_path),
-        })
-        .unwrap();
+        let storage = create_storage(StorageConfig::SQL { db_path }).unwrap();
 
         let wt_client = Arc::new(Mutex::new(
             WTClient::new(storage, keypair.0, unbounded_channel().0).await,

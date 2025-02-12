@@ -3,6 +3,8 @@ use lightning::util::persist::KVStore;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+pub(crate) type DynStore = dyn KVStore + Sync + Send;
+
 /// In-memory key-value store implementation for testing
 #[derive(Clone, Debug)]
 pub struct MemoryStore {

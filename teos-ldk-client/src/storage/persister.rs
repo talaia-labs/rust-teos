@@ -153,7 +153,10 @@ pub trait Persister: Send {
         proof: &MisbehaviorProof,
     ) -> Result<(), PersisterError>;
 
+    /// Checks if appointment for a given locator exists in a local sotrage
+    ///
     fn appointment_exists(&self, locator: Locator) -> bool;
 
+    /// Checks if appointment receipt from a give tower for a given locator exists in a local sotrage
     fn appointment_receipt_exists(&self, locator: Locator, tower_id: TowerId) -> bool;
 }
