@@ -250,20 +250,23 @@ impl Persister for KVStorage {
         available_slots: u32,
         receipt: &AppointmentReceipt,
     ) -> Result<(), PersisterError> {
-        let key = make_key(&[&tower_id.to_string(), &locator.to_string()]);
+        let tower_namespace = format!("{}:{}", NS_APPOINTMENT_RECEIPTS, tower_id);
+        let key = locator.to_string();
+
         let encrypted = encrypt(&bincode::serialize(receipt).unwrap(), &self.sk).unwrap();
 
         self.store
-            .write(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, &key, &encrypted)
+            .write(PRIMARY_NAMESPACE, &tower_namespace, &key, &encrypted)
             .map_err(|e| PersisterError::StoreError(e.to_string()))
             .unwrap();
 
         // Update the tower's available_slots
+        let slots_key = make_key(&[&tower_id.to_string()]);
         self.store
             .write(
                 PRIMARY_NAMESPACE,
                 NS_AVAILABLE_SLOTS,
-                &key,
+                &slots_key,
                 available_slots.to_be_bytes().as_ref(),
             )
             .map_err(|e| PersisterError::StoreError(e.to_string()))
@@ -278,12 +281,16 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         locator: Locator,
     ) -> Option<AppointmentReceipt> {
-        // let key = make_key(&[&tower_id.to_string(), &locator.to_string()]);
-        // // primary namespace: "watchtower"
-        // // secondary namespance: "appointment_receipt"
-        // self.store
-        //     .read(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, &key)
-        todo!();
+        let tower_namespace = format!("{}:{}", NS_APPOINTMENT_RECEIPTS, tower_id);
+        let key = locator.to_string();
+
+        match self.store.read(PRIMARY_NAMESPACE, &tower_namespace, &key) {
+            Ok(value) => {
+                let decrypted = decrypt(&value, &self.sk).unwrap();
+                Some(bincode::deserialize(&decrypted).unwrap())
+            }
+            Err(_) => None,
+        }
     }
 
     /// Loads the appointment receipts associated to a given tower.
@@ -291,10 +298,33 @@ impl Persister for KVStorage {
     /// TODO: Currently this is only loading a summary of the receipt, if we need to really load all the information
     /// for any reason this method may need to be renamed.
     fn load_appointment_receipts(&self, tower_id: TowerId) -> HashMap<Locator, String> {
-        // primary namespace: "watchtower"
-        // secondary namespance: "appointment_receipt"
-        // filter by tower_id
-        todo!();
+        let mut receipts = HashMap::new();
+        let tower_namespace = format!("{}:{}", NS_APPOINTMENT_RECEIPTS, tower_id);
+
+        let keys = self
+            .store
+            .list(PRIMARY_NAMESPACE, &tower_namespace)
+            .unwrap();
+
+        // Get all keys in the tower-specific namespace
+        for key in keys {
+            // Key is just the locator string
+            let hex_encoded_string = key;
+            let locator =
+                match Locator::from_slice(hex::decode(&hex_encoded_string).unwrap().as_slice()) {
+                    Ok(l) => l,
+                    Err(s) => {
+                        panic!("Error deserializing locator: {}", s);
+                    }
+                };
+            // Try to read and decrypt the receipt
+            let receipt = self.load_appointment_receipt(tower_id, locator).unwrap();
+            if let Some(signature) = receipt.signature() {
+                receipts.insert(locator, signature);
+            }
+        }
+
+        receipts
     }
 
     /// Loads a collection of locators from the database entry associated to a given tower.
@@ -457,7 +487,8 @@ mod tests {
     use crate::storage::MemoryStore;
 
     use teos_common::test_utils::{
-        get_random_registration_receipt, get_random_user_id, get_registration_receipt_from_previous,
+        generate_random_appointment, get_random_registration_receipt, get_random_user_id,
+        get_registration_receipt_from_previous,
     };
 
     fn create_test_storage() -> KVStorage {
@@ -657,102 +688,107 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn test_store_load_appointment_receipts() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // In order to add a tower record we need to associated registration receipt.
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //
-    //     let receipt = get_random_registration_receipt();
-    //     let mut tower_summary = TowerSummary::new(
-    //         net_addr.to_owned(),
-    //         receipt.available_slots(),
-    //         receipt.subscription_start(),
-    //         receipt.subscription_expiry(),
-    //     );
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     // Add some appointment receipts and check they match
-    //     let mut receipts = HashMap::new();
-    //     for _ in 0..5 {
-    //         let appointment = generate_random_appointment(None);
-    //         let user_signature = "user_signature";
-    //         let appointment_receipt = AppointmentReceipt::with_signature(
-    //             user_signature.to_owned(),
-    //             42,
-    //             "tower_signature".to_owned(),
-    //         );
-    //
-    //         tower_summary.available_slots -= 1;
-    //
-    //         dbm.store_appointment_receipt(
-    //             tower_id,
-    //             appointment.locator,
-    //             tower_summary.available_slots,
-    //             &appointment_receipt,
-    //         )
-    //         .unwrap();
-    //         receipts.insert(
-    //             appointment.locator,
-    //             appointment_receipt.signature().unwrap(),
-    //         );
-    //     }
-    //
-    //     assert_eq!(dbm.load_appointment_receipts(tower_id), receipts);
-    // }
-    //
-    // #[test]
-    // fn test_load_appointment_receipt() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //     let tower_id = get_random_user_id();
-    //     let appointment = generate_random_appointment(None);
-    //
-    //     // If there is no appointment receipt for the given (locator, tower_id) pair, Error::NotFound is returned
-    //     // Try first with both being unknown
-    //     assert!(dbm
-    //         .load_appointment_receipt(tower_id, appointment.locator)
-    //         .is_none());
-    //
-    //     // Add the tower but not the appointment and try again
-    //     let net_addr = "talaia.watch";
-    //     let receipt = get_random_registration_receipt();
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     assert!(dbm
-    //         .load_appointment_receipt(tower_id, appointment.locator)
-    //         .is_none());
-    //
-    //     // Add both
-    //     let tower_summary = TowerSummary::new(
-    //         net_addr.to_owned(),
-    //         receipt.available_slots(),
-    //         receipt.subscription_start(),
-    //         receipt.subscription_expiry(),
-    //     );
-    //     let appointment_receipt = AppointmentReceipt::with_signature(
-    //         "user_signature".to_owned(),
-    //         42,
-    //         "tower_signature".to_owned(),
-    //     );
-    //     dbm.store_appointment_receipt(
-    //         tower_id,
-    //         appointment.locator,
-    //         tower_summary.available_slots,
-    //         &appointment_receipt,
-    //     )
-    //     .unwrap();
-    //
-    //     assert_eq!(
-    //         dbm.load_appointment_receipt(tower_id, appointment.locator)
-    //             .unwrap(),
-    //         appointment_receipt
-    //     );
-    // }
-    //
+    #[test]
+    fn test_store_load_appointment_receipts() {
+        let mut storage = create_test_storage();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        let mut tower_summary = TowerSummary::new(
+            net_addr.to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        // Add some appointment receipts and check they match
+        let mut receipts = HashMap::new();
+        for _ in 0..5 {
+            let appointment = generate_random_appointment(None);
+            let user_signature = "user_signature";
+            let appointment_receipt = AppointmentReceipt::with_signature(
+                user_signature.to_owned(),
+                42,
+                "tower_signature".to_owned(),
+            );
+
+            tower_summary.available_slots -= 1;
+
+            storage
+                .store_appointment_receipt(
+                    tower_id,
+                    appointment.locator,
+                    tower_summary.available_slots,
+                    &appointment_receipt,
+                )
+                .unwrap();
+            receipts.insert(
+                appointment.locator,
+                appointment_receipt.signature().unwrap(),
+            );
+        }
+
+        assert_eq!(storage.load_appointment_receipts(tower_id), receipts);
+    }
+
+    #[test]
+    fn test_load_appointment_receipt() {
+        let mut storage = create_test_storage();
+        let tower_id = get_random_user_id();
+        let appointment = generate_random_appointment(None);
+
+        // If there is no appointment receipt for the given (locator, tower_id) pair, Error::NotFound is returned
+        // Try first with both being unknown
+        assert!(storage
+            .load_appointment_receipt(tower_id, appointment.locator)
+            .is_none());
+
+        // Add the tower but not the appointment and try again
+        let net_addr = "talaia.watch";
+        let receipt = get_random_registration_receipt();
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        assert!(storage
+            .load_appointment_receipt(tower_id, appointment.locator)
+            .is_none());
+
+        // Add both
+        let tower_summary = TowerSummary::new(
+            net_addr.to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        let appointment_receipt = AppointmentReceipt::with_signature(
+            "user_signature".to_owned(),
+            42,
+            "tower_signature".to_owned(),
+        );
+        storage
+            .store_appointment_receipt(
+                tower_id,
+                appointment.locator,
+                tower_summary.available_slots,
+                &appointment_receipt,
+            )
+            .unwrap();
+
+        assert_eq!(
+            storage
+                .load_appointment_receipt(tower_id, appointment.locator)
+                .unwrap(),
+            appointment_receipt
+        );
+    }
+
     // #[test]
     // fn test_load_appointment_locators() {
     //     // `load_appointment_locators` is used to load locators from either `appointment_receipts`, `pending_appointments` or `invalid_appointments`
