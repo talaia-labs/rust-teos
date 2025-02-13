@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 // use chacha20poly1305::aead::{Aead};
-use bitcoin::hashes::{sha256, Hash};
 use std::sync::Arc;
 
 use crate::storage::persister::{Persister, PersisterError};
@@ -101,14 +99,15 @@ impl Persister for KVStorage {
             Vec::new(),
             Vec::new(),
         );
-        
+
         let value = bincode::serialize(&tower_info)
             .map_err(|e| PersisterError::Other(format!("Serialization error: {}", e)))?;
 
         // let encrypted = encrypt(&value, &self.sk).unwrap();
 
         self.store
-            .write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, &value).map_err(|e| PersisterError::StoreError(e.to_string()))
+            .write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, &value)
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
     }
 
     /// Loads a tower record from the database.
@@ -124,12 +123,9 @@ impl Persister for KVStorage {
         };
 
         // let decrypted = decrypt(&value, &self.sk).unwrap();
-        let tower_info: TowerInfo = bincode::deserialize(&value)
-            .map_err(|e| {
-                e
-            })
-            .ok()?;
+        let tower_info: TowerInfo = bincode::deserialize(&value).ok()?;
 
+        // TODO:
         // tower_info.appointments = self.load_appointment_receipts(tower_id);
         // tower_info.pending_appointments =
         //     self.load_appointments(tower_id, AppointmentStatus::Pending);
@@ -144,19 +140,27 @@ impl Persister for KVStorage {
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
     /// reference to them.
     fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), PersisterError> {
-        todo!();
-        // let key = make_key(&[&tower_id.to_string()]);
-        // // primary namespace: "watchtower"
-        // // secondary namespance: "tower_record"
-        // // key: <tower_id>
-        // // value: ?
-        // self.store
-        //     .remove(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, true)
+        let key = make_key(&[&tower_id.to_string()]);
+        self.store
+            .remove(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, true)
+            .map_err(|e| PersisterError::NotFound(format!("tower_id: {tower_id}")))
     }
 
     /// Loads all tower records from the database.
     fn load_towers(&self) -> HashMap<TowerId, TowerSummary> {
-        todo!()
+        let mut towers = HashMap::new();
+        let keys = self
+            .store
+            .list(PRIMARY_NAMESPACE, NS_TOWER_RECORDS)
+            .unwrap();
+
+        for key in keys {
+            let tower_id = key.split(":").next().unwrap().parse().unwrap();
+            let tower_info = self.load_tower_record(tower_id).unwrap();
+            towers.insert(tower_id, TowerSummary::from(tower_info));
+        }
+
+        towers
     }
 
     /// Loads the latest registration receipt for a given tower.
@@ -406,7 +410,7 @@ mod tests {
     use crate::storage::MemoryStore;
 
     use teos_common::test_utils::{
-        generate_random_appointment, get_random_registration_receipt, get_random_user_id,
+        get_random_registration_receipt, get_random_user_id,
         get_registration_receipt_from_previous,
     };
 
@@ -523,70 +527,76 @@ mod tests {
     //     let tower_id = get_random_user_id();
     //     assert!(dbm.load_tower_record(tower_id).is_none());
     // }
-    //
-    // #[test]
-    // fn test_store_load_towers() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //     let mut towers = HashMap::new();
-    //
-    //     // In order to add a tower record we need to associated registration receipt.
-    //     for _ in 0..10 {
-    //         let tower_id = get_random_user_id();
-    //         let net_addr = "talaia.watch";
-    //         let mut receipt = get_random_registration_receipt();
-    //         dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //             .unwrap();
-    //
-    //         // Add not only one registration receipt to test if the tower retrieves the one with furthest expiry date.
-    //         for _ in 0..10 {
-    //             receipt = get_registration_receipt_from_previous(&receipt);
-    //             dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //                 .unwrap();
-    //         }
-    //
-    //         towers.insert(
-    //             tower_id,
-    //             TowerSummary::new(
-    //                 net_addr.to_owned(),
-    //                 receipt.available_slots(),
-    //                 receipt.subscription_start(),
-    //                 receipt.subscription_expiry(),
-    //             ),
-    //         );
-    //     }
-    //
-    //     assert_eq!(dbm.load_towers(), towers);
-    // }
-    //
-    // #[test]
-    // fn test_load_towers_empty() {
-    //     // If there are no towers in the database, `load_towers` should return an empty map.
-    //     let dbm = DBM::in_memory().unwrap();
-    //     assert_eq!(dbm.load_towers(), HashMap::new());
-    // }
-    //
-    // #[test]
-    // fn test_remove_tower_record() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //     let receipt = get_random_registration_receipt();
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     assert!(matches!(dbm.remove_tower_record(tower_id), Ok(())));
-    // }
-    //
-    // #[test]
-    // fn test_remove_tower_record_inexistent() {
-    //     let dbm = DBM::in_memory().unwrap();
-    //     assert!(matches!(
-    //         dbm.remove_tower_record(get_random_user_id()),
-    //         Err(Error::NotFound)
-    //     ));
-    // }
-    //
+
+    #[test]
+    fn test_store_load_towers() {
+        let mut storage = create_test_storage();
+        let mut towers = HashMap::new();
+
+        // In order to add a tower record we need to associated registration receipt.
+        for _ in 0..10 {
+            let tower_id = get_random_user_id();
+            let net_addr = "talaia.watch";
+            let mut receipt = get_random_registration_receipt();
+            storage
+                .store_tower_record(tower_id, net_addr, &receipt)
+                .unwrap();
+
+            // Add not only one registration receipt to test if the tower retrieves the one with furthest expiry date.
+            for _ in 0..10 {
+                receipt = get_registration_receipt_from_previous(&receipt);
+                storage
+                    .store_tower_record(tower_id, net_addr, &receipt)
+                    .unwrap();
+            }
+
+            towers.insert(
+                tower_id,
+                TowerSummary::new(
+                    net_addr.to_owned(),
+                    receipt.available_slots(),
+                    receipt.subscription_start(),
+                    receipt.subscription_expiry(),
+                ),
+            );
+        }
+
+        assert_eq!(storage.load_towers(), towers);
+    }
+
+    #[test]
+    fn test_load_towers_empty() {
+        // If there are no towers in the database, `load_towers` should return an empty map.
+        let storage = create_test_storage();
+        assert_eq!(storage.load_towers(), HashMap::new());
+    }
+
+    #[test]
+    fn test_remove_tower_record() {
+        let mut storage = create_test_storage();
+
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+        let receipt = get_random_registration_receipt();
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        assert!(matches!(storage.remove_tower_record(tower_id), Ok(())));
+        assert_eq!(storage.load_towers(), HashMap::new());
+    }
+
+    #[test]
+    fn test_remove_tower_record_inexistent() {
+        let storage = create_test_storage();
+        let tower_id = get_random_user_id();
+        let err = storage.remove_tower_record(tower_id).unwrap_err();
+        assert_eq!(
+            err,
+            PersisterError::NotFound(format!("tower_id: {tower_id}"))
+        );
+    }
+
     // #[test]
     // fn test_store_load_appointment_receipts() {
     //     let mut dbm = DBM::in_memory().unwrap();

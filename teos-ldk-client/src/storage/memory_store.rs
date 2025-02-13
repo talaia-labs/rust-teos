@@ -110,10 +110,12 @@ impl KVStore for MemoryStore {
         let namespace = Self::make_key(primary_namespace, secondary_namespace);
         let res = data
             .get(&namespace)
-            .map(|ns_map| ns_map.keys().cloned().collect())
-            .unwrap();
+            .map(|ns_map| ns_map.keys().cloned().collect());
 
-        Ok(res)
+        match res {
+            None => Ok(Vec::new()),
+            Some(res) => Ok(res),
+        }
     }
 }
 
