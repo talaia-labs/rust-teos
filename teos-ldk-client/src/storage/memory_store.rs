@@ -23,6 +23,10 @@ impl MemoryStore {
     fn make_key(namespace: &str, key: &str) -> String {
         format!("{}:{}", namespace, key)
     }
+
+    pub fn into_dyn_store(self) -> Arc<DynStore> {
+        Arc::new(self)
+    }
 }
 
 impl Default for MemoryStore {
