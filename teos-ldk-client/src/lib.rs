@@ -196,19 +196,20 @@ impl From<TowerInfo> for TowerSummary {
 
 /// Summarized data associated with a given tower.
 #[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
 pub struct TowerInfo {
     pub net_addr: String,
     pub available_slots: u32,
     pub subscription_start: u32,
     pub subscription_expiry: u32,
     pub status: TowerStatus,
-    #[serde(serialize_with = "crate::ser::serialize_receipts")]
+    #[serde(default)]
     pub appointments: HashMap<Locator, String>,
-    #[serde(serialize_with = "crate::ser::serialize_appointments")]
+    #[serde(default)]
     pub pending_appointments: Vec<Appointment>,
-    #[serde(serialize_with = "crate::ser::serialize_appointments")]
+    #[serde(default)]
     pub invalid_appointments: Vec<Appointment>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub misbehaving_proof: Option<MisbehaviorProof>,
 }
 
@@ -247,12 +248,12 @@ impl TowerInfo {
         self.misbehaving_proof = Some(proof);
     }
 
-    fn to_vec(&self) -> Result<Vec<u8>, io::Error> {
-        bincode::serialize(self).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    pub fn to_vec(&self) -> Result<Vec<u8>, bincode::Error> {
+        bincode::serialize(self)
     }
 
-    fn from_slice(slice: &[u8]) -> Result<Self, io::Error> {
-        bincode::deserialize(slice).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    pub fn from_slice(slice: &[u8]) -> Result<Self, bincode::Error> {
+        bincode::deserialize(slice)
     }
 }
 
