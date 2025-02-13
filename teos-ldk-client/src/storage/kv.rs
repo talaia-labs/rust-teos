@@ -40,6 +40,7 @@ const NS_APPOINTMENT_RECEIPTS: &str = "appointment_receipts";
 const NS_PENDING_APPOINTMENTS: &str = "pending_appointments";
 const NS_INVALID_APPOINTMENTS: &str = "invalid_appointments";
 const NS_MISBEHAVIOR_PROOFS: &str = "misbehavior_proofs";
+const NS_AVAILABLE_SLOTS: &str = "available_slots";
 
 pub type DynStore = dyn KVStore + Sync + Send;
 
@@ -90,6 +91,14 @@ impl Persister for KVStorage {
     ) -> Result<(), PersisterError> {
         let key = make_key(&[&tower_id.to_string()]);
 
+        if let Ok(existing) = self.store.read(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key) {
+            let decrypted = decrypt(&existing, &self.sk).unwrap();
+            let existing_tower_info: TowerInfo = bincode::deserialize(&decrypted).unwrap();
+            if existing_tower_info.subscription_expiry > receipt.subscription_expiry() {
+                return Ok(());
+            }
+        };
+
         let tower_info = TowerInfo::new(
             net_addr.to_string(),
             receipt.available_slots(),
@@ -114,6 +123,16 @@ impl Persister for KVStorage {
             .map_err(|e| PersisterError::Other(format!("Serialization error: {}", e)))?;
 
         let encrypted = encrypt(&registration_receipt, &self.sk).unwrap();
+
+        self.store
+            .write(
+                PRIMARY_NAMESPACE,
+                NS_AVAILABLE_SLOTS,
+                &key,
+                receipt.available_slots().to_be_bytes().as_ref(),
+            )
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
 
         match self.store.write(
             PRIMARY_NAMESPACE,
@@ -142,7 +161,7 @@ impl Persister for KVStorage {
         };
 
         let decrypted = decrypt(&value, &self.sk).unwrap();
-        let tower_info: TowerInfo = bincode::deserialize(&decrypted).ok()?;
+        let mut tower_info: TowerInfo = bincode::deserialize(&decrypted).ok()?;
 
         // TODO:
         // tower_info.appointments = self.load_appointment_receipts(tower_id);
@@ -150,6 +169,15 @@ impl Persister for KVStorage {
         //     self.load_appointments(tower_id, AppointmentStatus::Pending);
         // tower_info.invalid_appointments =
         //     self.load_appointments(tower_id, AppointmentStatus::Invalid);
+        tower_info.available_slots =
+            match self.store.read(PRIMARY_NAMESPACE, NS_AVAILABLE_SLOTS, &key) {
+                Ok(bytes) if bytes.len() >= 4 => {
+                    let mut buf = [0u8; 4];
+                    buf.copy_from_slice(&bytes[0..4]);
+                    u32::from_be_bytes(buf)
+                }
+                _ => 0,
+            };
 
         Some(tower_info)
     }
@@ -223,12 +251,25 @@ impl Persister for KVStorage {
         receipt: &AppointmentReceipt,
     ) -> Result<(), PersisterError> {
         let key = make_key(&[&tower_id.to_string(), &locator.to_string()]);
-        // primary namespace: "watchtower"
-        // secondary namespance: "appointment_receipt"
-        // key: <tower_id> + <locator>
-        // value: ?
-        // self.store.write(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, &key, &value);
-        todo!();
+        let encrypted = encrypt(&bincode::serialize(receipt).unwrap(), &self.sk).unwrap();
+
+        self.store
+            .write(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, &key, &encrypted)
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
+
+        // Update the tower's available_slots
+        self.store
+            .write(
+                PRIMARY_NAMESPACE,
+                NS_AVAILABLE_SLOTS,
+                &key,
+                available_slots.to_be_bytes().as_ref(),
+            )
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
+
+        Ok(())
     }
 
     /// Loads a given appointment receipt of a given tower from the database.
@@ -463,80 +504,89 @@ mod tests {
         assert_eq!(loaded_receipt, receipt);
     }
 
-    // #[test]
-    // fn test_load_registration_receipt() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // Registration receipts are stored alongside tower records when the register command is called
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //     let receipt = get_random_registration_receipt();
-    //
-    //     // Check the receipt was stored
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //     assert_eq!(
-    //         dbm.load_registration_receipt(tower_id, receipt.user_id())
-    //             .unwrap(),
-    //         receipt
-    //     );
-    //
-    //     // Add another receipt for the same tower with a higher expiry and check this last one is loaded
-    //     let middle_receipt = get_registration_receipt_from_previous(&receipt);
-    //     let latest_receipt = get_registration_receipt_from_previous(&middle_receipt);
-    //
-    //     dbm.store_tower_record(tower_id, net_addr, &latest_receipt)
-    //         .unwrap();
-    //     assert_eq!(
-    //         dbm.load_registration_receipt(tower_id, latest_receipt.user_id())
-    //             .unwrap(),
-    //         latest_receipt
-    //     );
-    //
-    //     // Add a final one with a lower expiry and check the last is still loaded
-    //     dbm.store_tower_record(tower_id, net_addr, &middle_receipt)
-    //         .unwrap();
-    //     assert_eq!(
-    //         dbm.load_registration_receipt(tower_id, latest_receipt.user_id())
-    //             .unwrap(),
-    //         latest_receipt
-    //     );
-    // }
-    //
-    // #[test]
-    // fn test_load_same_registration_receipt() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // Registration receipts are stored alongside tower records when the register command is called
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //     let receipt = get_random_registration_receipt();
-    //
-    //     // Store it once
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //     assert_eq!(
-    //         dbm.load_registration_receipt(tower_id, receipt.user_id())
-    //             .unwrap(),
-    //         receipt
-    //     );
-    //
-    //     // Store the same again, this should fail due to UNIQUE PK constrains.
-    //     // Notice store_tower_record is guarded against this by WTClient::add_update_tower though.
-    //     assert!(matches!(
-    //         dbm.store_tower_record(tower_id, net_addr, &receipt),
-    //         Err { .. }
-    //     ));
-    // }
-    //
-    // #[test]
-    // fn test_load_nonexistent_tower_record() {
-    //     let dbm = DBM::in_memory().unwrap();
-    //
-    //     // If the tower does not exists, `load_tower` will fail.
-    //     let tower_id = get_random_user_id();
-    //     assert!(dbm.load_tower_record(tower_id).is_none());
-    // }
+    #[test]
+    fn test_load_registration_receipt() {
+        let mut storage = create_test_storage();
+
+        // Registration receipts are stored alongside tower records when the register command is called
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+        let receipt = get_random_registration_receipt();
+
+        // Check the receipt was stored
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+        assert_eq!(
+            storage
+                .load_registration_receipt(tower_id, receipt.user_id())
+                .unwrap(),
+            receipt
+        );
+
+        // Add another receipt for the same tower with a higher expiry and check this last one is loaded
+        let middle_receipt = get_registration_receipt_from_previous(&receipt);
+        let latest_receipt = get_registration_receipt_from_previous(&middle_receipt);
+
+        storage
+            .store_tower_record(tower_id, net_addr, &latest_receipt)
+            .unwrap();
+        assert_eq!(
+            storage
+                .load_registration_receipt(tower_id, latest_receipt.user_id())
+                .unwrap(),
+            latest_receipt
+        );
+
+        // Add a final one with a lower expiry and check the last is still loaded
+        storage
+            .store_tower_record(tower_id, net_addr, &middle_receipt)
+            .unwrap();
+        assert_eq!(
+            storage
+                .load_registration_receipt(tower_id, latest_receipt.user_id())
+                .unwrap(),
+            latest_receipt
+        );
+    }
+
+    #[test]
+    fn test_load_same_registration_receipt() {
+        let mut storage = create_test_storage();
+
+        // Registration receipts are stored alongside tower records when the register command is called
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+        let receipt = get_random_registration_receipt();
+
+        // Store it once
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+        assert_eq!(
+            storage
+                .load_registration_receipt(tower_id, receipt.user_id())
+                .unwrap(),
+            receipt
+        );
+
+        // // Store the same again, this should fail due to UNIQUE PK constrains.
+        // // Notice store_tower_record is guarded against this by WTClient::add_update_tower though.
+        // let err = storage.store_tower_record(tower_id, net_addr, &receipt).unwrap_err();
+        // assert_eq!(
+        //     err,
+        //     PersisterError::StoreError(format!("tower_id: {tower_id} already exists"))
+        // );
+    }
+
+    #[test]
+    fn test_load_nonexistent_tower_record() {
+        let storage = create_test_storage();
+
+        // If the tower does not exists, `load_tower` will fail.
+        let tower_id = get_random_user_id();
+        assert!(storage.load_tower_record(tower_id).is_none());
+    }
 
     #[test]
     fn test_store_load_towers() {
