@@ -19,7 +19,7 @@ use crate::{cryptography, UserId};
 /// as long as the user info is still known. That is, if a user has a subscription with range (S, E) and the user renews the subscription
 /// before the tower wipes their data, then the tower can create a new receipt with (S, E') for E' > E instead of a second receipt (E, E').
 // Notice this only applies as long as there is no gap between the two subscriptions.
-#[derive(Serialize, Debug, Eq, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct RegistrationReceipt {
     user_id: UserId,
     available_slots: u32,

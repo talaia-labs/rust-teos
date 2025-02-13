@@ -100,14 +100,33 @@ impl Persister for KVStorage {
             Vec::new(),
         );
 
-        let value = bincode::serialize(&tower_info)
+        let tower_info = bincode::serialize(&tower_info)
             .map_err(|e| PersisterError::Other(format!("Serialization error: {}", e)))?;
 
-        // let encrypted = encrypt(&value, &self.sk).unwrap();
+        let encrypted = encrypt(&tower_info, &self.sk).unwrap();
 
         self.store
-            .write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, &value)
+            .write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, &encrypted)
             .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
+
+        let registration_receipt = bincode::serialize(&receipt)
+            .map_err(|e| PersisterError::Other(format!("Serialization error: {}", e)))?;
+
+        let encrypted = encrypt(&registration_receipt, &self.sk).unwrap();
+
+        match self.store.write(
+            PRIMARY_NAMESPACE,
+            NS_REGISTRATION_RECEIPTS,
+            &key,
+            &encrypted,
+        ) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                self.remove_tower_record(tower_id).unwrap();
+                Err(PersisterError::StoreError(e.to_string()))
+            }
+        }
     }
 
     /// Loads a tower record from the database.
@@ -122,8 +141,8 @@ impl Persister for KVStorage {
             Err(_) => return None,
         };
 
-        // let decrypted = decrypt(&value, &self.sk).unwrap();
-        let tower_info: TowerInfo = bincode::deserialize(&value).ok()?;
+        let decrypted = decrypt(&value, &self.sk).unwrap();
+        let tower_info: TowerInfo = bincode::deserialize(&decrypted).ok()?;
 
         // TODO:
         // tower_info.appointments = self.load_appointment_receipts(tower_id);
@@ -147,6 +166,8 @@ impl Persister for KVStorage {
     }
 
     /// Loads all tower records from the database.
+    ///
+    /// Returns a key value pair with the tower id as key and the tower summary as value.
     fn load_towers(&self) -> HashMap<TowerId, TowerSummary> {
         let mut towers = HashMap::new();
         let keys = self
@@ -171,11 +192,26 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         user_id: UserId,
     ) -> Option<RegistrationReceipt> {
-        // let key = make_key(&[&tower_id.to_string()]);
-        //
-        // self.store
-        //     .read(PRIMARY_NAMESPACE, NS_REGISTRATION_RECEIPTS, &key);
-        todo!();
+        let key = make_key(&[&tower_id.to_string()]);
+
+        match self
+            .store
+            .read(PRIMARY_NAMESPACE, NS_REGISTRATION_RECEIPTS, &key)
+        {
+            Ok(value) => {
+                let decrypted = decrypt(&value, &self.sk).unwrap();
+                let registration_receipt: RegistrationReceipt =
+                    bincode::deserialize(&decrypted).unwrap();
+                Some(RegistrationReceipt::with_signature(
+                    user_id,
+                    registration_receipt.available_slots(),
+                    registration_receipt.subscription_start(),
+                    registration_receipt.subscription_expiry(),
+                    registration_receipt.signature().unwrap(),
+                ))
+            }
+            Err(_) => None,
+        }
     }
 
     /// Stores an appointments receipt into the database representing an appointment accepted by a given tower.
@@ -241,19 +277,6 @@ impl Persister for KVStorage {
         // key: <locator>
         todo!();
     }
-
-    // /// Stores an appointment into the database.
-    // ///
-    // /// Appointments are only stored as a whole when they are pending or invalid.
-    // /// Accepted appointments are simplified in the form of an appointment receipt.
-    // fn store_appointment(&self, appointment: &Appointment) -> Result<usize, PersisterError> {
-    //     let key = make_key(&[&appointment.locator.to_string()]);
-    //     // primary namespace: "watchtower"
-    //     // secondary namespance: "appointment"
-    //     // key:
-    //     // value: appointment.encrypted_blob()
-    //     todo!();
-    // }
 
     // /// Stores a pending appointment into the database.
     // ///
@@ -337,23 +360,6 @@ impl Persister for KVStorage {
         todo!();
     }
 
-    // /// Loads the misbehaving proof for a given tower from the database (if found).
-    // fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
-    //     let key = make_key(&[&tower_id.to_string()]);
-    //     // primary namespace: "watchtower"
-    //     // secondary namespance: "misbehaving_proof"
-    //     // key: ?
-    //     todo!();
-    // }
-
-    // /// Checks whether a misbehaving proof exists for a given tower.
-    // fn exists_misbehaving_proof(&self, tower_id: TowerId) -> bool {
-    //     let key = make_key(&[&tower_id.to_string()]);
-    //     // primary namespace: "watchtower"
-    //     // secondary namespance: "misbehaving_proof"
-    //     // key: ?
-    //     todo!();
-    // }
     fn appointment_exists(&self, locator: Locator) -> bool {
         todo!();
     }
@@ -410,8 +416,7 @@ mod tests {
     use crate::storage::MemoryStore;
 
     use teos_common::test_utils::{
-        get_random_registration_receipt, get_random_user_id,
-        get_registration_receipt_from_previous,
+        get_random_registration_receipt, get_random_user_id, get_registration_receipt_from_previous,
     };
 
     fn create_test_storage() -> KVStorage {
@@ -451,6 +456,11 @@ mod tests {
 
         let loaded = storage.load_tower_record(tower_id).unwrap();
         assert_eq!(loaded, tower_info);
+
+        let loaded_receipt = storage
+            .load_registration_receipt(tower_id, receipt.user_id())
+            .unwrap();
+        assert_eq!(loaded_receipt, receipt);
     }
 
     // #[test]
