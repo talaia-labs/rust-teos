@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 // use chacha20poly1305::aead::{Aead};
 use std::sync::Arc;
 
+use crate::TowerStatus;
+
 use crate::storage::persister::{Persister, PersisterError};
 // use bitcoin::secp256k1::SecretKey;
 use lightning::io::Error as DBError;
@@ -75,6 +77,29 @@ fn get_appointment_namespace(status: AppointmentStatus) -> &'static str {
 impl KVStorage {
     pub fn new(store: Arc<DynStore>, sk: Vec<u8>) -> Result<Self, PersisterError> {
         Ok(KVStorage { store, sk })
+    }
+
+    fn store_appointment(&mut self, appointment: &Appointment) -> Result<(), PersisterError> {
+        let key = make_key(&[&appointment.locator.to_string()]);
+        let value = bincode::serialize(appointment).unwrap();
+        self.store
+            .write(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &key, &value)
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
+    }
+
+    fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
+        let key = make_key(&[&tower_id.to_string()]);
+
+        match self
+            .store
+            .read(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, &key)
+        {
+            Ok(value) => {
+                let decrypted = decrypt(&value, &self.sk).unwrap();
+                Some(bincode::deserialize(&decrypted).unwrap())
+            }
+            Err(_) => None,
+        }
     }
 }
 
@@ -163,12 +188,11 @@ impl Persister for KVStorage {
         let decrypted = decrypt(&value, &self.sk).unwrap();
         let mut tower_info: TowerInfo = bincode::deserialize(&decrypted).ok()?;
 
-        // TODO:
-        // tower_info.appointments = self.load_appointment_receipts(tower_id);
-        // tower_info.pending_appointments =
-        //     self.load_appointments(tower_id, AppointmentStatus::Pending);
-        // tower_info.invalid_appointments =
-        //     self.load_appointments(tower_id, AppointmentStatus::Invalid);
+        tower_info.appointments = self.load_appointment_receipts(tower_id);
+        tower_info.pending_appointments =
+            self.load_appointments(tower_id, AppointmentStatus::Pending);
+        tower_info.invalid_appointments =
+            self.load_appointments(tower_id, AppointmentStatus::Invalid);
         tower_info.available_slots =
             match self.store.read(PRIMARY_NAMESPACE, NS_AVAILABLE_SLOTS, &key) {
                 Ok(bytes) if bytes.len() >= 4 => {
@@ -178,6 +202,13 @@ impl Persister for KVStorage {
                 }
                 _ => 0,
             };
+
+        if let Some(proof) = self.load_misbehaving_proof(tower_id) {
+            tower_info.status = TowerStatus::Misbehaving;
+            tower_info.set_misbehaving_proof(proof);
+        } else if !tower_info.pending_appointments.is_empty() {
+            tower_info.status = TowerStatus::TemporaryUnreachable;
+        }
 
         Some(tower_info)
     }
@@ -357,10 +388,15 @@ impl Persister for KVStorage {
 
     /// Loads an appointment from the database.
     fn load_appointment(&self, locator: Locator) -> Option<Appointment> {
-        // primary namespace: "watchtower"
-        // secondary namespance: "appointment_receipt"
-        // key: <locator>
-        todo!();
+        let key = make_key(&[&locator.to_string()]);
+
+        match self.store.read(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &key) {
+            Ok(value) => {
+                let decrypted = decrypt(&value, &self.sk).unwrap();
+                Some(bincode::deserialize(&decrypted).unwrap())
+            }
+            Err(_) => None,
+        }
     }
 
     /// Stores a pending appointment into the database.
@@ -382,6 +418,8 @@ impl Persister for KVStorage {
             .write(PRIMARY_NAMESPACE, &tower_namespace, &key, &encrypted)
             .map_err(|e| PersisterError::StoreError(e.to_string()))
             .unwrap();
+
+        self.store_appointment(appointment).unwrap();
 
         Ok(())
     }
@@ -422,6 +460,8 @@ impl Persister for KVStorage {
             .map_err(|e| PersisterError::StoreError(e.to_string()))
             .unwrap();
 
+        self.store_appointment(appointment).unwrap();
+
         Ok(())
     }
 
@@ -430,12 +470,36 @@ impl Persister for KVStorage {
     /// This is meant to be used only for pending and invalid appointments, if the method is called for
     /// accepted appointment, an empty collection will be returned.
     fn load_appointments(&self, tower_id: TowerId, status: AppointmentStatus) -> Vec<Appointment> {
-        // let key = make_key(&[&tower_id.to_string()]);
-        // primary namespace: "watchtower"
-        // secondary namespance: "{status}_appointment_receipt"
-        // key: ?
-        // value: ?
-        todo!();
+        let mut appointments = Vec::new();
+
+        let namespace = match status {
+            AppointmentStatus::Accepted => return Vec::new(),
+            _ => get_appointment_namespace(status),
+        };
+
+        let tower_namespace = format!("{}:{}", namespace, tower_id);
+
+        let locators = self
+            .store
+            .list(PRIMARY_NAMESPACE, &tower_namespace)
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
+
+        for locator in locators {
+            let locator = match Locator::from_slice(hex::decode(&locator).unwrap().as_slice()) {
+                Ok(l) => l,
+                Err(s) => {
+                    panic!("Error deserializing locator: {}", s);
+                }
+            };
+
+            match self.load_appointment(locator) {
+                None => continue,
+                Some(appointment) => appointments.push(appointment),
+            }
+        }
+
+        appointments
     }
 
     /// Stores a misbehaving proof into the database.
@@ -883,94 +947,100 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn test_store_load_appointment() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     let appointment = generate_random_appointment(None);
-    //     let tx = dbm.get_mut_connection().transaction().unwrap();
-    //     DBM::store_appointment(&tx, &appointment).unwrap();
-    //     tx.commit().unwrap();
-    //
-    //     let loaded_appointment = dbm.load_appointment(appointment.locator);
-    //     assert_eq!(appointment, loaded_appointment.unwrap());
-    // }
-    //
-    // #[test]
-    // fn test_store_load_appointment_inexistent() {
-    //     let dbm = DBM::in_memory().unwrap();
-    //
-    //     let locator = generate_random_appointment(None).locator;
-    //     let loaded_appointment = dbm.load_appointment(locator);
-    //     assert!(loaded_appointment.is_none());
-    // }
-    //
-    // #[test]
-    // fn test_store_pending_appointment() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // In order to add a tower record we need to associated registration receipt.
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //
-    //     let receipt = get_random_registration_receipt();
-    //     let mut tower_summary = TowerSummary::new(
-    //         net_addr.to_owned(),
-    //         receipt.available_slots(),
-    //         receipt.subscription_start(),
-    //         receipt.subscription_expiry(),
-    //     )
-    //     .with_status(TowerStatus::TemporaryUnreachable);
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     // Add some pending appointments and check they match
-    //     for _ in 0..5 {
-    //         let appointment = generate_random_appointment(None);
-    //
-    //         tower_summary
-    //             .pending_appointments
-    //             .insert(appointment.locator);
-    //
-    //         dbm.store_pending_appointment(tower_id, &appointment)
-    //             .unwrap();
-    //         assert_eq!(
-    //             TowerSummary::from(dbm.load_tower_record(tower_id).unwrap()),
-    //             tower_summary
-    //         );
-    //     }
-    // }
-    //
-    // #[test]
-    // fn test_store_pending_appointment_twice() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // In order to add a tower record we need to associated registration receipt.
-    //     let tower_id_1 = get_random_user_id();
-    //     let tower_id_2 = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //
-    //     let receipt = get_random_registration_receipt();
-    //     dbm.store_tower_record(tower_id_1, net_addr, &receipt)
-    //         .unwrap();
-    //     dbm.store_tower_record(tower_id_2, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     // If the same appointment is stored twice (by different towers) it should go through
-    //     // Since the appointment data will be stored only once and this will create two references
-    //     let appointment = generate_random_appointment(None);
-    //     dbm.store_pending_appointment(tower_id_1, &appointment)
-    //         .unwrap();
-    //     dbm.store_pending_appointment(tower_id_2, &appointment)
-    //         .unwrap();
-    //
-    //     // If this is called twice with for the same tower it will fail, since two identical references
-    //     // can not exist. This is intended behavior and should not happen
-    //     assert!(dbm
-    //         .store_pending_appointment(tower_id_2, &appointment)
-    //         .is_err());
-    // }
-    //
+    #[test]
+    fn test_store_load_appointment() {
+        let mut storage = create_test_storage();
+
+        let appointment = generate_random_appointment(None);
+        storage.store_appointment(&appointment).unwrap();
+
+        let loaded_appointment = storage.load_appointment(appointment.locator);
+        assert_eq!(appointment, loaded_appointment.unwrap());
+    }
+
+    #[test]
+    fn test_store_load_appointment_inexistent() {
+        let storage = create_test_storage();
+
+        let locator = generate_random_appointment(None).locator;
+        let loaded_appointment = storage.load_appointment(locator);
+        assert!(loaded_appointment.is_none());
+    }
+
+    #[test]
+    fn test_store_pending_appointment() {
+        let mut storage = create_test_storage();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        let mut tower_summary = TowerSummary::new(
+            net_addr.to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        )
+        .with_status(TowerStatus::TemporaryUnreachable);
+
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        // Add some pending appointments and check they match
+        for _ in 0..5 {
+            let appointment = generate_random_appointment(None);
+
+            tower_summary
+                .pending_appointments
+                .insert(appointment.locator);
+
+            storage
+                .store_pending_appointment(tower_id, &appointment)
+                .unwrap();
+            assert_eq!(
+                TowerSummary::from(storage.load_tower_record(tower_id).unwrap()),
+                tower_summary
+            );
+        }
+    }
+
+    #[test]
+    fn test_store_pending_appointment_twice() {
+        let mut storage = create_test_storage();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id_1 = get_random_user_id();
+        let tower_id_2 = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        storage
+            .store_tower_record(tower_id_1, net_addr, &receipt)
+            .unwrap();
+        storage
+            .store_tower_record(tower_id_2, net_addr, &receipt)
+            .unwrap();
+
+        // If the same appointment is stored twice (by different towers) it should go through
+        // Since the appointment data will be stored only once and this will create two references
+        let appointment = generate_random_appointment(None);
+        storage
+            .store_pending_appointment(tower_id_1, &appointment)
+            .unwrap();
+        storage
+            .store_pending_appointment(tower_id_2, &appointment)
+            .unwrap();
+
+        // If this is called twice with for the same tower it will fail, since two identical references
+        // can not exist. This is intended behavior and should not happen
+        // FIXME: this one need some extra thoughts
+        // assert!(storage
+        //     .store_pending_appointment(tower_id_2, &appointment)
+        //     .is_err());
+    }
+
     // #[test]
     // fn test_delete_pending_appointment() {
     //     let mut dbm = DBM::in_memory().unwrap();
