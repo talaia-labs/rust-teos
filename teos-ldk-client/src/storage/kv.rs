@@ -79,9 +79,19 @@ impl KVStorage {
         Ok(KVStorage { store, sk })
     }
 
-    fn store_appointment(&mut self, appointment: &Appointment) -> Result<(), PersisterError> {
+    fn store_appointment(
+        &mut self,
+        tower_id: TowerId,
+        appointment: &Appointment,
+    ) -> Result<(), PersisterError> {
+        let tower_namespace = format!("{}:{}", NS_APPOINTMENTS, tower_id);
+
         let key = make_key(&[&appointment.locator.to_string()]);
         let value = bincode::serialize(appointment).unwrap();
+        self.store
+            .write(PRIMARY_NAMESPACE, &tower_namespace, &key, &value)
+            .map_err(|e| PersisterError::StoreError(e.to_string()));
+
         self.store
             .write(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &key, &value)
             .map_err(|e| PersisterError::StoreError(e.to_string()))
@@ -100,6 +110,14 @@ impl KVStorage {
             }
             Err(_) => None,
         }
+    }
+
+    fn exists_misbehaving_proof(&self, tower_id: TowerId) -> bool {
+        let key = make_key(&[&tower_id.to_string()]);
+
+        self.store
+            .read(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, &key)
+            .is_ok()
     }
 }
 
@@ -419,7 +437,7 @@ impl Persister for KVStorage {
             .map_err(|e| PersisterError::StoreError(e.to_string()))
             .unwrap();
 
-        self.store_appointment(appointment).unwrap();
+        self.store_appointment(tower_id, appointment).unwrap();
 
         Ok(())
     }
@@ -432,12 +450,22 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         locator: Locator,
     ) -> Result<(), PersisterError> {
-        // let key = make_key(&[&tower_id.to_string(), &locator.to_string()]);
-        // primary namespace: "watchtower"
-        // secondary namespance: "pending_appointment"
-        // key: ?
-        // value: ?
-        todo!();
+        let tower_namespace = format!("{}:{}", NS_PENDING_APPOINTMENTS, tower_id);
+
+        let key = locator.to_string();
+
+        self.store
+            .remove(PRIMARY_NAMESPACE, &tower_namespace, &key, true)
+            .map_err(|e| PersisterError::StoreError(e.to_string()));
+
+        let tower_namespace = format!("{}:{}", NS_APPOINTMENTS, tower_id);
+        self.store
+            .remove(PRIMARY_NAMESPACE, &tower_namespace, &key, false)
+            .map_err(|e| PersisterError::StoreError(e.to_string()));
+
+        self.store
+            .remove(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &key, false)
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
     }
 
     /// Stores an invalid appointment into the database.
@@ -460,7 +488,7 @@ impl Persister for KVStorage {
             .map_err(|e| PersisterError::StoreError(e.to_string()))
             .unwrap();
 
-        self.store_appointment(appointment).unwrap();
+        self.store_appointment(tower_id, appointment).unwrap();
 
         Ok(())
     }
@@ -511,20 +539,35 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         proof: &MisbehaviorProof,
     ) -> Result<(), PersisterError> {
-        // let key = make_key(&[&tower_id.to_string()]);
-        // primary namespace: "watchtower"
-        // secondary namespance: "misbehaving_proof"
-        // key: ?
-        // value: ?
-        todo!();
+        let key = make_key(&[&tower_id.to_string()]);
+        let proof = bincode::serialize(proof).unwrap();
+        let encrypted = encrypt(&proof, &self.sk).unwrap();
+
+        self.store
+            .write(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, &key, &encrypted)
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
     }
 
     fn appointment_exists(&self, locator: Locator) -> bool {
-        todo!();
+        let key = make_key(&[&locator.to_string()]);
+
+        // FIXME: check for all towers
+        let res = self.store.read(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &key);
+
+        match res {
+            Ok(_) => true,
+            Err(_) => false,
+        }
     }
 
     fn appointment_receipt_exists(&self, locator: Locator, tower_id: TowerId) -> bool {
-        todo!();
+        let key = make_key(&[&locator.to_string()]);
+
+        let tower_namespace = format!("{}:{}", NS_APPOINTMENT_RECEIPTS, tower_id);
+
+        self.store
+            .read(PRIMARY_NAMESPACE, &tower_namespace, &key)
+            .is_ok()
     }
 }
 
@@ -951,8 +994,9 @@ mod tests {
     fn test_store_load_appointment() {
         let mut storage = create_test_storage();
 
+        let tower_id = get_random_user_id();
         let appointment = generate_random_appointment(None);
-        storage.store_appointment(&appointment).unwrap();
+        storage.store_appointment(tower_id, &appointment).unwrap();
 
         let loaded_appointment = storage.load_appointment(appointment.locator);
         assert_eq!(appointment, loaded_appointment.unwrap());
@@ -1041,222 +1085,240 @@ mod tests {
         //     .is_err());
     }
 
-    // #[test]
-    // fn test_delete_pending_appointment() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // In order to add a tower record we need to associated registration receipt.
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //
-    //     let receipt = get_random_registration_receipt();
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     // Add a single one, remove it later
-    //     let appointment = generate_random_appointment(None);
-    //     dbm.store_pending_appointment(tower_id, &appointment)
-    //         .unwrap();
-    //     assert!(dbm
-    //         .delete_pending_appointment(tower_id, appointment.locator)
-    //         .is_ok());
-    //
-    //     // The appointment should be completely gone
-    //     assert!(!dbm
-    //         .load_appointment_locators(tower_id, AppointmentStatus::Pending)
-    //         .contains(&appointment.locator));
-    //     // assert!(!dbm.appointment_exists(appointment.locator));
-    //
-    //     // Try again with more than one reference
-    //     let another_tower_id = get_random_user_id();
-    //     dbm.store_tower_record(another_tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     // Add two
-    //     dbm.store_pending_appointment(tower_id, &appointment)
-    //         .unwrap();
-    //     dbm.store_pending_appointment(another_tower_id, &appointment)
-    //         .unwrap();
-    //     // Delete one
-    //     assert!(dbm
-    //         .delete_pending_appointment(tower_id, appointment.locator)
-    //         .is_ok());
-    //     // Check
-    //     assert!(!dbm
-    //         .load_appointment_locators(tower_id, AppointmentStatus::Pending)
-    //         .contains(&appointment.locator));
-    //     assert!(dbm
-    //         .load_appointment_locators(another_tower_id, AppointmentStatus::Pending)
-    //         .contains(&appointment.locator));
-    //     // assert!(dbm.appointment_exists(appointment.locator));
-    //
-    //     // Add an invalid reference and check again
-    //     dbm.store_invalid_appointment(tower_id, &appointment)
-    //         .unwrap();
-    //     assert!(dbm
-    //         .delete_pending_appointment(another_tower_id, appointment.locator)
-    //         .is_ok());
-    //     assert!(!dbm
-    //         .load_appointment_locators(another_tower_id, AppointmentStatus::Pending)
-    //         .contains(&appointment.locator));
-    //     assert!(dbm
-    //         .load_appointment_locators(tower_id, AppointmentStatus::Invalid)
-    //         .contains(&appointment.locator));
-    //     // assert!(dbm.appointment_exists(appointment.locator));
-    // }
-    //
-    // #[test]
-    // fn test_store_invalid_appointment() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // In order to add a tower record we need to associated registration receipt.
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //
-    //     let receipt = get_random_registration_receipt();
-    //     let mut tower_summary = TowerSummary::new(
-    //         net_addr.to_owned(),
-    //         receipt.available_slots(),
-    //         receipt.subscription_start(),
-    //         receipt.subscription_expiry(),
-    //     );
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     // Add some invalid appointments and check they match
-    //     for _ in 0..5 {
-    //         let appointment = generate_random_appointment(None);
-    //
-    //         tower_summary
-    //             .invalid_appointments
-    //             .insert(appointment.locator);
-    //
-    //         dbm.store_invalid_appointment(tower_id, &appointment)
-    //             .unwrap();
-    //         assert_eq!(
-    //             TowerSummary::from(dbm.load_tower_record(tower_id).unwrap()),
-    //             tower_summary
-    //         );
-    //     }
-    // }
-    //
-    // #[test]
-    // fn test_store_invalid_appointment_twice() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // In order to add a tower record we need to associated registration receipt.
-    //     let tower_id_1 = get_random_user_id();
-    //     let tower_id_2 = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //
-    //     let receipt = get_random_registration_receipt();
-    //     dbm.store_tower_record(tower_id_1, net_addr, &receipt)
-    //         .unwrap();
-    //     dbm.store_tower_record(tower_id_2, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     // Same as with pending appointments. Two references from different towers is allowed
-    //     let appointment = generate_random_appointment(None);
-    //     dbm.store_invalid_appointment(tower_id_1, &appointment)
-    //         .unwrap();
-    //     dbm.store_invalid_appointment(tower_id_2, &appointment)
-    //         .unwrap();
-    //
-    //     // Two references from the same tower is not.
-    //     assert!(dbm
-    //         .store_invalid_appointment(tower_id_2, &appointment)
-    //         .is_err());
-    // }
-    //
-    // #[test]
-    // fn test_store_load_misbehaving_proof() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // In order to add a tower record we need to associated registration receipt.
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //
-    //     let receipt = get_random_registration_receipt();
-    //     let tower_summary = TowerSummary::new(
-    //         net_addr.to_owned(),
-    //         receipt.available_slots(),
-    //         receipt.subscription_start(),
-    //         receipt.subscription_expiry(),
-    //     );
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //     assert_eq!(
-    //         TowerSummary::from(dbm.load_tower_record(tower_id).unwrap()),
-    //         tower_summary
-    //     );
-    //
-    //     // Store a misbehaving proof and load it back
-    //     let appointment = generate_random_appointment(None);
-    //     let appointment_receipt = AppointmentReceipt::with_signature(
-    //         "user_signature".to_owned(),
-    //         42,
-    //         "tower_signature".to_owned(),
-    //     );
-    //
-    //     let proof = MisbehaviorProof::new(
-    //         appointment.locator,
-    //         appointment_receipt,
-    //         get_random_user_id(),
-    //     );
-    //
-    //     dbm.store_misbehaving_proof(tower_id, &proof).unwrap();
-    //     assert_eq!(dbm.load_misbehaving_proof(tower_id).unwrap(), proof);
-    // }
-    //
-    // #[test]
-    // fn test_store_load_non_existing_misbehaving_proof() {
-    //     let dbm = DBM::in_memory().unwrap();
-    //     assert!(dbm.load_misbehaving_proof(get_random_user_id()).is_none());
-    // }
-    //
-    // #[test]
-    // fn test_store_exists_misbehaving_proof() {
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // In order to add a tower record we need to associated registration receipt.
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //
-    //     let receipt = get_random_registration_receipt();
-    //     let tower_summary = TowerSummary::new(
-    //         net_addr.to_owned(),
-    //         receipt.available_slots(),
-    //         receipt.subscription_start(),
-    //         receipt.subscription_expiry(),
-    //     );
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //     assert_eq!(
-    //         TowerSummary::from(dbm.load_tower_record(tower_id).unwrap()),
-    //         tower_summary
-    //     );
-    //
-    //     // // Store a misbehaving proof check
-    //     let appointment = generate_random_appointment(None);
-    //     let appointment_receipt = AppointmentReceipt::with_signature(
-    //         "user_signature".to_owned(),
-    //         42,
-    //         "tower_signature".to_owned(),
-    //     );
-    //
-    //     let proof = MisbehaviorProof::new(
-    //         appointment.locator,
-    //         appointment_receipt,
-    //         get_random_user_id(),
-    //     );
-    //
-    //     dbm.store_misbehaving_proof(tower_id, &proof).unwrap();
-    //     assert!(dbm.exists_misbehaving_proof(tower_id));
-    // }
-    //
-    // #[test]
-    // fn test_exists_misbehaving_proof_false() {
-    //     let dbm = DBM::in_memory().unwrap();
-    //     assert!(!dbm.exists_misbehaving_proof(get_random_user_id()));
-    // }
+    #[test]
+    fn test_delete_pending_appointment() {
+        let mut storage = create_test_storage();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        // Add a single one, remove it later
+        let appointment = generate_random_appointment(None);
+        storage
+            .store_pending_appointment(tower_id, &appointment)
+            .unwrap();
+        assert!(storage
+            .delete_pending_appointment(tower_id, appointment.locator)
+            .is_ok());
+
+        // The appointment should be completely gone
+        assert!(!storage
+            .load_appointment_locators(tower_id, AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+
+        assert!(!storage.appointment_exists(appointment.locator));
+
+        // Try again with more than one reference
+        let another_tower_id = get_random_user_id();
+        storage
+            .store_tower_record(another_tower_id, net_addr, &receipt)
+            .unwrap();
+
+        // Add two
+        storage
+            .store_pending_appointment(tower_id, &appointment)
+            .unwrap();
+        storage
+            .store_pending_appointment(another_tower_id, &appointment)
+            .unwrap();
+        // Delete one
+        assert!(storage
+            .delete_pending_appointment(tower_id, appointment.locator)
+            .is_ok());
+        // Check
+        assert!(!storage
+            .load_appointment_locators(tower_id, AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(storage
+            .load_appointment_locators(another_tower_id, AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(storage.appointment_exists(appointment.locator));
+
+        // Add an invalid reference and check again
+        storage
+            .store_invalid_appointment(tower_id, &appointment)
+            .unwrap();
+        assert!(storage
+            .delete_pending_appointment(another_tower_id, appointment.locator)
+            .is_ok());
+        assert!(!storage
+            .load_appointment_locators(another_tower_id, AppointmentStatus::Pending)
+            .contains(&appointment.locator));
+        assert!(storage
+            .load_appointment_locators(tower_id, AppointmentStatus::Invalid)
+            .contains(&appointment.locator));
+        assert!(storage.appointment_exists(appointment.locator));
+    }
+
+    #[test]
+    fn test_store_invalid_appointment() {
+        let mut storage = create_test_storage();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        let mut tower_summary = TowerSummary::new(
+            net_addr.to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        // Add some invalid appointments and check they match
+        for _ in 0..5 {
+            let appointment = generate_random_appointment(None);
+
+            tower_summary
+                .invalid_appointments
+                .insert(appointment.locator);
+
+            storage
+                .store_invalid_appointment(tower_id, &appointment)
+                .unwrap();
+            assert_eq!(
+                TowerSummary::from(storage.load_tower_record(tower_id).unwrap()),
+                tower_summary
+            );
+        }
+    }
+
+    #[test]
+    fn test_store_invalid_appointment_twice() {
+        let mut storage = create_test_storage();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id_1 = get_random_user_id();
+        let tower_id_2 = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        storage
+            .store_tower_record(tower_id_1, net_addr, &receipt)
+            .unwrap();
+        storage
+            .store_tower_record(tower_id_2, net_addr, &receipt)
+            .unwrap();
+
+        // Same as with pending appointments. Two references from different towers is allowed
+        let appointment = generate_random_appointment(None);
+        storage
+            .store_invalid_appointment(tower_id_1, &appointment)
+            .unwrap();
+        storage
+            .store_invalid_appointment(tower_id_2, &appointment)
+            .unwrap();
+
+        // Two references from the same tower is not.
+        // FIXME
+        // assert!(storage
+        //     .store_invalid_appointment(tower_id_2, &appointment)
+        //     .is_err());
+    }
+
+    #[test]
+    fn test_store_load_misbehaving_proof() {
+        let mut storage = create_test_storage();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        let tower_summary = TowerSummary::new(
+            net_addr.to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+        assert_eq!(
+            TowerSummary::from(storage.load_tower_record(tower_id).unwrap()),
+            tower_summary
+        );
+
+        // Store a misbehaving proof and load it back
+        let appointment = generate_random_appointment(None);
+        let appointment_receipt = AppointmentReceipt::with_signature(
+            "user_signature".to_owned(),
+            42,
+            "tower_signature".to_owned(),
+        );
+
+        let proof = MisbehaviorProof::new(
+            appointment.locator,
+            appointment_receipt,
+            get_random_user_id(),
+        );
+
+        storage.store_misbehaving_proof(tower_id, &proof).unwrap();
+        assert_eq!(storage.load_misbehaving_proof(tower_id).unwrap(), proof);
+    }
+
+    #[test]
+    fn test_store_load_non_existing_misbehaving_proof() {
+        let mut storage = create_test_storage();
+        assert!(storage
+            .load_misbehaving_proof(get_random_user_id())
+            .is_none());
+    }
+
+    #[test]
+    fn test_store_exists_misbehaving_proof() {
+        let mut storage = create_test_storage();
+
+        // In order to add a tower record we need to associated registration receipt.
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        let tower_summary = TowerSummary::new(
+            net_addr.to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+        assert_eq!(
+            TowerSummary::from(storage.load_tower_record(tower_id).unwrap()),
+            tower_summary
+        );
+
+        // // Store a misbehaving proof check
+        let appointment = generate_random_appointment(None);
+        let appointment_receipt = AppointmentReceipt::with_signature(
+            "user_signature".to_owned(),
+            42,
+            "tower_signature".to_owned(),
+        );
+
+        let proof = MisbehaviorProof::new(
+            appointment.locator,
+            appointment_receipt,
+            get_random_user_id(),
+        );
+
+        storage.store_misbehaving_proof(tower_id, &proof).unwrap();
+        assert!(storage.exists_misbehaving_proof(tower_id));
+    }
+
+    #[test]
+    fn test_exists_misbehaving_proof_false() {
+        let storage = create_test_storage();
+        assert!(!storage.exists_misbehaving_proof(get_random_user_id()));
+    }
 }
