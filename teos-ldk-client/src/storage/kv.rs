@@ -336,9 +336,23 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         status: AppointmentStatus,
     ) -> HashSet<Locator> {
-        // primary namespace: "watchtower"
-        // secondary namespance: "{status}_appointment_receipt"
-        todo!();
+        let mut result = HashSet::new();
+
+        let appointment_namespace = get_appointment_namespace(status);
+
+        let tower_namespace = format!("{}:{}", appointment_namespace, tower_id);
+
+        let locators = self
+            .store
+            .list(PRIMARY_NAMESPACE, &tower_namespace)
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
+
+        for locator in locators {
+            result.insert(Locator::from_slice(hex::decode(&locator).unwrap().as_slice()).unwrap());
+        }
+
+        result
     }
 
     /// Loads an appointment from the database.
@@ -349,22 +363,27 @@ impl Persister for KVStorage {
         todo!();
     }
 
-    // /// Stores a pending appointment into the database.
-    // ///
-    // /// A pending appointment is an appointment that was sent to a tower when it was unreachable.
-    // /// This data is stored so it can be resent once the tower comes back online.
-    // /// Internally calls [Self::store_appointment].
+    /// Stores a pending appointment into the database.
+    ///
+    /// A pending appointment is an appointment that was sent to a tower when it was unreachable.
+    /// This data is stored so it can be resent once the tower comes back online.
+    /// Internally calls [Self::store_appointment].
     fn store_pending_appointment(
         &mut self,
         tower_id: TowerId,
         appointment: &Appointment,
     ) -> Result<(), PersisterError> {
-        // let key = make_key(&[&tower_id.to_string(), &appointment.locator.to_string()]);
-        // primary namespace: "watchtower"
-        // secondary namespance: "pending_appointment"
-        // key:
-        // value: ?
-        todo!();
+        let tower_namespace = format!("{}:{}", NS_PENDING_APPOINTMENTS, tower_id);
+        let key = appointment.locator.to_string();
+
+        let encrypted = encrypt(&bincode::serialize(appointment).unwrap(), &self.sk).unwrap();
+
+        self.store
+            .write(PRIMARY_NAMESPACE, &tower_namespace, &key, &encrypted)
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
+
+        Ok(())
     }
 
     /// Removes a pending appointment from the database.
@@ -393,12 +412,17 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         appointment: &Appointment,
     ) -> Result<(), PersisterError> {
-        // let key = make_key(&[&tower_id.to_string(), &appointment.locator.to_string()]);
-        // primary namespace: "watchtower"
-        // secondary namespance: "invalid_appointment"
-        // key: ?
-        // value: ?
-        todo!();
+        let tower_namespace = format!("{}:{}", NS_INVALID_APPOINTMENTS, tower_id);
+        let key = appointment.locator.to_string();
+
+        let encrypted = encrypt(&bincode::serialize(appointment).unwrap(), &self.sk).unwrap();
+
+        self.store
+            .write(PRIMARY_NAMESPACE, &tower_namespace, &key, &encrypted)
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
+
+        Ok(())
     }
 
     /// Loads non finalized appointments from the database for a given tower based on a status flag.
@@ -789,72 +813,76 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn test_load_appointment_locators() {
-    //     // `load_appointment_locators` is used to load locators from either `appointment_receipts`, `pending_appointments` or `invalid_appointments`
-    //     let mut dbm = DBM::in_memory().unwrap();
-    //
-    //     // We first need to add a tower record to the database so we can add some associated data.
-    //     let tower_id = get_random_user_id();
-    //     let net_addr = "talaia.watch";
-    //
-    //     let receipt = get_random_registration_receipt();
-    //     let tower_summary = TowerSummary::new(
-    //         net_addr.to_owned(),
-    //         receipt.available_slots(),
-    //         receipt.subscription_start(),
-    //         receipt.subscription_expiry(),
-    //     );
-    //     dbm.store_tower_record(tower_id, net_addr, &receipt)
-    //         .unwrap();
-    //
-    //     // Create all types of appointments and store them in the db.
-    //     let user_signature = "user_signature";
-    //     let mut receipts = HashSet::new();
-    //     let mut pending_appointments = HashSet::new();
-    //     let mut invalid_appointments = HashSet::new();
-    //     for _ in 0..5 {
-    //         let appointment = generate_random_appointment(None);
-    //         let appointment_receipt = AppointmentReceipt::with_signature(
-    //             user_signature.to_owned(),
-    //             42,
-    //             "tower_signature".to_owned(),
-    //         );
-    //         let pending_appointment = generate_random_appointment(None);
-    //         let invalid_appointment = generate_random_appointment(None);
-    //
-    //         dbm.store_appointment_receipt(
-    //             tower_id,
-    //             appointment.locator,
-    //             tower_summary.available_slots,
-    //             &appointment_receipt,
-    //         )
-    //         .unwrap();
-    //         dbm.store_pending_appointment(tower_id, &pending_appointment)
-    //             .unwrap();
-    //         dbm.store_invalid_appointment(tower_id, &invalid_appointment)
-    //             .unwrap();
-    //
-    //         receipts.insert(appointment.locator);
-    //         pending_appointments.insert(pending_appointment.locator);
-    //         invalid_appointments.insert(invalid_appointment.locator);
-    //     }
-    //
-    //     // Pull data from the db and check it matches the expected data
-    //     assert_eq!(
-    //         dbm.load_appointment_locators(tower_id, AppointmentStatus::Accepted),
-    //         receipts
-    //     );
-    //     assert_eq!(
-    //         dbm.load_appointment_locators(tower_id, AppointmentStatus::Pending),
-    //         pending_appointments
-    //     );
-    //     assert_eq!(
-    //         dbm.load_appointment_locators(tower_id, AppointmentStatus::Invalid),
-    //         invalid_appointments
-    //     );
-    // }
-    //
+    #[test]
+    fn test_load_appointment_locators() {
+        // `load_appointment_locators` is used to load locators from either `appointment_receipts`, `pending_appointments` or `invalid_appointments`
+        let mut storage = create_test_storage();
+
+        // We first need to add a tower record to the database so we can add some associated data.
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+
+        let receipt = get_random_registration_receipt();
+        let tower_summary = TowerSummary::new(
+            net_addr.to_owned(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+        );
+        storage
+            .store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        // Create all types of appointments and store them in the db.
+        let user_signature = "user_signature";
+        let mut receipts = HashSet::new();
+        let mut pending_appointments = HashSet::new();
+        let mut invalid_appointments = HashSet::new();
+        for _ in 0..5 {
+            let appointment = generate_random_appointment(None);
+            let appointment_receipt = AppointmentReceipt::with_signature(
+                user_signature.to_owned(),
+                42,
+                "tower_signature".to_owned(),
+            );
+            let pending_appointment = generate_random_appointment(None);
+            let invalid_appointment = generate_random_appointment(None);
+
+            storage
+                .store_appointment_receipt(
+                    tower_id,
+                    appointment.locator,
+                    tower_summary.available_slots,
+                    &appointment_receipt,
+                )
+                .unwrap();
+            storage
+                .store_pending_appointment(tower_id, &pending_appointment)
+                .unwrap();
+            storage
+                .store_invalid_appointment(tower_id, &invalid_appointment)
+                .unwrap();
+
+            receipts.insert(appointment.locator);
+            pending_appointments.insert(pending_appointment.locator);
+            invalid_appointments.insert(invalid_appointment.locator);
+        }
+
+        // Pull data from the db and check it matches the expected data
+        assert_eq!(
+            storage.load_appointment_locators(tower_id, AppointmentStatus::Accepted),
+            receipts
+        );
+        assert_eq!(
+            storage.load_appointment_locators(tower_id, AppointmentStatus::Pending),
+            pending_appointments
+        );
+        assert_eq!(
+            storage.load_appointment_locators(tower_id, AppointmentStatus::Invalid),
+            invalid_appointments
+        );
+    }
+
     // #[test]
     // fn test_store_load_appointment() {
     //     let mut dbm = DBM::in_memory().unwrap();
