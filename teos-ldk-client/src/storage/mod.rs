@@ -47,3 +47,11 @@ pub enum StorageConfig {
         sk: Vec<u8>,
     },
 }
+
+#[cfg(test)]
+fn create_test_kv_storage() -> KVStorage {
+    let store = MemoryStore::new().into_dyn_store();
+    let sk = vec![0u8; 32]; // Test secret key
+    KVStorage::new(store, sk).unwrap()
+}
+

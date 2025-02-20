@@ -696,22 +696,16 @@ fn decrypt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::MemoryStore;
+    use crate::storage::create_test_kv_storage;
 
     use teos_common::test_utils::{
         generate_random_appointment, get_random_registration_receipt, get_random_user_id,
         get_registration_receipt_from_previous,
     };
 
-    fn create_test_storage() -> KVStorage {
-        let store = MemoryStore::new().into_dyn_store();
-        let sk = vec![0u8; 32]; // Test secret key
-        KVStorage::new(store, sk).unwrap()
-    }
-
     #[test]
     fn test_store_load_tower_record() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // In order to add a tower record we need to associated registration receipt.
         let tower_id = get_random_user_id();
@@ -749,7 +743,7 @@ mod tests {
 
     #[test]
     fn test_load_registration_receipt() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // Registration receipts are stored alongside tower records when the register command is called
         let tower_id = get_random_user_id();
@@ -795,7 +789,7 @@ mod tests {
 
     #[test]
     fn test_load_same_registration_receipt() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // Registration receipts are stored alongside tower records when the register command is called
         let tower_id = get_random_user_id();
@@ -824,7 +818,7 @@ mod tests {
 
     #[test]
     fn test_load_nonexistent_tower_record() {
-        let storage = create_test_storage();
+        let storage = create_test_kv_storage();
 
         // If the tower does not exists, `load_tower` will fail.
         let tower_id = get_random_user_id();
@@ -833,7 +827,7 @@ mod tests {
 
     #[test]
     fn test_store_load_towers() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
         let mut towers = HashMap::new();
 
         // In order to add a tower record we need to associated registration receipt.
@@ -870,13 +864,13 @@ mod tests {
     #[test]
     fn test_load_towers_empty() {
         // If there are no towers in the database, `load_towers` should return an empty map.
-        let storage = create_test_storage();
+        let storage = create_test_kv_storage();
         assert_eq!(storage.load_towers(), HashMap::new());
     }
 
     #[test]
     fn test_remove_tower_record() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         let tower_id = get_random_user_id();
         let net_addr = "talaia.watch";
@@ -891,7 +885,7 @@ mod tests {
 
     #[test]
     fn test_remove_tower_record_inexistent() {
-        let storage = create_test_storage();
+        let storage = create_test_kv_storage();
         let tower_id = get_random_user_id();
         let err = storage.remove_tower_record(tower_id).unwrap_err();
         assert_eq!(
@@ -902,7 +896,7 @@ mod tests {
 
     #[test]
     fn test_store_load_appointment_receipts() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // In order to add a tower record we need to associated registration receipt.
         let tower_id = get_random_user_id();
@@ -951,7 +945,7 @@ mod tests {
 
     #[test]
     fn test_load_appointment_receipt() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
         let tower_id = get_random_user_id();
         let appointment = generate_random_appointment(None);
 
@@ -1004,7 +998,7 @@ mod tests {
     #[test]
     fn test_load_appointment_locators() {
         // `load_appointment_locators` is used to load locators from either `appointment_receipts`, `pending_appointments` or `invalid_appointments`
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // We first need to add a tower record to the database so we can add some associated data.
         let tower_id = get_random_user_id();
@@ -1073,7 +1067,7 @@ mod tests {
 
     #[test]
     fn test_store_load_appointment() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         let tower_id = get_random_user_id();
         let appointment = generate_random_appointment(None);
@@ -1085,7 +1079,7 @@ mod tests {
 
     #[test]
     fn test_store_load_appointment_inexistent() {
-        let storage = create_test_storage();
+        let storage = create_test_kv_storage();
 
         let locator = generate_random_appointment(None).locator;
         let loaded_appointment = storage.load_appointment(locator);
@@ -1094,7 +1088,7 @@ mod tests {
 
     #[test]
     fn test_store_pending_appointment() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // In order to add a tower record we need to associated registration receipt.
         let tower_id = get_random_user_id();
@@ -1133,7 +1127,7 @@ mod tests {
 
     #[test]
     fn test_store_pending_appointment_twice() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // In order to add a tower record we need to associated registration receipt.
         let tower_id_1 = get_random_user_id();
@@ -1167,7 +1161,7 @@ mod tests {
 
     #[test]
     fn test_delete_pending_appointment() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // In order to add a tower record we need to associated registration receipt.
         let tower_id = get_random_user_id();
@@ -1238,7 +1232,7 @@ mod tests {
 
     #[test]
     fn test_store_invalid_appointment() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // In order to add a tower record we need to associated registration receipt.
         let tower_id = get_random_user_id();
@@ -1275,7 +1269,7 @@ mod tests {
 
     #[test]
     fn test_store_invalid_appointment_twice() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // In order to add a tower record we need to associated registration receipt.
         let tower_id_1 = get_random_user_id();
@@ -1307,7 +1301,7 @@ mod tests {
 
     #[test]
     fn test_store_load_misbehaving_proof() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // In order to add a tower record we need to associated registration receipt.
         let tower_id = get_random_user_id();
@@ -1348,7 +1342,7 @@ mod tests {
 
     #[test]
     fn test_store_load_non_existing_misbehaving_proof() {
-        let storage = create_test_storage();
+        let storage = create_test_kv_storage();
         assert!(storage
             .load_misbehaving_proof(get_random_user_id())
             .is_none());
@@ -1356,7 +1350,7 @@ mod tests {
 
     #[test]
     fn test_store_exists_misbehaving_proof() {
-        let mut storage = create_test_storage();
+        let mut storage = create_test_kv_storage();
 
         // In order to add a tower record we need to associated registration receipt.
         let tower_id = get_random_user_id();
@@ -1397,7 +1391,7 @@ mod tests {
 
     #[test]
     fn test_exists_misbehaving_proof_false() {
-        let storage = create_test_storage();
+        let storage = create_test_kv_storage();
         assert!(!storage.exists_misbehaving_proof(get_random_user_id()));
     }
 }
