@@ -576,9 +576,8 @@ mod tests {
 
     use crate::storage::{create_storage, StorageConfig};
 
-    
     use serde_json::json;
-    
+
     use tokio::sync::mpsc::unbounded_channel;
 
     use teos_common::errors;
@@ -589,7 +588,6 @@ mod tests {
         generate_random_appointment, get_random_registration_receipt,
         get_registration_receipt_from_previous,
     };
-    
 
     use crate::net::http::ApiError;
     use crate::storage::memory_store::MemoryStore;

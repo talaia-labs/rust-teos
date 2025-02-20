@@ -632,10 +632,24 @@ impl Persister for KVStorage {
         proof: &MisbehaviorProof,
     ) -> Result<(), PersisterError> {
         let key = make_key(&[&tower_id.to_string()]);
-        let proof = bincode::serialize(proof).unwrap();
 
         self.store
-            .write(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, &key, &proof)
+            .write(
+                PRIMARY_NAMESPACE,
+                NS_APPOINTMENT_RECEIPTS,
+                &format!("{}:{}", tower_id, proof.locator),
+                &bincode::serialize(&proof.appointment_receipt).unwrap(),
+            )
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
+
+        self.store
+            .write(
+                PRIMARY_NAMESPACE,
+                NS_MISBEHAVIOR_PROOFS,
+                &key,
+                &bincode::serialize(proof).unwrap(),
+            )
             .map_err(|e| PersisterError::StoreError(e.to_string()))
     }
 

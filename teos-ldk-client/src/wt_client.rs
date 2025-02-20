@@ -782,7 +782,7 @@ mod tests {
         wt_client.flag_misbehaving_tower(tower_id, proof.clone());
         assert!(!wt_client.towers.contains_key(&tower_id));
 
-        // // Add the tower to the state and try again
+        // Add the tower to the state and try again
         let registration_receipt = get_random_registration_receipt();
         wt_client
             .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
