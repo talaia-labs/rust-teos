@@ -69,7 +69,6 @@ pub struct WTClient {
 }
 
 impl WTClient {
-    #[cfg(feature = "sqlite")]
     pub async fn new(
         storage: Box<dyn Persister>,
         user_sk: SecretKey,
