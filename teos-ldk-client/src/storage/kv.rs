@@ -463,16 +463,19 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         appointment: &Appointment,
     ) -> Result<(), PersisterError> {
-        if self.store.read(
-            PRIMARY_NAMESPACE,
-            NS_PENDING_APPOINTMENTS,
-            &format!("{}:{}", tower_id, appointment.locator),
-        ).is_ok() {
+        if self
+            .store
+            .read(
+                PRIMARY_NAMESPACE,
+                NS_PENDING_APPOINTMENTS,
+                &format!("{}:{}", tower_id, appointment.locator),
+            )
+            .is_ok()
+        {
             return Err(PersisterError::Other(format!(
                 "{}:{}",
-                tower_id,
-                appointment.locator
-            )))
+                tower_id, appointment.locator
+            )));
         }
 
         self.store
@@ -548,16 +551,19 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         appointment: &Appointment,
     ) -> Result<(), PersisterError> {
-        if self.store.read(
-            PRIMARY_NAMESPACE,
-            NS_INVALID_APPOINTMENTS,
-            &format!("{}:{}", tower_id, appointment.locator),
-        ).is_ok() {
+        if self
+            .store
+            .read(
+                PRIMARY_NAMESPACE,
+                NS_INVALID_APPOINTMENTS,
+                &format!("{}:{}", tower_id, appointment.locator),
+            )
+            .is_ok()
+        {
             return Err(PersisterError::Other(format!(
                 "{}:{}",
-                tower_id,
-                appointment.locator
-            )))
+                tower_id, appointment.locator
+            )));
         }
 
         self.store
