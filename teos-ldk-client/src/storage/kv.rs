@@ -42,6 +42,7 @@ const NS_APPOINTMENTS: &str = "appointments";
 const NS_PENDING_APPOINTMENTS: &str = "appointments_pending";
 const NS_INVALID_APPOINTMENTS: &str = "appointments_invalid";
 const NS_MISBEHAVIOR_PROOFS: &str = "misbehavior_proofs";
+const NS_AVAILABLE_SLOTS: &str = "available_slots";
 
 pub type DynStore = dyn KVStore + Sync + Send;
 
@@ -220,6 +221,74 @@ impl Persister for KVStorage {
     /// reference to them.
     fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), PersisterError> {
         let key = make_key(&[&tower_id.to_string()]);
+
+        let associated_pending_appointments = self
+            .store
+            .list(PRIMARY_NAMESPACE, NS_PENDING_APPOINTMENTS)
+            .unwrap();
+
+        let associated_pending_appointments = associated_pending_appointments
+            .iter()
+            .filter(|l| l.starts_with(&tower_id.to_string()))
+            .collect::<Vec<&String>>();
+        for key in associated_pending_appointments {
+            self.store
+                .remove(PRIMARY_NAMESPACE, NS_PENDING_APPOINTMENTS, key, true)
+                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+        }
+
+        let associated_invalid_appointments = self
+            .store
+            .list(PRIMARY_NAMESPACE, NS_INVALID_APPOINTMENTS)
+            .unwrap();
+        let associated_invalid_appointments = associated_invalid_appointments
+            .iter()
+            .filter(|l| l.starts_with(&tower_id.to_string()))
+            .collect::<Vec<&String>>();
+        for key in associated_invalid_appointments {
+            self.store
+                .remove(PRIMARY_NAMESPACE, NS_INVALID_APPOINTMENTS, key, true)
+                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+        }
+
+        let associated_registration_receipts = self
+            .store
+            .list(PRIMARY_NAMESPACE, &format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"))
+            .unwrap();
+        for key in associated_registration_receipts {
+            self.store
+                .remove(PRIMARY_NAMESPACE, &format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"), &key, true)
+                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+        }
+
+        let associated_appointment_receipts = self
+            .store
+            .list(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS)
+            .unwrap();
+        let associated_appointment_receipts = associated_appointment_receipts
+            .iter()
+            .filter(|l| l.starts_with(&tower_id.to_string()))
+            .collect::<Vec<&String>>();
+        for key in associated_appointment_receipts {
+            self.store
+                .remove(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, key, true)
+                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+        }
+
+        let associated_misbehaving_proofs = self
+            .store
+            .list(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS)
+            .unwrap();
+        let associated_misbehaving_proofs = associated_misbehaving_proofs
+            .iter()
+            .filter(|l| l.starts_with(&tower_id.to_string()))
+            .collect::<Vec<&String>>();
+        for key in associated_misbehaving_proofs {
+            self.store
+                .remove(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, key, true)
+                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+        }
+
         self.store
             .remove(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, true)
             .map_err(|e| PersisterError::NotFound(format!("tower_id: {tower_id}")))
@@ -317,7 +386,7 @@ impl Persister for KVStorage {
         self.store
             .write(
                 PRIMARY_NAMESPACE,
-                &tower_id.to_string(),
+                NS_AVAILABLE_SLOTS,
                 &tower_id.to_string(),
                 &available_slots.to_be_bytes(),
             )

@@ -379,7 +379,7 @@ mod tests {
         wt_client.add_appointment_receipt(
             tower_id,
             locator,
-            0,
+            0, // FIXME: the problem is that this reset does not work
             &get_random_appointment_receipt(tower_sk),
         );
         wt_client
@@ -862,7 +862,6 @@ mod tests {
         wt_client.remove_tower(tower_id).unwrap();
         assert!(wt_client.load_tower_info(tower_id).is_none());
         assert!(!wt_client.towers.contains_key(&tower_id));
-        // FIXME
         assert!(!wt_client
             .storage
             .appointment_receipt_exists(locator, tower_id));
