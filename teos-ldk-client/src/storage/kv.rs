@@ -1,27 +1,15 @@
 use std::collections::{HashMap, HashSet};
-// use chacha20poly1305::aead::{Aead};
 use std::sync::Arc;
 
 use crate::TowerStatus;
 
 use crate::storage::persister::{Persister, PersisterError};
-// use bitcoin::secp256k1::SecretKey;
 use lightning::io::Error as DBError;
 
 use lightning::util::persist::KVStore;
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
-// use teos_common::cryptography;
-
-// use chacha20poly1305::aead::{Aead, NewAead};
-// use rand::distributions::Uniform;
-// use rand::Rng;
-
-// use bitcoin::consensus;
-// use bitcoin::secp256k1::{Error, PublicKey, Secp256k1, SecretKey};
-// use bitcoin::{Transaction, Txid};
-// use lightning::util::message_signing;
 
 impl From<DBError> for PersisterError {
     fn from(error: DBError) -> Self {
@@ -237,7 +225,7 @@ impl Persister for KVStorage {
                 PRIMARY_NAMESPACE,
                 NS_AVAILABLE_SLOTS,
                 &tower_id.to_string(),
-                &receipt.available_slots().to_be_bytes(),
+                &bincode::serialize(&receipt.available_slots()).unwrap(),
             )
             .map_err(|e| PersisterError::StoreError(e.to_string()))
     }
@@ -304,8 +292,8 @@ impl Persister for KVStorage {
             .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))
             .unwrap();
 
-        tower_info.available_slots =
-            u32::from_be_bytes(available_slots.as_slice().try_into().unwrap());
+        tower_info.available_slots = bincode::deserialize(&available_slots).unwrap();
+            // u32::from_be_bytes(available_slots.as_slice().try_into().unwrap());
 
         Some(tower_info)
     }
@@ -497,7 +485,7 @@ impl Persister for KVStorage {
                 PRIMARY_NAMESPACE,
                 NS_AVAILABLE_SLOTS,
                 &tower_id.to_string(),
-                &available_slots.to_be_bytes(),
+                &bincode::serialize(&available_slots).unwrap(),
             )
             .map_err(|e| PersisterError::StoreError(e.to_string()))
             .unwrap();
