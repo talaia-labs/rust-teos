@@ -68,37 +68,117 @@ fn get_appointment_namespace(status: AppointmentStatus) -> &'static str {
     }
 }
 
-// Implement methods to convert TowerInfo to vec<u8> and vice versa
+struct KeySpace {
+    primary_namespace: String,
+    secondary_namespace: String,
+    key: String,
+}
+
+impl KeySpace {
+    fn tower(tower_id: TowerId) -> Self {
+        return KeySpace {
+            primary_namespace: PRIMARY_NAMESPACE.to_string(),
+            secondary_namespace: NS_TOWER_RECORDS.to_string(),
+            key: tower_id.to_string(),
+        };
+    }
+
+    fn appointment(locator: Locator) -> Self {
+        return KeySpace {
+            primary_namespace: PRIMARY_NAMESPACE.to_string(),
+            secondary_namespace: NS_APPOINTMENTS.to_string(),
+            key: locator.to_string(),
+        };
+    }
+
+    fn misbehaving_proof(tower_id: TowerId) -> Self {
+        return KeySpace {
+            primary_namespace: PRIMARY_NAMESPACE.to_string(),
+            secondary_namespace: NS_MISBEHAVIOR_PROOFS.to_string(),
+            key: tower_id.to_string(),
+        };
+    }
+
+    fn registration_receipt(tower_id: TowerId, subscription_expiry: u32) -> Self {
+        return KeySpace {
+            primary_namespace: PRIMARY_NAMESPACE.to_string(),
+            secondary_namespace: format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"),
+            key: subscription_expiry.to_string(),
+        };
+    }
+
+    fn appointment_receipt(tower_id: TowerId, locator: Locator) -> Self {
+        return KeySpace {
+            primary_namespace: PRIMARY_NAMESPACE.to_string(),
+            secondary_namespace: NS_APPOINTMENT_RECEIPTS.to_string(),
+            key: format!("{}:{}", tower_id, locator),
+        };
+    }
+
+    fn pending_appointment(tower_id: TowerId, locator: Locator) -> Self {
+        return KeySpace {
+            primary_namespace: PRIMARY_NAMESPACE.to_string(),
+            secondary_namespace: NS_PENDING_APPOINTMENTS.to_string(),
+            key: format!("{}:{}", tower_id, locator),
+        };
+    }
+
+    fn invalid_appointment(tower_id: TowerId, locator: Locator) -> Self {
+        return KeySpace {
+            primary_namespace: PRIMARY_NAMESPACE.to_string(),
+            secondary_namespace: NS_INVALID_APPOINTMENTS.to_string(),
+            key: format!("{}:{}", tower_id, locator),
+        };
+    }
+
+    fn available_slots(tower_id: TowerId) -> Self {
+        return KeySpace {
+            primary_namespace: PRIMARY_NAMESPACE.to_string(),
+            secondary_namespace: NS_AVAILABLE_SLOTS.to_string(),
+            key: tower_id.to_string(),
+        };
+    }
+}
 
 impl KVStorage {
     pub fn new(store: Arc<DynStore>, sk: Vec<u8>) -> Result<Self, PersisterError> {
         Ok(KVStorage { store, sk })
     }
 
-    fn store_appointment(&mut self, appointment: &Appointment) -> Result<(), PersisterError> {
-        let value = bincode::serialize(appointment).unwrap();
+    fn store_item<T: serde::Serialize>(&mut self, key_space: KeySpace, value: &T, encrypted: bool) -> Result<(), PersisterError> {
+        let value = bincode::serialize(value).unwrap();
+        let value = if encrypted {
+            encrypt(&value, &self.sk).unwrap()
+        } else {
+            value
+        };
+
         self.store
-            .write(
-                PRIMARY_NAMESPACE,
-                NS_APPOINTMENTS,
-                &appointment.locator.to_string(),
-                &value,
-            )
+            .write(&key_space.primary_namespace, &key_space.secondary_namespace, &key_space.key, &value)
             .map_err(|e| PersisterError::StoreError(e.to_string()))
     }
 
-    fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
-        match self.store.read(
-            PRIMARY_NAMESPACE,
-            NS_MISBEHAVIOR_PROOFS,
-            &tower_id.to_string(),
-        ) {
+    fn load_item<T: serde::de::DeserializeOwned>(&self, key_space: KeySpace, encrypted: bool) -> Option<T> {
+        match self.store.read(&key_space.primary_namespace, &key_space.secondary_namespace, &key_space.key) {
             Ok(value) => {
-                let decrypted = decrypt(&value, &self.sk).unwrap();
-                Some(bincode::deserialize(&decrypted).unwrap())
+                let value = if encrypted {
+                    decrypt(&value, &self.sk).unwrap()
+                } else {
+                    value
+                };
+
+                Some(bincode::deserialize(&value).unwrap())
             }
             Err(_) => None,
         }
+    }
+
+    fn store_appointment(&mut self, appointment: &Appointment) -> Result<(), PersisterError> {
+        self.store_item(KeySpace::appointment(appointment.locator), appointment, false)
+    }
+
+    fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
+        self.load_item(KeySpace::misbehaving_proof(tower_id), true)
     }
 }
 
@@ -126,6 +206,7 @@ impl Persister for KVStorage {
         let tower_info = bincode::serialize(&tower_info)
             .map_err(|e| PersisterError::Other(format!("Serialization error: {}", e)))?;
 
+        // Store the tower record
         self.store
             .write(
                 PRIMARY_NAMESPACE,
@@ -139,6 +220,7 @@ impl Persister for KVStorage {
         let registration_receipt = bincode::serialize(&receipt)
             .map_err(|e| PersisterError::Other(format!("Serialization error: {}", e)))?;
 
+        // Store the registration receipt
         self.store
             .write(
                 PRIMARY_NAMESPACE,
@@ -149,6 +231,7 @@ impl Persister for KVStorage {
             .map_err(|e| PersisterError::StoreError(e.to_string()))
             .unwrap();
 
+        // Store the available slots
         self.store
             .write(
                 PRIMARY_NAMESPACE,
