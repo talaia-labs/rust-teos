@@ -161,6 +161,12 @@ impl KVStorage {
         }
     }
 
+    fn remove_item(&self, key_space: KeySpace) -> Result<(), PersisterError> {
+        self.store
+            .remove(&key_space.primary_namespace, &key_space.secondary_namespace, &key_space.key, false)
+            .map_err(|_| PersisterError::StoreError(format!("removing: {}", key_space.key)))
+    }
+
     fn store_appointment(&mut self, appointment: &Appointment) -> Result<(), PersisterError> {
         self.store_item(KeySpace::appointment(appointment.locator), appointment, false)
     }
@@ -264,94 +270,82 @@ impl Persister for KVStorage {
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
     /// reference to them.
     fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), PersisterError> {
-        let associated_pending_appointments = self
+        // Remove pending appointments
+        let pending_appointments = self
             .store
             .list(PRIMARY_NAMESPACE, NS_PENDING_APPOINTMENTS)
-            .unwrap();
-
-        let associated_pending_appointments = associated_pending_appointments
+            .unwrap()
             .iter()
             .filter(|l| l.starts_with(&tower_id.to_string()))
-            .collect::<Vec<&String>>();
-        for key in associated_pending_appointments {
-            self.store
-                .remove(
-                    PRIMARY_NAMESPACE,
-                    NS_PENDING_APPOINTMENTS,
-                    &tower_id.to_string(),
-                    true,
-                )
-                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+            .map(|key| {
+                let parts: Vec<&str> = key.split(':').collect();
+                let locator = Locator::from_slice(&hex::decode(parts[1]).unwrap()).unwrap();
+                KeySpace::pending_appointment(tower_id, locator)
+            })
+            .collect::<Vec<_>>();
+        for key_space in pending_appointments {
+            self.remove_item(key_space)?;
         }
 
-        let associated_invalid_appointments = self
+        // Remove invalid appointments
+        let invalid_appointments = self
             .store
             .list(PRIMARY_NAMESPACE, NS_INVALID_APPOINTMENTS)
-            .unwrap();
-        let associated_invalid_appointments = associated_invalid_appointments
+            .unwrap()
             .iter()
             .filter(|l| l.starts_with(&tower_id.to_string()))
-            .collect::<Vec<&String>>();
-        for key in associated_invalid_appointments {
-            self.store
-                .remove(PRIMARY_NAMESPACE, NS_INVALID_APPOINTMENTS, key, true)
-                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+            .map(|key| {
+                let parts: Vec<&str> = key.split(':').collect();
+                let locator = Locator::from_slice(&hex::decode(parts[1]).unwrap()).unwrap();
+                KeySpace::invalid_appointment(tower_id, locator)
+            })
+            .collect::<Vec<_>>();
+        for key_space in invalid_appointments {
+            self.remove_item(key_space)?;
         }
 
-        let associated_registration_receipts = self
+        // Remove registration receipts
+        let registration_receipts = self
             .store
             .list(
                 PRIMARY_NAMESPACE,
                 &format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"),
             )
-            .unwrap();
-        for key in associated_registration_receipts {
-            self.store
-                .remove(
-                    PRIMARY_NAMESPACE,
-                    &format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"),
-                    &key,
-                    true,
-                )
-                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+            .unwrap()
+            .iter()
+            .map(|key| {
+                let expiry = key.parse::<u32>().unwrap();
+                KeySpace::registration_receipt(tower_id, expiry)
+            })
+            .collect::<Vec<_>>();
+        for key_space in registration_receipts {
+            self.remove_item(key_space)?;
         }
 
-        let associated_appointment_receipts = self
+        // Remove appointment receipts
+        let appointment_receipts = self
             .store
             .list(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS)
-            .unwrap();
-        let associated_appointment_receipts = associated_appointment_receipts
+            .unwrap()
             .iter()
             .filter(|l| l.starts_with(&tower_id.to_string()))
-            .collect::<Vec<&String>>();
-        for key in associated_appointment_receipts {
-            self.store
-                .remove(PRIMARY_NAMESPACE, NS_APPOINTMENT_RECEIPTS, key, true)
-                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+            .map(|key| {
+                let parts: Vec<&str> = key.split(':').collect();
+                let locator = Locator::from_slice(&hex::decode(parts[1]).unwrap()).unwrap();
+                KeySpace::appointment_receipt(tower_id, locator)
+            })
+            .collect::<Vec<_>>();
+        for key_space in appointment_receipts {
+            self.remove_item(key_space)?;
         }
 
-        let associated_misbehaving_proofs = self
-            .store
-            .list(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS)
-            .unwrap();
-        let associated_misbehaving_proofs = associated_misbehaving_proofs
-            .iter()
-            .filter(|l| l.starts_with(&tower_id.to_string()))
-            .collect::<Vec<&String>>();
-        for key in associated_misbehaving_proofs {
-            self.store
-                .remove(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, key, true)
-                .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
+        // Remove misbehaving proofs
+        if let Some(proof) = self.load_misbehaving_proof(tower_id) {
+            self.remove_item(KeySpace::misbehaving_proof(tower_id))?;
         }
 
-        self.store
-            .remove(
-                PRIMARY_NAMESPACE,
-                NS_TOWER_RECORDS,
-                &tower_id.to_string(),
-                true,
-            )
-            .map_err(|e| PersisterError::NotFound(format!("tower_id: {tower_id}")))
+        // Finally remove the tower record itself
+        self.remove_item(KeySpace::tower(tower_id))
     }
 
     /// Loads all tower records from the database.
@@ -387,7 +381,8 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         user_id: UserId,
     ) -> Option<RegistrationReceipt> {
-        let subscription_expiries = self
+        // Find the latest subscription expiry
+        let latest_expiry = self
             .store
             .list(
                 PRIMARY_NAMESPACE,
@@ -396,31 +391,21 @@ impl Persister for KVStorage {
             .unwrap()
             .iter()
             .map(|s_e| s_e.parse::<u32>().unwrap())
-            .max();
+            .max()?;
 
-        let subscription_expiries = match subscription_expiries {
-            Some(subscription_expiries) => subscription_expiries,
-            None => return None,
-        };
+        // Load the registration receipt using KeySpace
+        let receipt: RegistrationReceipt = self.load_item(
+            KeySpace::registration_receipt(tower_id, latest_expiry),
+            false,
+        )?;
 
-        let registration_receipt = self
-            .store
-            .read(
-                PRIMARY_NAMESPACE,
-                &format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"),
-                &subscription_expiries.to_string(),
-            )
-            .unwrap();
-
-        let registration_receipt: RegistrationReceipt =
-            bincode::deserialize(&registration_receipt).unwrap();
-
+        // Create new receipt with the provided user_id
         Some(RegistrationReceipt::with_signature(
             user_id,
-            registration_receipt.available_slots(),
-            registration_receipt.subscription_start(),
-            registration_receipt.subscription_expiry(),
-            registration_receipt.signature().unwrap(),
+            receipt.available_slots(),
+            receipt.subscription_start(),
+            receipt.subscription_expiry(),
+            receipt.signature().unwrap(),
         ))
     }
 
@@ -488,13 +473,7 @@ impl Persister for KVStorage {
         for key in keys {
             // Key is just the locator string
             let hex_encoded_string = key;
-            let locator =
-                match Locator::from_slice(hex::decode(hex_encoded_string).unwrap().as_slice()) {
-                    Ok(l) => l,
-                    Err(s) => {
-                        panic!("Error deserializing locator: {}", s);
-                    }
-                };
+            let locator = Locator::from_slice(hex::decode(hex_encoded_string).unwrap().as_slice()).unwrap();
             // Try to read and decrypt the receipt
             let receipt = self.load_appointment_receipt(tower_id, locator).unwrap();
             if let Some(signature) = receipt.signature() {
@@ -583,44 +562,36 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         locator: Locator,
     ) -> Result<(), PersisterError> {
-        // for all towers and given locator
-        let invalid_appointments_count = self
-            .store
-            .list(PRIMARY_NAMESPACE, NS_INVALID_APPOINTMENTS)
-            .unwrap()
-            .iter()
-            .filter(|l| l.ends_with(&locator.to_string()))
-            .count();
+        // Count total references to this appointment
+        let total_references = {
+            // Count invalid appointments
+            let invalid_count = self
+                .store
+                .list(PRIMARY_NAMESPACE, NS_INVALID_APPOINTMENTS)
+                .unwrap()
+                .iter()
+                .filter(|l| l.ends_with(&locator.to_string()))
+                .count();
 
-        // for all towers and given locator
-        let pending_appointments_count = self
-            .store
-            .list(PRIMARY_NAMESPACE, NS_PENDING_APPOINTMENTS)
-            .unwrap()
-            .iter()
-            .filter(|l| l.ends_with(&locator.to_string()))
-            .count();
+            // Count pending appointments
+            let pending_count = self
+                .store
+                .list(PRIMARY_NAMESPACE, NS_PENDING_APPOINTMENTS)
+                .unwrap()
+                .iter()
+                .filter(|l| l.ends_with(&locator.to_string()))
+                .count();
 
-        if invalid_appointments_count + pending_appointments_count == 1 {
-            self.store
-                .remove(
-                    PRIMARY_NAMESPACE,
-                    NS_APPOINTMENTS,
-                    &locator.to_string(),
-                    false,
-                )
-                .map_err(|e| PersisterError::StoreError(e.to_string()))
-                .unwrap();
+            invalid_count + pending_count
         };
 
-        self.store
-            .remove(
-                PRIMARY_NAMESPACE,
-                NS_PENDING_APPOINTMENTS,
-                &format!("{}:{}", tower_id, locator),
-                false,
-            )
-            .map_err(|e| PersisterError::StoreError(e.to_string()))
+        // If this is the last reference, remove the appointment itself
+        if total_references == 1 {
+            self.remove_item(KeySpace::appointment(locator))?;
+        }
+
+        // Remove the pending appointment reference
+        self.remove_item(KeySpace::pending_appointment(tower_id, locator))
     }
 
     /// Stores an invalid appointment into the database.
@@ -680,12 +651,7 @@ impl Persister for KVStorage {
             .collect::<Vec<&str>>();
 
         for locator in locators {
-            let locator = match Locator::from_slice(hex::decode(locator).unwrap().as_slice()) {
-                Ok(l) => l,
-                Err(s) => {
-                    panic!("Error deserializing locator: {}", s);
-                }
-            };
+            let locator = Locator::from_slice(hex::decode(locator).unwrap().as_slice()).unwrap();
 
             match self.load_appointment(locator) {
                 None => continue,
@@ -717,21 +683,15 @@ impl Persister for KVStorage {
     }
 
     fn appointment_exists(&self, locator: Locator) -> bool {
-        let res = self
-            .store
-            .read(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &locator.to_string());
+        let key_space = KeySpace::appointment(locator);
 
-        res.is_ok()
+        self.load_item::<Appointment>(key_space, false).is_some()
     }
 
     fn appointment_receipt_exists(&self, locator: Locator, tower_id: TowerId) -> bool {
-        self.store
-            .read(
-                PRIMARY_NAMESPACE,
-                NS_APPOINTMENT_RECEIPTS,
-                &format!("{}:{}", tower_id, locator),
-            )
-            .is_ok()
+        let key_space = KeySpace::appointment_receipt(tower_id, locator);
+
+        self.load_item::<AppointmentReceipt>(key_space, false).is_some()
     }
 }
 
@@ -987,7 +947,7 @@ mod tests {
         let err = storage.remove_tower_record(tower_id).unwrap_err();
         assert_eq!(
             err,
-            PersisterError::NotFound(format!("tower_id: {tower_id}"))
+            PersisterError::StoreError(format!("removing: {}", tower_id))
         );
     }
 
