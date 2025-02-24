@@ -59,10 +59,6 @@ pub struct KVStorage {
 }
 
 /// Creates a composite key from multiple components
-fn make_key(components: &[&str]) -> String {
-    components.join(":")
-}
-
 /// Gets the appropriate namespace based on appointment status
 fn get_appointment_namespace(status: AppointmentStatus) -> &'static str {
     match status {
@@ -92,11 +88,9 @@ impl KVStorage {
     }
 
     fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
-        let key = make_key(&[&tower_id.to_string()]);
-
         match self
             .store
-            .read(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, &key)
+            .read(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, &tower_id.to_string())
         {
             Ok(value) => {
                 let decrypted = decrypt(&value, &self.sk).unwrap();
@@ -107,10 +101,8 @@ impl KVStorage {
     }
 
     fn exists_misbehaving_proof(&self, tower_id: TowerId) -> bool {
-        let key = make_key(&[&tower_id.to_string()]);
-
         self.store
-            .read(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, &key)
+            .read(PRIMARY_NAMESPACE, NS_MISBEHAVIOR_PROOFS, &tower_id.to_string())
             .is_ok()
     }
 }
@@ -126,8 +118,6 @@ impl Persister for KVStorage {
         net_addr: &str,
         receipt: &RegistrationReceipt,
     ) -> Result<(), PersisterError> {
-        let key = make_key(&[&tower_id.to_string()]);
-
         let tower_info = TowerInfo::new(
             net_addr.to_string(),
             receipt.available_slots(),
@@ -142,7 +132,7 @@ impl Persister for KVStorage {
             .map_err(|e| PersisterError::Other(format!("Serialization error: {}", e)))?;
 
         self.store
-            .write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, &tower_info)
+            .write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &tower_id.to_string(), &tower_info)
             .map_err(|e| PersisterError::StoreError(e.to_string()))
             .unwrap();
 
@@ -175,8 +165,7 @@ impl Persister for KVStorage {
     /// accepted appointments (represented by appointment receipts), pending appointments and invalid appointments.
     /// In the case that the tower has misbehaved, then a misbehaving proof is also attached to the record.
     fn load_tower_record(&self, tower_id: TowerId) -> Option<TowerInfo> {
-        let key = make_key(&[&tower_id.to_string()]);
-        let value = match self.store.read(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key) {
+        let value = match self.store.read(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &tower_id.to_string()) {
             Ok(v) => v,
             Err(_) => return None,
         };
@@ -239,8 +228,6 @@ impl Persister for KVStorage {
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
     /// reference to them.
     fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), PersisterError> {
-        let key = make_key(&[&tower_id.to_string()]);
-
         let associated_pending_appointments = self
             .store
             .list(PRIMARY_NAMESPACE, NS_PENDING_APPOINTMENTS)
@@ -252,7 +239,7 @@ impl Persister for KVStorage {
             .collect::<Vec<&String>>();
         for key in associated_pending_appointments {
             self.store
-                .remove(PRIMARY_NAMESPACE, NS_PENDING_APPOINTMENTS, key, true)
+                .remove(PRIMARY_NAMESPACE, NS_PENDING_APPOINTMENTS, &tower_id.to_string(), true)
                 .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
         }
 
@@ -317,7 +304,7 @@ impl Persister for KVStorage {
         }
 
         self.store
-            .remove(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, true)
+            .remove(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &tower_id.to_string(), true)
             .map_err(|e| PersisterError::NotFound(format!("tower_id: {tower_id}")))
     }
 
@@ -396,8 +383,6 @@ impl Persister for KVStorage {
         available_slots: u32,
         receipt: &AppointmentReceipt,
     ) -> Result<(), PersisterError> {
-        let key = locator.to_string();
-
         // store appointment
         self.store
             .write(
@@ -442,7 +427,7 @@ impl Persister for KVStorage {
             .map_err(|e| PersisterError::Other(format!("Serialization error: {}", e)))?;
 
         self.store
-            .write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &key, &tower_info)
+            .write(PRIMARY_NAMESPACE, NS_TOWER_RECORDS, &tower_id.to_string(), &tower_info)
             .map_err(|e| PersisterError::StoreError(e.to_string()))
             .unwrap();
 
@@ -538,9 +523,7 @@ impl Persister for KVStorage {
 
     /// Loads an appointment from the database.
     fn load_appointment(&self, locator: Locator) -> Option<Appointment> {
-        let key = make_key(&[&locator.to_string()]);
-
-        match self.store.read(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &key) {
+        match self.store.read(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &locator.to_string()) {
             Ok(value) => {
                 let decrypted = decrypt(&value, &self.sk).unwrap();
                 Some(bincode::deserialize(&decrypted).unwrap())
@@ -727,8 +710,6 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         proof: &MisbehaviorProof,
     ) -> Result<(), PersisterError> {
-        let key = make_key(&[&tower_id.to_string()]);
-
         self.store
             .write(
                 PRIMARY_NAMESPACE,
@@ -743,16 +724,14 @@ impl Persister for KVStorage {
             .write(
                 PRIMARY_NAMESPACE,
                 NS_MISBEHAVIOR_PROOFS,
-                &key,
+                &tower_id.to_string(),
                 &bincode::serialize(proof).unwrap(),
             )
             .map_err(|e| PersisterError::StoreError(e.to_string()))
     }
 
     fn appointment_exists(&self, locator: Locator) -> bool {
-        let key = make_key(&[&locator.to_string()]);
-
-        let res = self.store.read(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &key);
+        let res = self.store.read(PRIMARY_NAMESPACE, NS_APPOINTMENTS, &locator.to_string());
 
         res.is_ok()
     }
@@ -776,6 +755,7 @@ impl Persister for KVStorage {
 ///
 /// The message to be encrypted is expected to be the penalty transaction.
 fn encrypt(message: &Vec<u8>, secret: &Vec<u8>) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
+    // todo!();
     // // Defaults is [0; 12]
     // let nonce = Nonce::default();
     // let k = sha256::Hash::hash(secret);
@@ -798,6 +778,7 @@ fn decrypt(
     encrypted_blob: &[u8],
     secret: &Vec<u8>,
 ) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
+    // todo!();
     // // Defaults is [0; 12]
     // let nonce = Nonce::default();
     // let k = sha256::Hash::hash(secret);
