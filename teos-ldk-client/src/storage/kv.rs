@@ -157,6 +157,16 @@ impl Persister for KVStorage {
                 &registration_receipt,
             )
             .map_err(|e| PersisterError::StoreError(e.to_string()))
+            .unwrap();
+
+        self.store
+            .write(
+                PRIMARY_NAMESPACE,
+                NS_AVAILABLE_SLOTS,
+                &tower_id.to_string(),
+                &receipt.available_slots().to_be_bytes(),
+            )
+            .map_err(|e| PersisterError::StoreError(e.to_string()))
     }
 
     /// Loads a tower record from the database.
@@ -212,6 +222,15 @@ impl Persister for KVStorage {
             tower_info.status = TowerStatus::TemporaryUnreachable;
         }
 
+        let available_slots = self
+            .store
+            .read(PRIMARY_NAMESPACE, NS_AVAILABLE_SLOTS, &tower_id.to_string())
+            .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))
+            .unwrap();
+
+        tower_info.available_slots =
+            u32::from_be_bytes(available_slots.as_slice().try_into().unwrap());
+
         Some(tower_info)
     }
 
@@ -253,11 +272,19 @@ impl Persister for KVStorage {
 
         let associated_registration_receipts = self
             .store
-            .list(PRIMARY_NAMESPACE, &format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"))
+            .list(
+                PRIMARY_NAMESPACE,
+                &format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"),
+            )
             .unwrap();
         for key in associated_registration_receipts {
             self.store
-                .remove(PRIMARY_NAMESPACE, &format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"), &key, true)
+                .remove(
+                    PRIMARY_NAMESPACE,
+                    &format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"),
+                    &key,
+                    true,
+                )
                 .map_err(|_e| PersisterError::NotFound(format!("tower_id: {tower_id}")))?;
         }
 
