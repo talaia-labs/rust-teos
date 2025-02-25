@@ -277,7 +277,7 @@ impl WTClient {
 mod tests {
     use super::*;
 
-    use crate::storage::memory_store::MemoryStore;
+    use crate::storage::mock_kv::MemoryStore;
     use crate::storage::{create_storage, StorageConfig};
     use teos_common::cryptography;
     use tokio::sync::mpsc::unbounded_channel;

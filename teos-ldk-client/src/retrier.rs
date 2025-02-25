@@ -590,7 +590,7 @@ mod tests {
     };
 
     use crate::net::http::ApiError;
-    use crate::storage::memory_store::MemoryStore;
+    use crate::storage::mock_kv::MemoryStore;
     use crate::test_utils::get_dummy_add_appointment_response;
 
     const LONG_AUTO_RETRY_DELAY: u32 = 60;

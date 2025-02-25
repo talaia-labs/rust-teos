@@ -11,10 +11,10 @@ mod encryption;
 mod namespace;
 
 #[cfg(test)]
-pub mod memory_store;
+pub mod mock_kv;
 
 #[cfg(test)]
-pub use memory_store::MemoryStore;
+pub use mock_kv::MemoryStore;
 
 pub fn create_storage(
     config: StorageConfig,
