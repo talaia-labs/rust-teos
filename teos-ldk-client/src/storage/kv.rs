@@ -11,6 +11,9 @@ use teos_common::appointment::{Appointment, Locator};
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
+use crate::storage::encryption::{decrypt, encrypt};
+use crate::storage::namespace::{get_appointment_namespace, KeySpace, NameSpace};
+
 impl From<DBError> for PersisterError {
     fn from(error: DBError) -> Self {
         PersisterError::Other(error.to_string())
@@ -18,155 +21,11 @@ impl From<DBError> for PersisterError {
 }
 
 use crate::{AppointmentStatus, MisbehaviorProof, TowerInfo, TowerSummary};
-
-// Primary namespace for all watchtower-related data
-const PRIMARY_NAMESPACE: &str = "watchtower";
-
-// Secondary namespaces and their prefixes for different data types
-const NS_TOWER_RECORDS: &str = "tower_records";
-const NS_REGISTRATION_RECEIPTS: &str = "registration_receipts";
-const NS_APPOINTMENT_RECEIPTS: &str = "appointment_receipts";
-const NS_APPOINTMENTS: &str = "appointments";
-const NS_PENDING_APPOINTMENTS: &str = "appointments_pending";
-const NS_INVALID_APPOINTMENTS: &str = "appointments_invalid";
-const NS_MISBEHAVIOR_PROOFS: &str = "misbehavior_proofs";
-const NS_AVAILABLE_SLOTS: &str = "available_slots";
-
 pub type DynStore = dyn KVStore + Sync + Send;
-
-/// Enum representing the possible errors when decrypting an encrypted blob.
-#[derive(Debug)]
-pub enum DecryptingError {
-    AED(chacha20poly1305::aead::Error),
-    Encode(bitcoin::consensus::encode::Error),
-}
 
 pub struct KVStorage {
     store: Arc<DynStore>,
     sk: Vec<u8>,
-}
-
-/// Gets the appropriate namespace based on appointment status
-fn get_appointment_namespace(status: AppointmentStatus) -> NameSpace {
-    match status {
-        AppointmentStatus::Accepted => NameSpace::appointment_receipts(),
-        AppointmentStatus::Pending => NameSpace::pending_appointments(),
-        AppointmentStatus::Invalid => NameSpace::invalid_appointments(),
-    }
-}
-
-struct NameSpace {
-    primary_namespace: String,
-    secondary_namespace: String,
-}
-
-impl NameSpace {
-    fn registration_receipts(tower_id: TowerId) -> Self {
-        NameSpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"),
-        }
-    }
-
-    fn pending_appointments() -> Self {
-        NameSpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_PENDING_APPOINTMENTS.to_string(),
-        }
-    }
-
-    fn invalid_appointments() -> Self {
-        NameSpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_INVALID_APPOINTMENTS.to_string(),
-        }
-    }
-
-    fn appointment_receipts() -> Self {
-        NameSpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_APPOINTMENT_RECEIPTS.to_string(),
-        }
-    }
-
-    fn tower_records() -> Self {
-        NameSpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_TOWER_RECORDS.to_string(),
-        }
-    }
-}
-
-struct KeySpace {
-    primary_namespace: String,
-    secondary_namespace: String,
-    key: String,
-}
-
-impl KeySpace {
-    fn tower(tower_id: TowerId) -> Self {
-        KeySpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_TOWER_RECORDS.to_string(),
-            key: tower_id.to_string(),
-        }
-    }
-
-    fn appointment(locator: Locator) -> Self {
-        KeySpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_APPOINTMENTS.to_string(),
-            key: locator.to_string(),
-        }
-    }
-
-    fn misbehaving_proof(tower_id: TowerId) -> Self {
-        KeySpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_MISBEHAVIOR_PROOFS.to_string(),
-            key: tower_id.to_string(),
-        }
-    }
-
-    fn registration_receipt(tower_id: TowerId, subscription_expiry: u32) -> Self {
-        KeySpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: format!("{NS_REGISTRATION_RECEIPTS}:{tower_id}"),
-            key: subscription_expiry.to_string(),
-        }
-    }
-
-    fn appointment_receipt(tower_id: TowerId, locator: Locator) -> Self {
-        KeySpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_APPOINTMENT_RECEIPTS.to_string(),
-            key: format!("{}:{}", tower_id, locator),
-        }
-    }
-
-    fn pending_appointment(tower_id: TowerId, locator: Locator) -> Self {
-        KeySpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_PENDING_APPOINTMENTS.to_string(),
-            key: format!("{}:{}", tower_id, locator),
-        }
-    }
-
-    fn invalid_appointment(tower_id: TowerId, locator: Locator) -> Self {
-        KeySpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_INVALID_APPOINTMENTS.to_string(),
-            key: format!("{}:{}", tower_id, locator),
-        }
-    }
-
-    fn available_slots(tower_id: TowerId) -> Self {
-        KeySpace {
-            primary_namespace: PRIMARY_NAMESPACE.to_string(),
-            secondary_namespace: NS_AVAILABLE_SLOTS.to_string(),
-            key: tower_id.to_string(),
-        }
-    }
 }
 
 impl KVStorage {
@@ -189,9 +48,9 @@ impl KVStorage {
 
         self.store
             .write(
-                &key_space.primary_namespace,
-                &key_space.secondary_namespace,
-                &key_space.key,
+                key_space.namespace().primary(),
+                key_space.namespace().secondary(),
+                key_space.key(),
                 &value,
             )
             .map_err(|e| PersisterError::StoreError(e.to_string()))
@@ -203,9 +62,9 @@ impl KVStorage {
         encrypted: bool,
     ) -> Option<T> {
         match self.store.read(
-            &key_space.primary_namespace,
-            &key_space.secondary_namespace,
-            &key_space.key,
+            key_space.namespace().primary(),
+            key_space.namespace().secondary(),
+            key_space.key(),
         ) {
             Ok(value) => {
                 let value = if encrypted {
@@ -222,29 +81,26 @@ impl KVStorage {
 
     fn list_keys(&self, name_space: NameSpace) -> Vec<String> {
         self.store
-            .list(
-                &name_space.primary_namespace,
-                &name_space.secondary_namespace,
-            )
+            .list(name_space.primary(), name_space.secondary())
             .unwrap()
     }
 
     fn remove_item(&self, key_space: KeySpace) -> Result<(), PersisterError> {
         self.store
             .remove(
-                &key_space.primary_namespace,
-                &key_space.secondary_namespace,
-                &key_space.key,
+                key_space.namespace().primary(),
+                key_space.namespace().secondary(),
+                key_space.key(),
                 false,
             )
-            .map_err(|_| PersisterError::StoreError(format!("removing: {}", key_space.key)))
+            .map_err(|_| PersisterError::StoreError(format!("removing: {}", key_space.key())))
     }
 
     fn store_appointment(&mut self, appointment: &Appointment) -> Result<(), PersisterError> {
         self.store_item(
             KeySpace::appointment(appointment.locator),
             appointment,
-            false,
+            true,
         )
     }
 
@@ -323,7 +179,7 @@ impl KVStorage {
     }
 
     fn remove_misbehaving_proofs(&self, tower_id: TowerId) -> Result<(), PersisterError> {
-        if let Some(proof) = self.load_misbehaving_proof(tower_id) {
+        if self.load_misbehaving_proof(tower_id).is_some() {
             self.remove_item(KeySpace::misbehaving_proof(tower_id))?;
         }
 
@@ -354,20 +210,20 @@ impl Persister for KVStorage {
         );
 
         // Store the tower record
-        self.store_item(KeySpace::tower(tower_id), &tower_info, false)?;
+        self.store_item(KeySpace::tower(tower_id), &tower_info, true)?;
 
         // Store the registration receipt
         self.store_item(
             KeySpace::registration_receipt(tower_id, receipt.subscription_expiry()),
             receipt,
-            false,
+            true,
         )?;
 
         // Store the available slots
         self.store_item(
             KeySpace::available_slots(tower_id),
             &receipt.available_slots(),
-            false,
+            true,
         )
     }
 
@@ -378,7 +234,7 @@ impl Persister for KVStorage {
     /// In the case that the tower has misbehaved, then a misbehaving proof is also attached to the record.
     fn load_tower_record(&self, tower_id: TowerId) -> Option<TowerInfo> {
         // Load base tower info
-        let mut tower_info: TowerInfo = self.load_item(&KeySpace::tower(tower_id), false)?;
+        let mut tower_info: TowerInfo = self.load_item(&KeySpace::tower(tower_id), true)?;
 
         // Load all appointments data
         tower_info.appointments = self.load_appointment_receipts(tower_id);
@@ -396,7 +252,7 @@ impl Persister for KVStorage {
 
         let registration_receipt: RegistrationReceipt = self.load_item(
             &KeySpace::registration_receipt(tower_id, latest_expiry),
-            false,
+            true,
         )?;
 
         tower_info.subscription_start = registration_receipt.subscription_start();
@@ -411,7 +267,7 @@ impl Persister for KVStorage {
         }
 
         // Load available slots
-        tower_info.available_slots = self.load_item(&KeySpace::available_slots(tower_id), false)?;
+        tower_info.available_slots = self.load_item(&KeySpace::available_slots(tower_id), true)?;
 
         Some(tower_info)
     }
@@ -466,7 +322,7 @@ impl Persister for KVStorage {
         // Load the registration receipt using KeySpace
         let receipt: RegistrationReceipt = self.load_item(
             &KeySpace::registration_receipt(tower_id, latest_expiry),
-            false,
+            true,
         )?;
 
         // Create new receipt with the provided user_id
@@ -491,14 +347,14 @@ impl Persister for KVStorage {
         self.store_item(
             KeySpace::appointment_receipt(tower_id, locator),
             receipt,
-            false,
+            true,
         )?;
 
         // Update the tower's available slots
-        self.store_item(KeySpace::available_slots(tower_id), &available_slots, false)?;
+        self.store_item(KeySpace::available_slots(tower_id), &available_slots, true)?;
 
         // Load and update tower info
-        let tower: TowerInfo = self.load_item(&KeySpace::tower(tower_id), false).unwrap();
+        let tower: TowerInfo = self.load_item(&KeySpace::tower(tower_id), true).unwrap();
 
         let tower_info = TowerInfo::new(
             tower.net_addr,
@@ -511,7 +367,7 @@ impl Persister for KVStorage {
         );
 
         // Store updated tower info
-        self.store_item(KeySpace::tower(tower_id), &tower_info, false)?;
+        self.store_item(KeySpace::tower(tower_id), &tower_info, true)?;
 
         Ok(())
     }
@@ -522,7 +378,7 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         locator: Locator,
     ) -> Option<AppointmentReceipt> {
-        self.load_item(&KeySpace::appointment_receipt(tower_id, locator), false)
+        self.load_item(&KeySpace::appointment_receipt(tower_id, locator), true)
     }
 
     /// Loads the appointment receipts associated to a given tower.
@@ -584,7 +440,7 @@ impl Persister for KVStorage {
     ) -> Result<(), PersisterError> {
         // Check if pending appointment already exists
         let key_space = KeySpace::pending_appointment(tower_id, appointment.locator);
-        if self.load_item::<Appointment>(&key_space, false).is_some() {
+        if self.load_item::<Appointment>(&key_space, true).is_some() {
             return Err(PersisterError::Other(format!(
                 "{}:{}",
                 tower_id, appointment.locator
@@ -593,7 +449,7 @@ impl Persister for KVStorage {
 
         let key_space = KeySpace::pending_appointment(tower_id, appointment.locator);
         // Store the pending appointment
-        self.store_item(key_space, appointment, false)?;
+        self.store_item(key_space, appointment, true)?;
 
         // Store the appointment itself
         self.store_appointment(appointment)?;
@@ -647,17 +503,10 @@ impl Persister for KVStorage {
         tower_id: TowerId,
         appointment: &Appointment,
     ) -> Result<(), PersisterError> {
-        // Check if invalid appointment already exists
         let key_space = KeySpace::invalid_appointment(tower_id, appointment.locator);
-        if self
-            .store
-            .read(
-                &key_space.primary_namespace,
-                &key_space.secondary_namespace,
-                &key_space.key,
-            )
-            .is_ok()
-        {
+
+        // Check if invalid appointment already exists using load_item
+        if self.load_item::<Appointment>(&key_space, true).is_some() {
             return Err(PersisterError::Other(format!(
                 "{}:{}",
                 tower_id, appointment.locator
@@ -665,7 +514,7 @@ impl Persister for KVStorage {
         }
 
         // Store the invalid appointment
-        self.store_item(key_space, appointment, false)?;
+        self.store_item(key_space, appointment, true)?;
 
         // Store the appointment itself
         self.store_appointment(appointment)?;
@@ -710,68 +559,25 @@ impl Persister for KVStorage {
         self.store_item(
             KeySpace::appointment_receipt(tower_id, proof.locator),
             &proof.appointment_receipt,
-            false,
+            true,
         )?;
 
         // Store the misbehavior proof
-        self.store_item(KeySpace::misbehaving_proof(tower_id), proof, false)
+        self.store_item(KeySpace::misbehaving_proof(tower_id), proof, true)
     }
 
     fn appointment_exists(&self, locator: Locator) -> bool {
         let key_space = KeySpace::appointment(locator);
 
-        self.load_item::<Appointment>(&key_space, false).is_some()
+        self.load_item::<Appointment>(&key_space, true).is_some()
     }
 
     fn appointment_receipt_exists(&self, locator: Locator, tower_id: TowerId) -> bool {
         let key_space = KeySpace::appointment_receipt(tower_id, locator);
 
-        self.load_item::<AppointmentReceipt>(&key_space, false)
+        self.load_item::<AppointmentReceipt>(&key_space, true)
             .is_some()
     }
-}
-
-/// Encrypts a given message under a given secret using `chacha20poly1305`.
-///
-/// The key material used is:
-/// - The dispute txid as encryption key.
-/// - `[0; 12]` as IV.
-///
-/// The message to be encrypted is expected to be the penalty transaction.
-fn encrypt(message: &Vec<u8>, secret: &Vec<u8>) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
-    // todo!();
-    // // Defaults is [0; 12]
-    // let nonce = Nonce::default();
-    // let k = sha256::Hash::hash(secret);
-    // let key = Key::from_slice(k.as_byte_array());
-    //
-    // let cypher = ChaCha20Poly1305::new(key);
-    //
-    // cypher.encrypt(&nonce, message.to_vec().as_ref())
-    Ok(message.clone())
-}
-
-/// Decrypts an encrypted blob of data using `chacha20poly1305` and a given secret.
-///
-/// The key material used is:
-/// - The dispute txid as decryption key.
-/// - `[0; 12]` as IV.
-///
-///  The result is expected to be a penalty transaction.
-fn decrypt(
-    encrypted_blob: &[u8],
-    secret: &Vec<u8>,
-) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
-    // todo!();
-    // // Defaults is [0; 12]
-    // let nonce = Nonce::default();
-    // let k = sha256::Hash::hash(secret);
-    // let key = Key::from_slice(k.as_byte_array());
-    //
-    // let cypher = ChaCha20Poly1305::new(key);
-    //
-    // cypher.decrypt(&nonce, encrypted_blob.as_ref())
-    Ok(encrypted_blob.to_vec())
 }
 
 #[cfg(test)]
@@ -786,13 +592,8 @@ mod tests {
 
     impl KVStorage {
         fn exists_misbehaving_proof(&self, tower_id: TowerId) -> bool {
-            self.store
-                .read(
-                    PRIMARY_NAMESPACE,
-                    NS_MISBEHAVIOR_PROOFS,
-                    &tower_id.to_string(),
-                )
-                .is_ok()
+            self.load_item::<MisbehaviorProof>(&KeySpace::misbehaving_proof(tower_id), true)
+                .is_some()
         }
     }
 
@@ -1162,7 +963,6 @@ mod tests {
     fn test_store_load_appointment() {
         let mut storage = create_test_kv_storage();
 
-        let tower_id = get_random_user_id();
         let appointment = generate_random_appointment(None);
         storage.store_appointment(&appointment).unwrap();
 

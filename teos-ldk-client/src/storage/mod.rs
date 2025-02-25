@@ -7,6 +7,9 @@ pub use crate::storage::persister::{Persister, PersisterError};
 mod kv;
 use kv::{DynStore, KVStorage};
 
+mod encryption;
+mod namespace;
+
 #[cfg(test)]
 pub mod memory_store;
 
