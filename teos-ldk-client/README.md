@@ -16,7 +16,9 @@ The client instance has the following methods:
 - `get_subscription_info <tower_id>`: gets the subscription information by querying the tower.
 - `get_appointment_receipt <tower_id> <locator>`: pulls a given appointment receipt from the local database.
 - `get_registration_receipt <tower_id>`: pulls the latest registration receipt from the local database.
-- `on_commitment_revocation <tx>`: sends appointments to the registered towers for every new commitment transaction.
+
+The general usage idea
+- `on_commitment_revocation <wt_client, tx>`: sends appointments to the registered towers for every new commitment transaction.
 
 # Configuration
 

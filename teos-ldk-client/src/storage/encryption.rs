@@ -16,16 +16,12 @@ pub(crate) fn encrypt(
     message: &[u8],
     secret: &[u8],
 ) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
-    // Create nonce [0; 12]
     let nonce = Nonce::default();
-
-    // Hash the secret to create the encryption key
     let key_hash = sha256::Hash::hash(secret);
     let key = Key::from_slice(key_hash.as_byte_array());
 
-    // Create cipher instance
     let cipher = ChaCha20Poly1305::new(key);
-    // Encrypt the message
+
     cipher.encrypt(&nonce, message)
 }
 
@@ -40,10 +36,9 @@ pub(crate) fn decrypt(
     encrypted_blob: &[u8],
     secret: &[u8],
 ) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
-    // Defaults is [0; 12]
     let nonce = Nonce::default();
-    let k = sha256::Hash::hash(secret);
-    let key = Key::from_slice(k.as_byte_array());
+    let key_hash = sha256::Hash::hash(secret);
+    let key = Key::from_slice(key_hash.as_byte_array());
 
     let cypher = ChaCha20Poly1305::new(key);
 
