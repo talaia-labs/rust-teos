@@ -251,6 +251,84 @@ impl KVStorage {
     fn load_misbehaving_proof(&self, tower_id: TowerId) -> Option<MisbehaviorProof> {
         self.load_item(&KeySpace::misbehaving_proof(tower_id), true)
     }
+
+    fn remove_pending_appointments(&self, tower_id: TowerId) -> Result<(), PersisterError> {
+        let pending_keys = self
+            .list_keys(NameSpace::pending_appointments())
+            .iter()
+            .filter(|l| l.starts_with(&tower_id.to_string()))
+            .map(|key| {
+                let parts: Vec<&str> = key.split(':').collect();
+                let locator = Locator::from_slice(&hex::decode(parts[1]).unwrap()).unwrap();
+                KeySpace::pending_appointment(tower_id, locator)
+            })
+            .collect::<Vec<_>>();
+        for key_space in pending_keys {
+            self.remove_item(key_space)?;
+        }
+
+        Ok(())
+    }
+
+    fn remove_invalid_appointments(&self, tower_id: TowerId) -> Result<(), PersisterError> {
+        let invalid_keys = self
+            .list_keys(NameSpace::invalid_appointments())
+            .iter()
+            .filter(|l| l.starts_with(&tower_id.to_string()))
+            .map(|key| {
+                let parts: Vec<&str> = key.split(':').collect();
+                let locator = Locator::from_slice(&hex::decode(parts[1]).unwrap()).unwrap();
+                KeySpace::invalid_appointment(tower_id, locator)
+            })
+            .collect::<Vec<_>>();
+        for key_space in invalid_keys {
+            self.remove_item(key_space)?;
+        }
+
+        Ok(())
+    }
+
+    fn remove_registration_receipts(&self, tower_id: TowerId) -> Result<(), PersisterError> {
+        let registration_keys = self
+            .list_keys(NameSpace::registration_receipts(tower_id))
+            .iter()
+            .map(|key| {
+                let expiry = key.parse::<u32>().unwrap();
+                KeySpace::registration_receipt(tower_id, expiry)
+            })
+            .collect::<Vec<_>>();
+        for key_space in registration_keys {
+            self.remove_item(key_space)?;
+        }
+
+        Ok(())
+    }
+
+    fn remove_appointment_receipts(&self, tower_id: TowerId) -> Result<(), PersisterError> {
+        let receipt_keys = self
+            .list_keys(NameSpace::appointment_receipts())
+            .iter()
+            .filter(|l| l.starts_with(&tower_id.to_string()))
+            .map(|key| {
+                let parts: Vec<&str> = key.split(':').collect();
+                let locator = Locator::from_slice(&hex::decode(parts[1]).unwrap()).unwrap();
+                KeySpace::appointment_receipt(tower_id, locator)
+            })
+            .collect::<Vec<_>>();
+        for key_space in receipt_keys {
+            self.remove_item(key_space)?;
+        }
+
+        Ok(())
+    }
+
+    fn remove_misbehaving_proofs(&self, tower_id: TowerId) -> Result<(), PersisterError> {
+        if let Some(proof) = self.load_misbehaving_proof(tower_id) {
+            self.remove_item(KeySpace::misbehaving_proof(tower_id))?;
+        }
+
+        Ok(())
+    }
 }
 
 impl Persister for KVStorage {
@@ -304,11 +382,14 @@ impl Persister for KVStorage {
 
         // Load all appointments data
         tower_info.appointments = self.load_appointment_receipts(tower_id);
-        tower_info.pending_appointments = self.load_appointments(tower_id, AppointmentStatus::Pending);
-        tower_info.invalid_appointments = self.load_appointments(tower_id, AppointmentStatus::Invalid);
+        tower_info.pending_appointments =
+            self.load_appointments(tower_id, AppointmentStatus::Pending);
+        tower_info.invalid_appointments =
+            self.load_appointments(tower_id, AppointmentStatus::Invalid);
 
         // Load and update subscription info from latest registration receipt
-        let latest_expiry = self.list_keys(NameSpace::registration_receipts(tower_id))
+        let latest_expiry = self
+            .list_keys(NameSpace::registration_receipts(tower_id))
             .iter()
             .filter_map(|s_e| s_e.parse::<u32>().ok())
             .max()?;
@@ -340,70 +421,16 @@ impl Persister for KVStorage {
     /// This triggers a cascade deletion of all related data, such as appointments, appointment receipts, etc. As long as there is a single
     /// reference to them.
     fn remove_tower_record(&self, tower_id: TowerId) -> Result<(), PersisterError> {
-        // Remove pending appointments
-        let pending_keys = self
-            .list_keys(NameSpace::pending_appointments())
-            .iter()
-            .filter(|l| l.starts_with(&tower_id.to_string()))
-            .map(|key| {
-                let parts: Vec<&str> = key.split(':').collect();
-                let locator = Locator::from_slice(&hex::decode(parts[1]).unwrap()).unwrap();
-                KeySpace::pending_appointment(tower_id, locator)
-            })
-            .collect::<Vec<_>>();
-        for key_space in pending_keys {
-            self.remove_item(key_space)?;
-        }
+        self.remove_pending_appointments(tower_id)?;
 
-        // Remove invalid appointments
-        let invalid_keys = self
-            .list_keys(NameSpace::invalid_appointments())
-            .iter()
-            .filter(|l| l.starts_with(&tower_id.to_string()))
-            .map(|key| {
-                let parts: Vec<&str> = key.split(':').collect();
-                let locator = Locator::from_slice(&hex::decode(parts[1]).unwrap()).unwrap();
-                KeySpace::invalid_appointment(tower_id, locator)
-            })
-            .collect::<Vec<_>>();
-        for key_space in invalid_keys {
-            self.remove_item(key_space)?;
-        }
+        self.remove_invalid_appointments(tower_id)?;
 
-        // Remove registration receipts
-        let registration_keys = self
-            .list_keys(NameSpace::registration_receipts(tower_id))
-            .iter()
-            .map(|key| {
-                let expiry = key.parse::<u32>().unwrap();
-                KeySpace::registration_receipt(tower_id, expiry)
-            })
-            .collect::<Vec<_>>();
-        for key_space in registration_keys {
-            self.remove_item(key_space)?;
-        }
+        self.remove_registration_receipts(tower_id)?;
 
-        // Remove appointment receipts
-        let receipt_keys = self
-            .list_keys(NameSpace::appointment_receipts())
-            .iter()
-            .filter(|l| l.starts_with(&tower_id.to_string()))
-            .map(|key| {
-                let parts: Vec<&str> = key.split(':').collect();
-                let locator = Locator::from_slice(&hex::decode(parts[1]).unwrap()).unwrap();
-                KeySpace::appointment_receipt(tower_id, locator)
-            })
-            .collect::<Vec<_>>();
-        for key_space in receipt_keys {
-            self.remove_item(key_space)?;
-        }
+        self.remove_appointment_receipts(tower_id)?;
 
-        // Remove misbehaving proofs if they exist
-        if let Some(proof) = self.load_misbehaving_proof(tower_id) {
-            self.remove_item(KeySpace::misbehaving_proof(tower_id))?;
-        }
+        self.remove_misbehaving_proofs(tower_id)?;
 
-        // Finally remove the tower record itself
         self.remove_item(KeySpace::tower(tower_id))
     }
 
@@ -557,7 +584,7 @@ impl Persister for KVStorage {
     ) -> Result<(), PersisterError> {
         // Check if pending appointment already exists
         let key_space = KeySpace::pending_appointment(tower_id, appointment.locator);
-        if self.load_item::<Appointment>(&key_space, false).is_some(){
+        if self.load_item::<Appointment>(&key_space, false).is_some() {
             return Err(PersisterError::Other(format!(
                 "{}:{}",
                 tower_id, appointment.locator
