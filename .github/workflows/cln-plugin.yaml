@@ -53,11 +53,16 @@ jobs:
       - uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.81.0
+          components: rustfmt, clippy
       - name: Install bitcoind
         run: |
           wget https://bitcoincore.org/bin/bitcoin-core-${{ env.bitcoind_version }}/bitcoin-${{ env.bitcoind_version }}-x86_64-linux-gnu.tar.gz
           tar -xzf bitcoin-${{ env.bitcoind_version }}-x86_64-linux-gnu.tar.gz
-          ln -s $(pwd)/bitcoin-${{ env.bitcoind_version }}/bin/bitcoin* /usr/local/bin
+          sudo ln -s $(pwd)/bitcoin-${{ env.bitcoind_version }}/bin/bitcoin* /usr/local/bin
       - name: Load CLN cache
         id: cache-cln
         uses: actions/cache@v4
@@ -66,9 +71,10 @@ jobs:
         with:
           path: lightning
           key: ${{ runner.os }}-build-${{ env.cache-name }}-v${{ env.cln_version }}
-      - name: Link CLN
-        run: |
-          cd lightning && sudo make install
+        - name: Link CLN
+          run: |
+            source $HOME/.cargo/env
+            cd lightning && sudo make install
       - name: Install teos and the plugin
         run: |
           cargo install --locked --path teos
