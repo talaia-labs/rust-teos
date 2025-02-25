@@ -1,6 +1,7 @@
 use crate::storage::persister::{Persister, PersisterError};
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
+use std::sync::Arc;
 
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -12,6 +13,8 @@ use teos_common::{TowerId, UserId};
 
 use crate::retrier::RetrierStatus;
 use crate::{MisbehaviorProof, SubscriptionError, TowerInfo, TowerStatus, TowerSummary};
+
+use crate::storage::kv::{DynStore, KVStorage};
 
 #[derive(Eq, PartialEq)]
 pub enum RevocationData {
@@ -70,10 +73,11 @@ pub struct WTClient {
 
 impl WTClient {
     pub async fn new(
-        storage: Box<dyn Persister>,
+        store: Arc<DynStore>,
         user_sk: SecretKey,
         unreachable_towers: UnboundedSender<(TowerId, RevocationData)>,
     ) -> Self {
+        let storage = Box::new(KVStorage::new(store, user_sk.secret_bytes().to_vec()).unwrap());
         let user_id = UserId(PublicKey::from_secret_key(&Secp256k1::new(), &user_sk));
 
         let towers = storage.load_towers();
@@ -276,8 +280,6 @@ impl WTClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::storage::create_storage;
     use crate::storage::mock_kv::MemoryStore;
     use teos_common::cryptography;
     use tokio::sync::mpsc::unbounded_channel;
@@ -291,13 +293,12 @@ mod tests {
     #[tokio::test]
     async fn test_add_update_load_tower() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         // Adding a new tower will add a summary to towers and the full data to the
         let mut receipt = get_random_registration_receipt();
@@ -379,7 +380,7 @@ mod tests {
         wt_client.add_appointment_receipt(
             tower_id,
             locator,
-            0, // FIXME: the problem is that this reset does not work
+            0,
             &get_random_appointment_receipt(tower_sk),
         );
         wt_client
@@ -390,13 +391,12 @@ mod tests {
     #[tokio::test]
     async fn test_get_tower_status() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         // If the tower is unknown, get_tower_status returns None
         let tower_id = get_random_user_id();
@@ -418,13 +418,12 @@ mod tests {
     #[tokio::test]
     async fn test_set_tower_status() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         // If the tower is unknown nothing will happen
         let unknown_tower = get_random_user_id();
@@ -453,13 +452,12 @@ mod tests {
     #[tokio::test]
     async fn test_add_appointment_receipt() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
@@ -508,13 +506,12 @@ mod tests {
     #[tokio::test]
     async fn test_add_pending_appointment() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let tower_id = get_random_user_id();
 
@@ -556,13 +553,12 @@ mod tests {
     #[tokio::test]
     async fn test_remove_pending_appointment() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let tower_id = get_random_user_id();
 
@@ -592,13 +588,12 @@ mod tests {
     #[tokio::test]
     async fn test_add_invalid_appointment() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let tower_id = get_random_user_id();
 
@@ -636,13 +631,12 @@ mod tests {
     #[tokio::test]
     async fn test_move_pending_appointment_to_invalid() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let tower_id = get_random_user_id();
 
@@ -685,13 +679,12 @@ mod tests {
     async fn test_move_pending_appointment_to_invalid_multiple_towers() {
         // Check that moving an appointment from pending to invalid can be done even if multiple towers have a reference to it
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let tower_id = get_random_user_id();
         let another_tower_id = get_random_user_id();
@@ -764,13 +757,12 @@ mod tests {
     #[tokio::test]
     async fn test_flag_misbehaving_tower() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
@@ -804,13 +796,12 @@ mod tests {
     #[tokio::test]
     async fn test_remove_tower() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let receipt = get_random_registration_receipt();
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
@@ -853,7 +844,6 @@ mod tests {
             registration_receipt.available_slots(),
             &appointment_receipt,
         );
-        // FIXME
         assert!(wt_client
             .storage
             .appointment_receipt_exists(locator, tower_id));
@@ -873,13 +863,12 @@ mod tests {
         // For instance, having an appointment that was sent to two towers, and then deleting one of them
         // should only remove the link between the tower and the appointment, but not delete the data.
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let receipt = get_random_registration_receipt();
         let (tower1_sk, tower1_pk) = cryptography::get_random_keypair();
@@ -935,13 +924,12 @@ mod tests {
     #[tokio::test]
     async fn test_remove_inexistent_tower() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
+        let mut wt_client = WTClient::new(
             MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
+            keypair.0,
+            unbounded_channel().0,
         )
-        .unwrap();
-
-        let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
+        .await;
 
         let tower_id = get_random_user_id();
         let err = wt_client.remove_tower(tower_id).unwrap_err();

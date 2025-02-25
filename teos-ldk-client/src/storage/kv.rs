@@ -21,6 +21,7 @@ impl From<DBError> for PersisterError {
 }
 
 use crate::{AppointmentStatus, MisbehaviorProof, TowerInfo, TowerSummary};
+// XXX: this is taken from LDK and should be imported after it is made public there
 pub type DynStore = dyn KVStore + Sync + Send;
 
 pub struct KVStorage {

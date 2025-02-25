@@ -3,7 +3,7 @@ pub mod persister;
 pub use crate::storage::persister::{Persister, PersisterError};
 
 mod encryption;
-mod kv;
+pub(crate) mod kv;
 mod namespace;
 
 #[cfg(test)]

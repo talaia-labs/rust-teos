@@ -574,8 +574,6 @@ impl Retrier {
 mod tests {
     use super::*;
 
-    use crate::storage::create_storage;
-
     use serde_json::json;
 
     use tokio::sync::mpsc::unbounded_channel;
@@ -590,7 +588,9 @@ mod tests {
     };
 
     use crate::net::http::ApiError;
+    use crate::storage::kv::KVStorage;
     use crate::storage::mock_kv::MemoryStore;
+    use crate::storage::persister::Persister;
     use crate::test_utils::get_dummy_add_appointment_response;
 
     const LONG_AUTO_RETRY_DELAY: u32 = 60;
@@ -628,14 +628,13 @@ mod tests {
     async fn test_manage_retry_reachable() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -727,14 +726,13 @@ mod tests {
     async fn test_manage_retry_unreachable() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
 
         // Add a tower with pending appointments
@@ -859,14 +857,13 @@ mod tests {
     async fn test_manage_retry_rejected() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -968,14 +965,13 @@ mod tests {
     async fn test_manage_retry_misbehaving() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -1065,14 +1061,13 @@ mod tests {
     async fn test_manage_retry_abandoned() {
         let keypair = cryptography::get_random_keypair();
         let (tx, rx) = unbounded_channel();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let server = mockito::Server::new_async().await;
 
@@ -1113,14 +1108,13 @@ mod tests {
     async fn test_manage_retry_subscription_error() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -1239,23 +1233,23 @@ mod tests {
         // Stale data is sent on WTClient initialization if found in the database. We'll force that to happen by populating the DB before initializing the WTClient
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let mut storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-        let receipt = get_random_registration_receipt();
-        storage
-            .store_tower_record(tower_id, "http://unreachable.tower", &receipt)
-            .unwrap();
+
+        let store = MemoryStore::new().into_dyn_store();
+        let mut storage = KVStorage::new(store.clone(), keypair.0.secret_bytes().to_vec()).unwrap();
 
         let appointment = generate_random_appointment(None);
         storage
             .store_pending_appointment(tower_id, &appointment)
             .unwrap();
+
+        let receipt = get_random_registration_receipt();
+        storage
+            .store_tower_record(tower_id, "http://unreachable.tower", &receipt)
+            .unwrap();
+
         // Now we can create the WTClient and check that the data is pending
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, tx.clone()).await,
+            WTClient::new(store, keypair.0, tx.clone()).await,
         ));
 
         // Also create the retrier thread so retries can be managed
@@ -1392,14 +1386,13 @@ mod tests {
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
 
         let mut server = mockito::Server::new_async().await;
@@ -1447,14 +1440,13 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let server = mockito::Server::new_async().await;
 
@@ -1476,14 +1468,13 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
         let mut server = mockito::Server::new_async().await;
 
@@ -1533,14 +1524,13 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
@@ -1570,14 +1560,13 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
 
         let mut server = mockito::Server::new_async().await;
@@ -1630,14 +1619,13 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
 
         let mut server = mockito::Server::new_async().await;
@@ -1696,14 +1684,13 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(
-            MemoryStore::new().into_dyn_store(),
-            keypair.0.secret_bytes().to_vec(),
-        )
-        .unwrap();
-
         let wt_client = Arc::new(Mutex::new(
-            WTClient::new(storage, keypair.0, unbounded_channel().0).await,
+            WTClient::new(
+                MemoryStore::new().into_dyn_store(),
+                keypair.0,
+                unbounded_channel().0,
+            )
+            .await,
         ));
 
         // The tower we'd like to retry sending appointments to has to exist within the plugin
