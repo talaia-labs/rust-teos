@@ -38,7 +38,7 @@ pub(crate) fn encrypt(
 ///  The result is expected to be a penalty transaction.
 pub(crate) fn decrypt(
     encrypted_blob: &[u8],
-    secret: &Vec<u8>,
+    secret: &[u8],
 ) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
     // Defaults is [0; 12]
     let nonce = Nonce::default();

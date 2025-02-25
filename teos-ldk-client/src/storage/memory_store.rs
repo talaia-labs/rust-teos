@@ -5,10 +5,17 @@ use std::sync::{Arc, Mutex};
 
 pub(crate) type DynStore = dyn KVStore + Sync + Send;
 
+/// Type alias for the namespace to key-value mapping
+type NamespaceMap = HashMap<String, Vec<u8>>;
+/// Type alias for the storage data structure
+type StorageMap = HashMap<String, NamespaceMap>;
+/// Type alias for thread-safe storage
+type ThreadSafeStorage = Arc<Mutex<StorageMap>>;
+
 /// In-memory key-value store implementation for testing
 #[derive(Clone, Debug)]
 pub struct MemoryStore {
-    data: Arc<Mutex<HashMap<String, HashMap<String, Vec<u8>>>>>,
+    data: ThreadSafeStorage,
 }
 
 impl MemoryStore {

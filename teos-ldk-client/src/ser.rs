@@ -1,11 +1,8 @@
 use bitcoin::consensus::encode;
 use bitcoin::Transaction;
 
-use teos_common::appointment::{Appointment, Locator};
-
 use hex::FromHex;
-use serde::{de, ser::SerializeMap, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
+use serde::{de, Deserializer};
 
 pub fn deserialize_tx<'de, D>(deserializer: D) -> Result<Transaction, D::Error>
 where
@@ -33,38 +30,4 @@ where
     }
 
     deserializer.deserialize_any(TransactionVisitor)
-}
-
-pub fn serialize_receipts<S>(hm: &HashMap<Locator, String>, s: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let mut map = s.serialize_map(Some(hm.len()))?;
-    for (locator, sig) in hm {
-        map.serialize_entry(&hex::encode(locator), sig)?;
-    }
-    map.end()
-}
-
-#[derive(Serialize)]
-struct AppointmentInners {
-    encrypted_blob: String,
-    to_self_delay: u32,
-}
-
-pub fn serialize_appointments<S>(v: &Vec<Appointment>, s: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let mut map = s.serialize_map(Some(v.len()))?;
-    for a in v {
-        map.serialize_entry(
-            &hex::encode(a.locator),
-            &AppointmentInners {
-                encrypted_blob: hex::encode(&a.encrypted_blob),
-                to_self_delay: a.to_self_delay,
-            },
-        )?;
-    }
-    map.end()
 }
