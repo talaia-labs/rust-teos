@@ -1,13 +1,9 @@
 pub mod persister;
 
-use std::sync::Arc;
-
 pub use crate::storage::persister::{Persister, PersisterError};
 
-mod kv;
-use kv::{DynStore, KVStorage};
-
 mod encryption;
+mod kv;
 mod namespace;
 
 #[cfg(test)]
@@ -16,30 +12,22 @@ pub mod mock_kv;
 #[cfg(test)]
 pub use mock_kv::MemoryStore;
 
+#[cfg(test)]
 pub fn create_storage(
-    config: StorageConfig,
+    kv_store: Arc<DynStore>,
+    sk: Vec<u8>,
 ) -> Result<Box<dyn persister::Persister>, PersisterError> {
-    match config {
-        StorageConfig::KV { kv_store, sk } => match KVStorage::new(kv_store, sk) {
-            Ok(storage) => Ok(Box::new(storage)),
-            Err(e) => Err(PersisterError::Other(format!(
-                "Error creating storage: {}",
-                e
-            ))),
-        },
+    match KVStorage::new(kv_store, sk) {
+        Ok(storage) => Ok(Box::new(storage)),
+        Err(e) => Err(PersisterError::Other(format!(
+            "Error creating storage: {}",
+            e
+        ))),
     }
 }
 
-pub enum StorageConfig {
-    KV {
-        kv_store: Arc<DynStore>,
-        sk: Vec<u8>,
-    },
-}
+#[cfg(test)]
+use std::sync::Arc;
 
 #[cfg(test)]
-fn create_test_kv_storage() -> KVStorage {
-    let store = MemoryStore::new().into_dyn_store();
-    let sk = vec![0u8; 32]; // Test secret key
-    KVStorage::new(store, sk).unwrap()
-}
+use kv::{DynStore, KVStorage};

@@ -583,7 +583,7 @@ impl Persister for KVStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::create_test_kv_storage;
+    use crate::storage::mock_kv::MemoryStore;
 
     use teos_common::test_utils::{
         generate_random_appointment, get_random_registration_receipt, get_random_user_id,
@@ -595,6 +595,12 @@ mod tests {
             self.load_item::<MisbehaviorProof>(&KeySpace::misbehaving_proof(tower_id), true)
                 .is_some()
         }
+    }
+
+    fn create_test_kv_storage() -> KVStorage {
+        let store = MemoryStore::new().into_dyn_store();
+        let sk = vec![0u8; 32]; // Test secret key
+        KVStorage::new(store, sk).unwrap()
     }
 
     #[test]

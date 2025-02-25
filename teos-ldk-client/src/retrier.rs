@@ -574,7 +574,7 @@ impl Retrier {
 mod tests {
     use super::*;
 
-    use crate::storage::{create_storage, StorageConfig};
+    use crate::storage::create_storage;
 
     use serde_json::json;
 
@@ -628,10 +628,10 @@ mod tests {
     async fn test_manage_retry_reachable() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -727,10 +727,10 @@ mod tests {
     async fn test_manage_retry_unreachable() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -859,10 +859,10 @@ mod tests {
     async fn test_manage_retry_rejected() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -968,10 +968,10 @@ mod tests {
     async fn test_manage_retry_misbehaving() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -1065,10 +1065,10 @@ mod tests {
     async fn test_manage_retry_abandoned() {
         let keypair = cryptography::get_random_keypair();
         let (tx, rx) = unbounded_channel();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -1113,10 +1113,10 @@ mod tests {
     async fn test_manage_retry_subscription_error() {
         let (tx, rx) = unbounded_channel();
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -1239,10 +1239,10 @@ mod tests {
         // Stale data is sent on WTClient initialization if found in the database. We'll force that to happen by populating the DB before initializing the WTClient
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
-        let mut storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let mut storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
         let receipt = get_random_registration_receipt();
         storage
@@ -1392,10 +1392,10 @@ mod tests {
         let (tower_sk, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -1447,10 +1447,10 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -1476,10 +1476,10 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -1533,10 +1533,10 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -1570,10 +1570,10 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -1630,10 +1630,10 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(
@@ -1696,10 +1696,10 @@ mod tests {
         let (_, tower_pk) = cryptography::get_random_keypair();
         let tower_id = TowerId(tower_pk);
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let wt_client = Arc::new(Mutex::new(

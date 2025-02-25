@@ -277,8 +277,8 @@ impl WTClient {
 mod tests {
     use super::*;
 
+    use crate::storage::create_storage;
     use crate::storage::mock_kv::MemoryStore;
-    use crate::storage::{create_storage, StorageConfig};
     use teos_common::cryptography;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -291,10 +291,10 @@ mod tests {
     #[tokio::test]
     async fn test_add_update_load_tower() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -390,10 +390,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_tower_status() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -418,10 +418,10 @@ mod tests {
     #[tokio::test]
     async fn test_set_tower_status() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -453,10 +453,10 @@ mod tests {
     #[tokio::test]
     async fn test_add_appointment_receipt() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -508,10 +508,10 @@ mod tests {
     #[tokio::test]
     async fn test_add_pending_appointment() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -556,10 +556,10 @@ mod tests {
     #[tokio::test]
     async fn test_remove_pending_appointment() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -592,10 +592,10 @@ mod tests {
     #[tokio::test]
     async fn test_add_invalid_appointment() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -636,10 +636,10 @@ mod tests {
     #[tokio::test]
     async fn test_move_pending_appointment_to_invalid() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -685,10 +685,10 @@ mod tests {
     async fn test_move_pending_appointment_to_invalid_multiple_towers() {
         // Check that moving an appointment from pending to invalid can be done even if multiple towers have a reference to it
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -764,10 +764,10 @@ mod tests {
     #[tokio::test]
     async fn test_flag_misbehaving_tower() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -804,10 +804,10 @@ mod tests {
     #[tokio::test]
     async fn test_remove_tower() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -873,10 +873,10 @@ mod tests {
         // For instance, having an appointment that was sent to two towers, and then deleting one of them
         // should only remove the link between the tower and the appointment, but not delete the data.
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
@@ -935,10 +935,10 @@ mod tests {
     #[tokio::test]
     async fn test_remove_inexistent_tower() {
         let keypair = cryptography::get_random_keypair();
-        let storage = create_storage(StorageConfig::KV {
-            kv_store: MemoryStore::new().into_dyn_store(),
-            sk: vec![0; 32],
-        })
+        let storage = create_storage(
+            MemoryStore::new().into_dyn_store(),
+            keypair.0.secret_bytes().to_vec(),
+        )
         .unwrap();
 
         let mut wt_client = WTClient::new(storage, keypair.0, unbounded_channel().0).await;
