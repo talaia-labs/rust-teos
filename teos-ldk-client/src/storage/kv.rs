@@ -11,7 +11,7 @@ use teos_common::appointment::{Appointment, Locator};
 use teos_common::receipts::{AppointmentReceipt, RegistrationReceipt};
 use teos_common::{TowerId, UserId};
 
-use crate::storage::encryption::{decrypt, encrypt};
+use crate::storage::encryptor::Encryptor;
 use crate::storage::namespace::{get_appointment_namespace, KeySpace, NameSpace};
 
 impl From<DBError> for PersisterError {
@@ -26,12 +26,15 @@ pub type DynStore = dyn KVStore + Sync + Send;
 
 pub struct KVStorage {
     store: Arc<DynStore>,
-    sk: Vec<u8>,
+    encryptor: Box<Encryptor>,
 }
 
 impl KVStorage {
     pub fn new(store: Arc<DynStore>, sk: Vec<u8>) -> Result<Self, PersisterError> {
-        Ok(KVStorage { store, sk })
+        Ok(KVStorage {
+            store,
+            encryptor: Box::new(Encryptor::new(&sk[..])),
+        })
     }
 
     fn store_item<T: serde::Serialize>(
@@ -42,7 +45,7 @@ impl KVStorage {
     ) -> Result<(), PersisterError> {
         let value = bincode::serialize(value).unwrap();
         let value = if encrypted {
-            encrypt(&value, &self.sk).unwrap()
+            self.encryptor.encrypt(&value).unwrap()
         } else {
             value
         };
@@ -69,7 +72,7 @@ impl KVStorage {
         ) {
             Ok(value) => {
                 let value = if encrypted {
-                    decrypt(&value, &self.sk).unwrap()
+                    self.encryptor.decrypt(&value).unwrap()
                 } else {
                     value
                 };
