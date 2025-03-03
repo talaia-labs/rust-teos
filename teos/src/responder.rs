@@ -3,9 +3,9 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use bitcoin::hashes::Hash;
 use bitcoin::{consensus, BlockHash};
 use bitcoin::{Transaction, Txid};
-use bitcoin::hashes::Hash;
 
 use lightning::chain;
 use lightning_block_sync::poll::ValidatedBlock;
@@ -95,8 +95,18 @@ impl TransactionTracker {
 impl From<TransactionTracker> for common_msgs::Tracker {
     fn from(t: TransactionTracker) -> Self {
         common_msgs::Tracker {
-            dispute_txid: t.dispute_tx.compute_txid().to_raw_hash().to_byte_array().to_vec(),
-            penalty_txid: t.penalty_tx.compute_txid().to_raw_hash().to_byte_array().to_vec(),
+            dispute_txid: t
+                .dispute_tx
+                .compute_txid()
+                .to_raw_hash()
+                .to_byte_array()
+                .to_vec(),
+            penalty_txid: t
+                .penalty_tx
+                .compute_txid()
+                .to_raw_hash()
+                .to_byte_array()
+                .to_vec(),
             penalty_rawtx: consensus::serialize(&t.penalty_tx),
         }
     }

@@ -267,7 +267,10 @@ async fn main() {
         dbm.clone(),
     ));
 
-    let mut poller = ChainPoller::new(&mut derefed, Network::from_core_arg(&conf.btc_network).unwrap());
+    let mut poller = ChainPoller::new(
+        &mut derefed,
+        Network::from_core_arg(&conf.btc_network).unwrap(),
+    );
     let (responder, watcher) = {
         let last_n_blocks = get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize)
             .await.unwrap_or_else(|e| {
