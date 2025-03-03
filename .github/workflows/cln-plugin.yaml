@@ -62,7 +62,7 @@ jobs:
         run: |
           wget https://bitcoincore.org/bin/bitcoin-core-${{ env.bitcoind_version }}/bitcoin-${{ env.bitcoind_version }}-x86_64-linux-gnu.tar.gz
           tar -xzf bitcoin-${{ env.bitcoind_version }}-x86_64-linux-gnu.tar.gz
-          sudo ln -s $(pwd)/bitcoin-${{ env.bitcoind_version }}/bin/bitcoin* /usr/local/bin
+          ln -s $(pwd)/bitcoin-${{ env.bitcoind_version }}/bin/bitcoin* /usr/local/bin
       - name: Load CLN cache
         id: cache-cln
         uses: actions/cache@v4
