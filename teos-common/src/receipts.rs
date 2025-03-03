@@ -93,7 +93,7 @@ impl RegistrationReceipt {
 
     pub fn sign(&mut self, sk: &SecretKey) {
         // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
-        self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
+        self.signature = Some(cryptography::sign(&self.to_vec(), sk));
     }
 
     pub fn verify(&self, id: &UserId) -> bool {
@@ -153,8 +153,7 @@ impl AppointmentReceipt {
     }
 
     pub fn sign(&mut self, sk: &SecretKey) {
-        // TODO: Check if there's any case where this can actually fail. Don't unwrap if so.
-        self.signature = Some(cryptography::sign(&self.to_vec(), sk).unwrap());
+        self.signature = Some(cryptography::sign(&self.to_vec(), sk));
     }
 
     pub fn verify(&self, id: &UserId) -> bool {

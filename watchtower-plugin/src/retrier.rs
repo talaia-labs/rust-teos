@@ -491,7 +491,7 @@ impl Retrier {
                     &net_addr,
                     &proxy,
                     &appointment,
-                    &cryptography::sign(&appointment.to_vec(), &user_sk).unwrap(),
+                    &cryptography::sign(&appointment.to_vec(), &user_sk),
                 )
                 .await
                 {
@@ -652,7 +652,7 @@ mod tests {
 
         // Prepare the mock response
         let mut add_appointment_receipt = AppointmentReceipt::new(
-            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk),
             42,
         );
         add_appointment_receipt.sign(&tower_sk);
@@ -793,7 +793,7 @@ mod tests {
         // Prepare the mock response
         let mut server = mockito::Server::new_async().await;
         let mut add_appointment_receipt = AppointmentReceipt::new(
-            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk),
             42,
         );
         add_appointment_receipt.sign(&tower_sk);
@@ -974,7 +974,7 @@ mod tests {
 
         // Prepare the mock response
         let mut add_appointment_receipt = AppointmentReceipt::new(
-            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk),
             42,
         );
         // Sign with a random key so it counts as misbehaving
@@ -1113,7 +1113,7 @@ mod tests {
         re_registration_receipt.sign(&tower_sk);
 
         let mut add_appointment_receipt = AppointmentReceipt::new(
-            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk),
             42,
         );
         add_appointment_receipt.sign(&tower_sk);
@@ -1273,11 +1273,11 @@ mod tests {
 
         // Create the receipts, the responses and set the mocks
         let mut appointment_receipt = AppointmentReceipt::new(
-            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk),
             42,
         );
         let mut appointment2_receipt = AppointmentReceipt::new(
-            cryptography::sign(&appointment2.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            cryptography::sign(&appointment2.to_vec(), &wt_client.lock().unwrap().user_sk),
             42,
         );
         appointment_receipt.sign(&tower_sk);
@@ -1374,7 +1374,7 @@ mod tests {
 
         // Prepare the mock response
         let mut add_appointment_receipt = AppointmentReceipt::new(
-            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk),
             42,
         );
         add_appointment_receipt.sign(&tower_sk);
@@ -1445,7 +1445,7 @@ mod tests {
 
         // Prepare the mock response
         let mut add_appointment_receipt = AppointmentReceipt::new(
-            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap(),
+            cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk),
             42,
         );
         add_appointment_receipt.sign(&cryptography::get_random_keypair().0);

@@ -19,8 +19,8 @@ pub enum DecryptingError {
 }
 
 /// Shadows [message_signing::sign].
-pub fn sign(msg: &[u8], sk: &SecretKey) -> Result<String, Error> {
-    Ok(message_signing::sign(msg, sk))
+pub fn sign(msg: &[u8], sk: &SecretKey) -> String {
+    message_signing::sign(msg, sk)
 }
 
 /// Shadows [message_signing::verify].

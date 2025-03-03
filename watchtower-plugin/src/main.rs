@@ -188,7 +188,7 @@ async fn get_subscription_info(
         }
     }?;
 
-    let signature = cryptography::sign("get subscription info".as_bytes(), &user_sk).unwrap();
+    let signature = cryptography::sign("get subscription info".as_bytes(), &user_sk);
 
     let response: common_msgs::GetSubscriptionInfoResponse = process_post_response(
         post_request(
@@ -233,8 +233,7 @@ async fn get_appointment(
     let signature = cryptography::sign(
         format!("get appointment {}", params.locator).as_bytes(),
         &user_sk,
-    )
-    .unwrap();
+    );
 
     let response: ApiResponse<common_msgs::GetAppointmentResponse> = process_post_response(
         post_request(
@@ -448,8 +447,7 @@ async fn on_commitment_revocation(
     let signature = cryptography::sign(
         &appointment.to_vec(),
         &plugin.state().lock().unwrap().user_sk,
-    )
-    .unwrap();
+    );
 
     // Looks like we cannot iterate through towers given a locked state is not Send (due to the async call),
     // so we need to clone the bare minimum.

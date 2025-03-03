@@ -644,7 +644,7 @@ mod tests {
         // (as if simulating a bootstrap from existing data), the data should be properly loaded.
         for _ in 0..10 {
             let appointment = generate_dummy_appointment(None).inner;
-            let user_sig = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+            let user_sig = cryptography::sign(&appointment.to_vec(), &user_sk);
             watcher
                 .add_appointment(appointment.clone(), user_sig.clone())
                 .unwrap();
@@ -706,7 +706,7 @@ mod tests {
         let user_id = UserId(user_pk);
         watcher.register(user_id).unwrap();
         let appointment = generate_dummy_appointment(None).inner;
-        let user_sig = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let user_sig = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         // Add the appointment for a new user (twice so we can check that updates work)
         for _ in 0..2 {
@@ -722,7 +722,7 @@ mod tests {
         let user2_id = UserId(user2_pk);
         watcher.register(user2_id).unwrap();
 
-        let user2_sig = cryptography::sign(&appointment.to_vec(), &user2_sk).unwrap();
+        let user2_sig = cryptography::sign(&appointment.to_vec(), &user2_sk);
         let (receipt, slots, expiry) = watcher
             .add_appointment(appointment.clone(), user2_sig.clone())
             .unwrap();
@@ -737,8 +737,7 @@ mod tests {
         let dispute_tx = get_random_tx();
         let (uuid, triggered_appointment) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
-        let signature =
-            cryptography::sign(&triggered_appointment.inner.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&triggered_appointment.inner.to_vec(), &user_sk);
         let (receipt, slots, expiry) = watcher
             .add_appointment(triggered_appointment.inner.clone(), signature.clone())
             .unwrap();
@@ -767,7 +766,7 @@ mod tests {
         let dispute_tx = tip_txs.last().unwrap();
         let (uuid, appointment_in_cache) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
-        let user_sig = cryptography::sign(&appointment_in_cache.inner.to_vec(), &user_sk).unwrap();
+        let user_sig = cryptography::sign(&appointment_in_cache.inner.to_vec(), &user_sk);
         let (receipt, slots, expiry) = watcher
             .add_appointment(appointment_in_cache.inner, user_sig.clone())
             .unwrap();
@@ -785,7 +784,7 @@ mod tests {
         let (uuid, mut invalid_appointment) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
         invalid_appointment.inner.encrypted_blob.reverse();
-        let user_sig = cryptography::sign(&invalid_appointment.inner.to_vec(), &user_sk).unwrap();
+        let user_sig = cryptography::sign(&invalid_appointment.inner.to_vec(), &user_sk);
         let (receipt, slots, expiry) = watcher
             .add_appointment(invalid_appointment.inner, user_sig.clone())
             .unwrap();
@@ -808,7 +807,7 @@ mod tests {
         let dispute_tx = &tip_txs[tip_txs.len() - 2];
         let (uuid, invalid_appointment) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
-        let user_sig = cryptography::sign(&invalid_appointment.inner.to_vec(), &user_sk).unwrap();
+        let user_sig = cryptography::sign(&invalid_appointment.inner.to_vec(), &user_sk);
         let (receipt, slots, expiry) = watcher
             .add_appointment(invalid_appointment.inner, user_sig.clone())
             .unwrap();
@@ -845,7 +844,7 @@ mod tests {
             .available_slots = 0;
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        let signature = cryptography::sign(&appointment.inner.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.inner.to_vec(), &user_sk);
 
         assert!(matches!(
             watcher.add_appointment(appointment.inner, signature),
@@ -860,7 +859,7 @@ mod tests {
             .add_outdated_user(user2_id, START_HEIGHT as u32);
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user2_id, None);
-        let signature = cryptography::sign(&appointment.inner.to_vec(), &user2_sk).unwrap();
+        let signature = cryptography::sign(&appointment.inner.to_vec(), &user2_sk);
 
         assert!(matches!(
             watcher.add_appointment(appointment.inner, signature),
@@ -985,12 +984,12 @@ mod tests {
         watcher
             .add_appointment(
                 appointment.clone(),
-                cryptography::sign(&appointment.to_vec(), &user_sk).unwrap(),
+                cryptography::sign(&appointment.to_vec(), &user_sk),
             )
             .unwrap();
 
         let message = format!("get appointment {}", appointment.locator);
-        let signature = cryptography::sign(message.as_bytes(), &user_sk).unwrap();
+        let signature = cryptography::sign(message.as_bytes(), &user_sk);
         let info = watcher
             .get_appointment(appointment.locator, &signature)
             .unwrap();
@@ -1016,7 +1015,7 @@ mod tests {
         let tracker = TransactionTracker::new(breach, user_id, status);
 
         let tracker_message = format!("get appointment {}", appointment.locator);
-        let tracker_signature = cryptography::sign(tracker_message.as_bytes(), &user_sk).unwrap();
+        let tracker_signature = cryptography::sign(tracker_message.as_bytes(), &user_sk);
         let info = watcher
             .get_appointment(appointment.locator, &tracker_signature)
             .unwrap();
@@ -1034,7 +1033,7 @@ mod tests {
         let user2_id = UserId(user2_pk);
         watcher.register(user2_id).unwrap();
 
-        let signature2 = cryptography::sign(message.as_bytes(), &user2_sk).unwrap();
+        let signature2 = cryptography::sign(message.as_bytes(), &user2_sk);
         assert!(matches!(
             watcher.get_appointment(appointment.locator, &signature2),
             Err(GetAppointmentFailure::NotFound { .. })
@@ -1072,7 +1071,7 @@ mod tests {
             // Track some of the these transactions.
             if i % 2 == 0 {
                 let appointment = generate_dummy_appointment(Some(&tx.compute_txid())).inner;
-                let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+                let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
                 watcher.add_appointment(appointment, signature).unwrap();
                 breaches.insert(*l, tx.clone());
             }
@@ -1100,7 +1099,7 @@ mod tests {
         // Let the watcher track these breaches.
         for (_, tx) in breaches.iter() {
             let appointment = generate_dummy_appointment(Some(&tx.compute_txid())).inner;
-            let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+            let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
             watcher.add_appointment(appointment, signature).unwrap();
         }
 
@@ -1133,7 +1132,7 @@ mod tests {
                 appointment.encrypted_blob.reverse();
                 rejected.insert(uuid);
             };
-            let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+            let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
             watcher.add_appointment(appointment, signature).unwrap();
         }
 
@@ -1171,7 +1170,7 @@ mod tests {
             let (uuid, appointment) =
                 generate_dummy_appointment_with_user(user_id, Some(&tx.compute_txid()));
             let appointment = appointment.inner;
-            let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+            let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
             watcher.add_appointment(appointment, signature).unwrap();
             uuids.insert(uuid);
         }
@@ -1208,7 +1207,7 @@ mod tests {
                 appointment.encrypted_blob.reverse();
                 rejected_breaches.insert(uuid);
             };
-            let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+            let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
             watcher.add_appointment(appointment, signature).unwrap();
         }
 
@@ -1259,11 +1258,11 @@ mod tests {
         let uuid1 = UUID::new(appointment.locator, user_id);
         let uuid2 = UUID::new(appointment.locator, user2_id);
 
-        let user_sig = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let user_sig = cryptography::sign(&appointment.to_vec(), &user_sk);
         watcher
             .add_appointment(appointment.clone(), user_sig)
             .unwrap();
-        let user2_sig = cryptography::sign(&appointment.to_vec(), &user2_sk).unwrap();
+        let user2_sig = cryptography::sign(&appointment.to_vec(), &user2_sk);
         watcher.add_appointment(appointment, user2_sig).unwrap();
 
         // Outdate the first user's registration.
@@ -1303,7 +1302,7 @@ mod tests {
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
             generate_dummy_appointment_with_user(user2_id, Some(&dispute_tx.compute_txid()));
-        let sig = cryptography::sign(&appointment.inner.to_vec(), &user2_sk).unwrap();
+        let sig = cryptography::sign(&appointment.inner.to_vec(), &user2_sk);
         watcher.add_appointment(appointment.inner, sig).unwrap();
 
         assert!(watcher.dbm.lock().unwrap().appointment_exists(uuid));
@@ -1323,7 +1322,7 @@ mod tests {
             generate_dummy_appointment_with_user(user2_id, Some(&dispute_tx.compute_txid()));
         // Modify the encrypted blob so the data is invalid.
         appointment.inner.encrypted_blob.reverse();
-        let sig = cryptography::sign(&appointment.inner.to_vec(), &user2_sk).unwrap();
+        let sig = cryptography::sign(&appointment.inner.to_vec(), &user2_sk);
         watcher.add_appointment(appointment.inner, sig).unwrap();
 
         let block = chain.generate(Some(vec![dispute_tx]));
@@ -1340,7 +1339,7 @@ mod tests {
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
             generate_dummy_appointment_with_user(user2_id, Some(&dispute_tx.compute_txid()));
-        let sig = cryptography::sign(&appointment.inner.to_vec(), &user2_sk).unwrap();
+        let sig = cryptography::sign(&appointment.inner.to_vec(), &user2_sk);
         watcher.add_appointment(appointment.inner, sig).unwrap();
 
         // Set the carrier response

@@ -767,7 +767,7 @@ mod tests_methods {
 
         // Then try to add an appointment
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         let response = request_to_api::<
             common_msgs::AddAppointmentRequest,
@@ -793,7 +793,7 @@ mod tests_methods {
         let (server_addr, _s) = run_tower_in_background().await;
         let (user_sk, _s) = cryptography::get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         assert_eq!(
             check_api_error(
@@ -846,7 +846,7 @@ mod tests_methods {
 
         // Try to add it via the http API
         let appointment = generate_dummy_appointment(Some(&dispute_tx.compute_txid())).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
         assert_eq!(
             check_api_error(
                 Endpoint::AddAppointment,
@@ -875,7 +875,7 @@ mod tests_methods {
         .await;
         let (user_sk, _) = cryptography::get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         assert_eq!(
             check_api_error(
@@ -915,7 +915,7 @@ mod tests_methods {
 
         // Add an appointment
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         request_to_api::<common_msgs::AddAppointmentRequest, common_msgs::AddAppointmentResponse>(
             Endpoint::AddAppointment,
@@ -939,8 +939,7 @@ mod tests_methods {
                 signature: cryptography::sign(
                     format!("get appointment {}", appointment.locator).as_bytes(),
                     &user_sk,
-                )
-                .unwrap(),
+                ),
             },
             server_addr,
         )
@@ -970,7 +969,6 @@ mod tests_methods {
                         format!("get appointment {}", appointment.locator).as_bytes(),
                         &user_sk,
                     )
-                    .unwrap()
                 })),
                 server_addr,
             )
@@ -1013,7 +1011,6 @@ mod tests_methods {
                         format!("get appointment {}", appointment.locator).as_bytes(),
                         &user_sk,
                     )
-                    .unwrap()
                 })),
                 server_addr,
             )
@@ -1048,7 +1045,6 @@ mod tests_methods {
                         format!("get appointment {}", appointment.locator).as_bytes(),
                         &user_sk,
                     )
-                    .unwrap()
                 })),
                 server_addr,
             )
@@ -1086,8 +1082,7 @@ mod tests_methods {
         >(
             Endpoint::GetSubscriptionInfo,
             common_msgs::GetSubscriptionInfoRequest {
-                signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
-                    .unwrap(),
+                signature: cryptography::sign("get subscription info".as_bytes(), &user_sk),
             },
             server_addr,
         )
@@ -1111,7 +1106,6 @@ mod tests_methods {
                 Endpoint::GetSubscriptionInfo,
                 RequestBody::Json(serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
                     signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
-                        .unwrap(),
                 })),
                 server_addr,
             )
@@ -1139,7 +1133,6 @@ mod tests_methods {
                 Endpoint::GetSubscriptionInfo,
                 RequestBody::Json(serde_json::json!(common_msgs::GetSubscriptionInfoRequest {
                     signature: cryptography::sign("get subscription info".as_bytes(), &user_sk)
-                        .unwrap(),
                 })),
                 server_addr,
             )
