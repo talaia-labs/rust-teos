@@ -9,7 +9,7 @@
  * at your option.
 */
 
-use base64::{engine::general_purpose::URL_SAFE, Engine as _};
+use base64::{engine::general_purpose::URL_SAFE as BASE64, Engine};
 use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
@@ -103,7 +103,7 @@ impl<'a> BitcoindClient<'a> {
             }
         }?;
 
-        let rpc_credentials = URL_SAFE.encode(format!("{}:{}", rpc_user, rpc_password));
+        let rpc_credentials = BASE64.encode(format!("{}:{}", rpc_user, rpc_password));
         let bitcoind_rpc_client = RpcClient::new(&rpc_credentials, http_endpoint);
 
         let client = Self {
@@ -129,10 +129,11 @@ impl<'a> BitcoindClient<'a> {
     }
 
     /// Gets a fresh RPC client.
-    pub fn get_new_rpc_client(&self) -> std::io::Result<RpcClient> {
+    pub fn get_new_rpc_client(&self) -> RpcClient {
         let http_endpoint = HttpEndpoint::for_host(self.host.to_owned()).with_port(self.port);
-        let rpc_credentials = URL_SAFE.encode(format!("{}:{}", self.rpc_user, self.rpc_password));
-        Ok(RpcClient::new(&rpc_credentials, http_endpoint))
+        let rpc_credentials = BASE64.encode(format!("{}:{}", self.rpc_user, self.rpc_password));
+
+        RpcClient::new(&rpc_credentials, http_endpoint)
     }
 
     /// Gets the hash of the chain tip and its height.
