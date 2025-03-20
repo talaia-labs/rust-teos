@@ -313,7 +313,7 @@ pub async fn on_commitment_revocation(
         42,
     );
     let signature =
-        cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk).unwrap();
+        cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk);
 
     // Looks like we cannot iterate through towers given a locked state is not Send (due to the async call),
     // so we need to clone the bare minimum.
