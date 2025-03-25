@@ -373,10 +373,7 @@ pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<V
 }
 
 pub(crate) fn get_full_blocks(last_n_blocks: &[ValidatedBlock]) -> Vec<Block> {
-    last_n_blocks
-        .iter()
-        .map(get_full_block)
-        .collect()
+    last_n_blocks.iter().map(get_full_block).collect()
 }
 
 pub(crate) fn get_full_block(block: &ValidatedBlock) -> Block {
