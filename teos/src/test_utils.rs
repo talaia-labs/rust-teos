@@ -8,6 +8,7 @@
 */
 
 use rand::Rng;
+use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -369,6 +370,20 @@ pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<V
     }
 
     last_n_blocks
+}
+
+pub(crate) fn get_full_blocks(last_n_blocks: &[ValidatedBlock]) -> Vec<Block> {
+    last_n_blocks
+        .iter()
+        .map(get_full_block)
+        .collect()
+}
+
+pub(crate) fn get_full_block(block: &ValidatedBlock) -> Block {
+    match block.deref() {
+        BlockData::FullBlock(b) => b.clone(),
+        _ => panic!("Expected FullBlock"),
+    }
 }
 
 pub(crate) enum MockedServerQuery {
