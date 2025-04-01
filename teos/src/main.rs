@@ -3,13 +3,12 @@ use simple_logger::SimpleLogger;
 use std::fs;
 use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut};
-use std::str::FromStr;
 use std::sync::{Arc, Condvar, Mutex};
 use structopt::StructOpt;
 use tokio::task;
 use tonic::transport::{Certificate, Server, ServerTlsConfig};
 
-use bitcoin::network::constants::Network;
+use bitcoin::network::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use lightning_block_sync::init::validate_best_block_header;
@@ -259,13 +258,6 @@ async fn main() {
         tip.height
     );
 
-    // This is how chain poller names bitcoin networks.
-    let btc_network = match conf.btc_network.as_str() {
-        "main" => "bitcoin",
-        "test" => "testnet",
-        any => any,
-    };
-
     // Build components
     let gatekeeper = Arc::new(Gatekeeper::new(
         tip.height,
@@ -275,7 +267,10 @@ async fn main() {
         dbm.clone(),
     ));
 
-    let mut poller = ChainPoller::new(&mut derefed, Network::from_str(btc_network).unwrap());
+    let mut poller = ChainPoller::new(
+        &mut derefed,
+        Network::from_core_arg(&conf.btc_network).unwrap(),
+    );
     let (responder, watcher) = {
         let last_n_blocks = get_last_n_blocks(&mut poller, tip, IRREVOCABLY_RESOLVED as usize)
             .await.unwrap_or_else(|e| {

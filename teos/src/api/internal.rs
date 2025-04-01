@@ -466,7 +466,7 @@ mod tests_private_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk);
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
@@ -509,7 +509,7 @@ mod tests_private_api {
     async fn test_get_appointments() {
         let (internal_api, _s) = create_api().await;
 
-        let locator = Locator::new(get_random_tx().txid()).to_vec();
+        let locator = Locator::new(get_random_tx().compute_txid()).to_vec();
         let response = internal_api
             .get_appointments(Request::new(msgs::GetAppointmentsRequest { locator }))
             .await
@@ -525,7 +525,7 @@ mod tests_private_api {
 
         for i in 0..3 {
             // Create a dispute tx to be used for creating different dummy appointments with the same locator.
-            let dispute_txid = get_random_tx().txid();
+            let dispute_txid = get_random_tx().compute_txid();
 
             // The number of different appointments to create for this dispute tx.
             let appointments_to_create = 4 * i + 7;
@@ -535,7 +535,7 @@ mod tests_private_api {
                 let (user_sk, user_pk) = get_random_keypair();
                 internal_api.watcher.register(UserId(user_pk)).unwrap();
                 let appointment = generate_dummy_appointment(Some(&dispute_txid)).inner;
-                let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+                let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
                 internal_api
                     .watcher
                     .add_appointment(appointment, signature)
@@ -593,7 +593,7 @@ mod tests_private_api {
                     .add_dummy_tracker_to_responder(&tracker);
             }
 
-            let locator = Locator::new(dispute_tx.txid());
+            let locator = Locator::new(dispute_tx.compute_txid());
 
             // Query for the current locator and assert it retrieves correct trackers.
             let response = internal_api
@@ -648,7 +648,7 @@ mod tests_private_api {
         // Add data to the Watcher
         for _ in 0..2 {
             let appointment = generate_dummy_appointment(None).inner;
-            let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+            let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk);
             internal_api
                 .watcher
                 .add_appointment(appointment.clone(), user_signature)
@@ -731,7 +731,7 @@ mod tests_private_api {
 
         // Add an appointment and check back
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        let user_signature = cryptography::sign(&appointment.inner.to_vec(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.inner.to_vec(), &user_sk);
         internal_api
             .watcher
             .add_appointment(appointment.inner, user_signature)
@@ -901,7 +901,7 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         let response = internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
@@ -926,7 +926,7 @@ mod tests_public_api {
         let (user_sk, _) = get_random_keypair();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
@@ -955,7 +955,7 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
@@ -984,7 +984,7 @@ mod tests_public_api {
         internal_api.watcher.register(UserId(user_pk)).unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
@@ -1021,8 +1021,8 @@ mod tests_public_api {
             .add_dummy_tracker_to_responder(&tracker);
 
         // Try to add it again using the API.
-        let appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let appointment = generate_dummy_appointment(Some(&dispute_tx.compute_txid())).inner;
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
                 appointment: Some(appointment.into()),
@@ -1047,7 +1047,7 @@ mod tests_public_api {
 
         let (user_sk, _) = get_random_keypair();
         let appointment = generate_dummy_appointment(None).inner;
-        let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
 
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {
@@ -1074,7 +1074,7 @@ mod tests_public_api {
 
         // Add the appointment
         let appointment = generate_dummy_appointment(None).inner;
-        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
+        let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk);
         internal_api
             .watcher
             .add_appointment(appointment.clone(), user_signature)
@@ -1085,7 +1085,7 @@ mod tests_public_api {
         let response = internal_api
             .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
                 locator: appointment.locator.to_vec(),
-                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk),
             }))
             .await
             .unwrap()
@@ -1113,7 +1113,7 @@ mod tests_public_api {
         match internal_api
             .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
                 locator: appointment.locator.to_vec(),
-                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk),
             }))
             .await
         {
@@ -1140,7 +1140,7 @@ mod tests_public_api {
         match internal_api
             .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
                 locator: appointment.locator.to_vec(),
-                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk),
             }))
             .await
         {
@@ -1168,7 +1168,7 @@ mod tests_public_api {
         match internal_api
             .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
                 locator: appointment.locator.to_vec(),
-                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk),
             }))
             .await
         {
@@ -1191,7 +1191,7 @@ mod tests_public_api {
         match internal_api
             .get_appointment(Request::new(common_msgs::GetAppointmentRequest {
                 locator: appointment.locator.to_vec(),
-                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk),
             }))
             .await
         {
@@ -1215,7 +1215,7 @@ mod tests_public_api {
         let message = "get subscription info".to_string();
         let response = internal_api
             .get_subscription_info(Request::new(common_msgs::GetSubscriptionInfoRequest {
-                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk),
             }))
             .await
             .unwrap()
@@ -1238,7 +1238,7 @@ mod tests_public_api {
         let message = "get subscription info".to_string();
         match internal_api
             .get_subscription_info(Request::new(common_msgs::GetSubscriptionInfoRequest {
-                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk),
             }))
             .await
         {
@@ -1262,7 +1262,7 @@ mod tests_public_api {
         let message = "get subscription info".to_string();
         match internal_api
             .get_subscription_info(Request::new(common_msgs::GetSubscriptionInfoRequest {
-                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk),
             }))
             .await
         {
@@ -1283,7 +1283,7 @@ mod tests_public_api {
         let message = "get subscription info".to_string();
         match internal_api
             .get_subscription_info(Request::new(common_msgs::GetSubscriptionInfoRequest {
-                signature: cryptography::sign(message.as_bytes(), &user_sk).unwrap(),
+                signature: cryptography::sign(message.as_bytes(), &user_sk),
             }))
             .await
         {
