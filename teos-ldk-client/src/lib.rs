@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::MutexGuard;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -7,20 +9,25 @@ use teos_common::appointment::{Appointment, Locator};
 use teos_common::net::NetAddr;
 use teos_common::receipts::AppointmentReceipt;
 use teos_common::TowerId;
+use teos_common::{cryptography, errors};
 
-pub mod constants;
+use crate::convert::CommitmentRevocation;
+use crate::http::AddAppointmentError;
+use crate::net::http;
+use crate::wt_client::{RevocationData, WTClient};
+
 pub mod convert;
-pub mod dbm;
 pub mod net;
 pub mod retrier;
 mod ser;
+pub mod storage;
 pub mod wt_client;
 
 #[cfg(test)]
 mod test_utils;
 
 /// The status the tower can be found at.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Copy, Debug)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq, Copy, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum TowerStatus {
     Reachable,
@@ -195,20 +202,21 @@ impl From<TowerInfo> for TowerSummary {
 }
 
 /// Summarized data associated with a given tower.
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
 pub struct TowerInfo {
     pub net_addr: String,
     pub available_slots: u32,
     pub subscription_start: u32,
     pub subscription_expiry: u32,
     pub status: TowerStatus,
-    #[serde(serialize_with = "crate::ser::serialize_receipts")]
+    #[serde(default)]
     pub appointments: HashMap<Locator, String>,
-    #[serde(serialize_with = "crate::ser::serialize_appointments")]
+    #[serde(default)]
     pub pending_appointments: Vec<Appointment>,
-    #[serde(serialize_with = "crate::ser::serialize_appointments")]
+    #[serde(default)]
     pub invalid_appointments: Vec<Appointment>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub misbehaving_proof: Option<MisbehaviorProof>,
 }
 
@@ -246,6 +254,14 @@ impl TowerInfo {
     pub fn set_misbehaving_proof(&mut self, proof: MisbehaviorProof) {
         self.misbehaving_proof = Some(proof);
     }
+
+    pub fn to_vec(&self) -> Result<Vec<u8>, bincode::Error> {
+        bincode::serialize(self)
+    }
+
+    pub fn from_slice(slice: &[u8]) -> Result<Self, bincode::Error> {
+        bincode::deserialize(slice)
+    }
 }
 
 /// A misbehaving proof. Contains proof of a tower replying with a public key different from the advertised one.
@@ -269,6 +285,142 @@ impl MisbehaviorProof {
             appointment_receipt,
             recovered_id,
         }
+    }
+}
+
+/// Sends an appointment to all registered towers for every new commitment transaction.
+///
+/// The appointment is built using the data provided by the backend (dispute txid and penalty transaction).
+pub async fn on_commitment_revocation(
+    wt_client: Arc<Mutex<WTClient>>,
+    commitment_revocation: CommitmentRevocation,
+) -> Result<(), Box<dyn std::error::Error>> {
+    log::debug!(
+        "New commitment revocation received for channel {}. Commit number {}",
+        commitment_revocation.channel_id,
+        commitment_revocation.commit_num
+    );
+
+    // TODO: For now, to_self_delay is hardcoded to 42. Revisit and define it better / remove it when / if needed
+    let locator = Locator::new(commitment_revocation.commitment_txid);
+    let appointment = Appointment::new(
+        locator,
+        cryptography::encrypt(
+            &commitment_revocation.penalty_tx,
+            &commitment_revocation.commitment_txid,
+        )
+        .unwrap(),
+        42,
+    );
+    let signature = cryptography::sign(&appointment.to_vec(), &wt_client.lock().unwrap().user_sk);
+
+    // Looks like we cannot iterate through towers given a locked state is not Send (due to the async call),
+    // so we need to clone the bare minimum.
+    let towers = wt_client
+        .lock()
+        .unwrap()
+        .towers
+        .iter()
+        .map(|(id, info)| (*id, info.net_addr.clone(), info.status))
+        .collect::<Vec<_>>();
+
+    for (tower_id, net_addr, status) in towers {
+        if status.is_reachable() {
+            match http::add_appointment(tower_id, &net_addr, &appointment, &signature).await {
+                Ok((slots, receipt)) => {
+                    wt_client
+                        .lock()
+                        .unwrap()
+                        .add_appointment_receipt(tower_id, locator, slots, &receipt);
+                    log::debug!("Response verified and data stored in the database");
+                }
+                Err(e) => match e {
+                    AddAppointmentError::RequestError(e) => {
+                        if e.is_connection() {
+                            log::warn!(
+                                "{tower_id} cannot be reached. Adding {} to pending appointments",
+                                appointment.locator
+                            );
+                            let mut state = wt_client.lock().unwrap();
+                            state.set_tower_status(tower_id, TowerStatus::TemporaryUnreachable);
+                            state.add_pending_appointment(tower_id, &appointment);
+                            send_to_retrier(&state, tower_id, appointment.locator);
+                        }
+                    }
+                    AddAppointmentError::ApiError(e) => match e.error_code {
+                        errors::INVALID_SIGNATURE_OR_SUBSCRIPTION_ERROR => {
+                            log::warn!(
+                                "There is a subscription issue with {tower_id}. Adding {} to pending",
+                                appointment.locator
+                            );
+                            let mut state = wt_client.lock().unwrap();
+                            state.set_tower_status(tower_id, TowerStatus::SubscriptionError);
+                            state.add_pending_appointment(tower_id, &appointment);
+                            send_to_retrier(&state, tower_id, appointment.locator);
+                        }
+
+                        _ => {
+                            log::warn!(
+                                "{tower_id} rejected the appointment. Error: {}, error_code: {}",
+                                e.error,
+                                e.error_code
+                            );
+                            wt_client
+                                .lock()
+                                .unwrap()
+                                .add_invalid_appointment(tower_id, &appointment);
+                        }
+                    },
+                    AddAppointmentError::SignatureError(proof) => {
+                        log::warn!("Cannot recover known tower_id from the appointment receipt. Flagging tower as misbehaving");
+                        wt_client
+                            .lock()
+                            .unwrap()
+                            .flag_misbehaving_tower(tower_id, proof)
+                    }
+                },
+            };
+        } else if status.is_misbehaving() {
+            log::warn!("{tower_id} is misbehaving. Not sending any further appointments",);
+        } else {
+            if status.is_subscription_error() {
+                log::warn!(
+                    "There is a subscription issue with {tower_id}. Adding {} to pending",
+                    appointment.locator
+                );
+            } else {
+                log::warn!(
+                    "{tower_id} is {status}. Adding {} to pending",
+                    appointment.locator,
+                );
+            }
+
+            let mut state = wt_client.lock().unwrap();
+            state.add_pending_appointment(tower_id, &appointment);
+
+            if !status.is_unreachable() {
+                send_to_retrier(&state, tower_id, appointment.locator);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Sends fresh data to a retrier as long as is does not exist, or it does and its running.
+fn send_to_retrier(state: &MutexGuard<WTClient>, tower_id: TowerId, locator: Locator) {
+    if if let Some(status) = state.get_retrier_status(&tower_id) {
+        // A retrier in the retriers map can only be running or idle
+        status.is_running()
+    } else {
+        true
+    } {
+        state
+            .unreachable_towers
+            .send((tower_id, RevocationData::Fresh(locator)))
+            .unwrap();
+    } else {
+        log::debug!("Not sending data to idle retrier ({tower_id}, {locator})")
     }
 }
 

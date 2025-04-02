@@ -1,6 +1,6 @@
 //! Receipts issued  by towers and handed to users as commitment proof.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use bitcoin::secp256k1::SecretKey;
 
@@ -19,7 +19,7 @@ use crate::{cryptography, UserId};
 /// as long as the user info is still known. That is, if a user has a subscription with range (S, E) and the user renews the subscription
 /// before the tower wipes their data, then the tower can create a new receipt with (S, E') for E' > E instead of a second receipt (E, E').
 // Notice this only applies as long as there is no gap between the two subscriptions.
-#[derive(Serialize, Debug, Eq, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct RegistrationReceipt {
     user_id: UserId,
     available_slots: u32,
@@ -107,7 +107,7 @@ impl RegistrationReceipt {
 /// Proof that a certain state was backed up with the tower.
 ///
 /// Appointment receipts can be used alongside a registration receipt that covers it, and on chain data (a breach not being reacted with a penalty), to prove a tower has not reacted to a channel breach.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq, Serialize)]
 pub struct AppointmentReceipt {
     user_signature: String,
     start_block: u32,
