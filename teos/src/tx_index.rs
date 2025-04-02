@@ -112,22 +112,17 @@ where
         };
 
         for block in last_n_blocks.iter().rev() {
-            if let Some(prev_block_hash) = tx_index.blocks.back() {
-                match block.deref() {
-                    lightning_block_sync::BlockData::FullBlock(_) => {}
-                    lightning_block_sync::BlockData::HeaderOnly(header) => {
-                        if header.prev_blockhash != *prev_block_hash {
-                            panic!("last_n_blocks contains unchained blocks");
-                        }
-                    }
-                }
-            };
-
             match block.deref() {
                 lightning_block_sync::BlockData::HeaderOnly(_) => {
                     panic!("Expected FullBlock")
                 }
                 lightning_block_sync::BlockData::FullBlock(block) => {
+                    if let Some(prev_block_hash) = tx_index.blocks.back() {
+                        if block.header.prev_blockhash != *prev_block_hash {
+                            panic!("last_n_blocks contains unchained blocks");
+                        }
+                    };
+
                     let map = block
                         .txdata
                         .iter()
