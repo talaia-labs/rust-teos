@@ -11,8 +11,22 @@ env:
   cln_version: "24.11.1"
 
 jobs:
+  check-cln-cache:
+    runs-on: ubuntu-latest
+    outputs:
+      cache-hit: ${{ steps.cache.outputs.cache-hit }}
+    steps:
+      - name: Check CLN cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: lightning
+          key: ${{ runner.os }}-build-cache-cln-dev-v${{ env.cln_version }}
+
   cache-cln:
     runs-on: ubuntu-latest
+    needs: check-cln-cache
+    if: ${{ needs.check-cln-cache.outputs.cache-hit != 'true' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,26 +37,22 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Create CLN cache
-        id: cache-cln
         uses: actions/cache@v4
-        env:
-          cache-name: cache-cln-dev
         with:
           path: lightning
-          key: ${{ runner.os }}-build-${{ env.cache-name }}-v${{ env.cln_version }}
+          key: ${{ runner.os }}-build-cache-cln-dev-v${{ env.cln_version }}
       - name: Compile CLN
         env:
           PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
-        if: ${{ steps.cache-cln.outputs.cache-hit != 'true' }}
         run: |
           sudo apt-get update && sudo apt-get install -y gettext
           git clone https://github.com/ElementsProject/lightning.git && cd lightning && git checkout v${{ env.cln_version }}
           pip install --user poetry && poetry install
-          cargo update -p time
-          ./configure && poetry run make
+          ./configure && poetry run make -j 8
 
   cln-plugin:
     needs: cache-cln
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +66,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.81.0
+          toolchain: stable
           components: rustfmt, clippy
       - name: Install bitcoind
         run: |
@@ -66,15 +76,12 @@ jobs:
       - name: Load CLN cache
         id: cache-cln
         uses: actions/cache@v4
-        env:
-          cache-name: cache-cln-dev
         with:
           path: lightning
-          key: ${{ runner.os }}-build-${{ env.cache-name }}-v${{ env.cln_version }}
-        - name: Link CLN
-          run: |
-            source $HOME/.cargo/env
-            cd lightning && sudo make install
+          key: ${{ runner.os }}-build-cache-cln-dev-v${{ env.cln_version }}
+      - name: Link CLN
+        run: |
+          cd lightning && sudo PATH=$PATH make install
       - name: Install teos and the plugin
         run: |
           cargo install --locked --path teos
@@ -82,7 +89,7 @@ jobs:
       - name: Add test dependencies
         run: |
           cd watchtower-plugin/tests
-          pip install --user poetry && poetry install
+          pip install --user poetry && poetry install --no-root
       - name: Run tests
         run: |
           cd watchtower-plugin/tests
