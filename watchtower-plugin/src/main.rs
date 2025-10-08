@@ -107,7 +107,7 @@ async fn register(
     );
 
     let tower_net_addr = {
-        if !host.starts_with("http://") {
+        if !host.starts_with("http://") && !host.starts_with("https://") {
             host = format!("http://{host}")
         }
         NetAddr::new(format!("{host}:{port}"))
