@@ -6,6 +6,7 @@ import "user.proto";
 import "common/teos/v2/appointment.proto";
 import "common/teos/v2/user.proto";
 import "google/protobuf/empty.proto";
+import "google/protobuf/wrappers.proto";
 
 message NetworkAddress {
   // Tower public API endpoint.
@@ -46,5 +47,6 @@ service PrivateTowerServices {
   rpc get_tower_info(google.protobuf.Empty) returns (GetTowerInfoResponse) {}
   rpc get_users(google.protobuf.Empty) returns (GetUsersResponse) {}
   rpc get_user(GetUserRequest) returns (GetUserResponse) {}
+  rpc sign_message(google.protobuf.StringValue) returns (google.protobuf.StringValue) {}
   rpc stop(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }
