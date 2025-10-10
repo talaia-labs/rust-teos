@@ -80,17 +80,19 @@ impl Carrier {
     pub(crate) fn send_transaction(&mut self, tx: &Transaction) -> ConfirmationStatus {
         self.hang_until_bitcoind_reachable();
 
-        if let Some(receipt) = self.issued_receipts.get(&tx.compute_txid()) {
-            log::info!("Transaction already sent: {}", tx.compute_txid());
+        let txid = tx.compute_txid();
+
+        if let Some(receipt) = self.issued_receipts.get(&txid) {
+            log::info!("Transaction already sent: {}", txid);
             return *receipt;
         }
 
-        log::info!("Pushing transaction to the network: {}", tx.compute_txid());
+        log::info!("Pushing transaction to the network: {}", txid);
         let receipt = match self.bitcoin_cli.send_raw_transaction(tx) {
             Ok(_) => {
                 // Here the transaction could, potentially, have been in mempool before the current height.
                 // This shouldn't really matter though.
-                log::info!("Transaction successfully delivered: {}", tx.compute_txid());
+                log::info!("Transaction successfully delivered: {}", txid);
                 ConfirmationStatus::InMempoolSince(self.block_height)
             }
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
@@ -106,9 +108,8 @@ impl Carrier {
                 rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {
                     log::info!(
                         "Transaction was confirmed long ago, not keeping track of it: {}",
-                        tx.compute_txid()
+                        txid
                     );
-
                     // Given we are not using txindex, if a transaction bounces we cannot get its confirmation count. However, [send_transaction] is guarded by
                     // checking whether the transaction id can be found in the [Responder]'s [TxIndex], meaning that if the transaction bounces it was confirmed long
                     // ago (> IRREVOCABLY_RESOLVED), so we don't need to worry about it.
@@ -117,7 +118,7 @@ impl Carrier {
                 rpc_errors::RPC_DESERIALIZATION_ERROR => {
                     // Adding this here just for completeness. We should never end up here. The Carrier only sends txs handed by the Responder,
                     // who receives them from the Watcher, who checks that the tx can be properly deserialized.
-                    log::info!("Transaction cannot be deserialized: {}", tx.compute_txid());
+                    log::info!("Transaction cannot be deserialized: {}", txid);
                     ConfirmationStatus::Rejected(rpc_errors::RPC_DESERIALIZATION_ERROR)
                 }
                 _ => {
@@ -139,7 +140,7 @@ impl Carrier {
             }
         };
 
-        self.issued_receipts.insert(tx.compute_txid(), receipt);
+        self.issued_receipts.insert(txid, receipt);
 
         receipt
     }
