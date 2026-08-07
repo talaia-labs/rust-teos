@@ -1,0 +1,36 @@
+[package]
+name = "ldk-watchtower-client"
+version = "0.1.0"
+authors = ["Vincenzo Palazzo <vincenzopalazzodev@gmail.com>"]
+license = "MIT"
+edition = "2021"
+description = "Watchtower client for ldk-server nodes. Polls an ldk-server WatchtowerStateExport endpoint and ships teos (Eye of Satoshi) appointments to a tower over Tor."
+
+[[bin]]
+name = "ldk-watchtower-client"
+path = "src/main.rs"
+
+[dependencies]
+# General
+backoff = "0.4.0"
+hex = { version = "0.4.3", features = [ "serde" ] }
+home = "0.5.3"
+log = "0.4"
+prost = "0.12"
+reqwest = { version = "0.11", features = [ "blocking", "json", "socks" ] }
+rusqlite = { version = "0.26.0", features = [ "bundled", "limits" ] }
+serde = "1.0.130"
+serde_json = { version = "1.0", features = [ "preserve_order" ] }
+simple_logger = "2.1.0"
+structopt = "0.3"
+toml = "0.5"
+triggered = "0.1.2"
+
+# Bitcoin and Lightning
+bitcoin = "0.28.0"
+
+# Local
+teos-common = { path = "../teos-common" }
+
+[dev-dependencies]
+tempdir = "0.3.7"

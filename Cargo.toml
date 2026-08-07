@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "ldk-watchtower-client",
     "teos",
     "teos-common",
     "watchtower-plugin"
