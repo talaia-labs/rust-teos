@@ -12,6 +12,7 @@ use triggered::{Listener, Trigger};
 pub struct TorAPI {
     sk: TorSecretKeyV3,
     api_endpoint: SocketAddr,
+    tor_control_host: String,
     onion_port: u16,
     tor_control_port: u16,
 }
@@ -19,6 +20,7 @@ pub struct TorAPI {
 impl TorAPI {
     pub async fn new(
         api_endpoint: SocketAddr,
+        tor_control_host: String,
         onion_port: u16,
         tor_control_port: u16,
         path: PathBuf,
@@ -35,6 +37,7 @@ impl TorAPI {
         Self {
             sk: key,
             api_endpoint,
+            tor_control_host,
             onion_port,
             tor_control_port,
         }
@@ -68,7 +71,7 @@ impl TorAPI {
 
     /// Tries to connect to the Tor control port
     async fn connect_tor_cp(&self) -> Result<TcpStream, Error> {
-        let sock = TcpStream::connect(format!("127.0.0.1:{}", self.tor_control_port))
+        let sock = TcpStream::connect(format!("{}:{}", self.tor_control_host, self.tor_control_port))
             .await
             .map_err(|_| {
                 Error::new(
@@ -194,6 +197,7 @@ mod tests {
         let tmp_path = TempDir::new(&format!("data_dir_{}", get_random_user_id())).unwrap();
         let tor_api = TorAPI::new(
             "127.0.1.1:9814".parse().unwrap(),
+            "127.0.0.1".into(),
             9814,
             wrong_cp,
             tmp_path.path().into(),
