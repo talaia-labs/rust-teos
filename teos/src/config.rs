@@ -120,6 +120,10 @@ pub struct Opt {
     #[structopt(long)]
     pub tor_control_port: Option<u16>,
 
+    /// Tor control host [default: 127.0.0.1]
+    #[structopt(long)]
+    pub tor_control_host: Option<String>,
+
     /// Port for the onion hidden service to listen on [default: 9814]
     #[structopt(long)]
     pub onion_hidden_service_port: Option<u16>,
@@ -169,6 +173,7 @@ pub struct Config {
 
     // Tor
     pub tor_support: bool,
+    pub tor_control_host: String,
     pub tor_control_port: u16,
     pub onion_hidden_service_port: u16,
 }
@@ -226,6 +231,9 @@ impl Config {
         }
         if options.tor_control_port.is_some() {
             self.tor_control_port = options.tor_control_port.unwrap();
+        }
+        if options.tor_control_host.is_some() {
+            self.tor_control_host = options.tor_control_host.unwrap();
         }
         if options.onion_hidden_service_port.is_some() {
             self.onion_hidden_service_port = options.onion_hidden_service_port.unwrap();
@@ -318,6 +326,7 @@ impl Default for Config {
             api_bind: "127.0.0.1".into(),
             api_port: 9814,
             tor_support: false,
+            tor_control_host: "127.0.0.1".into(),
             tor_control_port: 9051,
             onion_hidden_service_port: 9814,
             rpc_bind: "127.0.0.1".into(),
@@ -354,6 +363,7 @@ mod tests {
                 api_bind: None,
                 api_port: None,
                 tor_support: false,
+                tor_control_host: None,
                 tor_control_port: None,
                 onion_hidden_service_port: None,
                 rpc_bind: None,

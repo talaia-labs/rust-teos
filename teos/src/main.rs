@@ -344,6 +344,7 @@ async fn main() {
     let tor_api = if conf.tor_support {
         let tor_api = TorAPI::new(
             http_api_addr,
+            conf.tor_control_host,
             conf.onion_hidden_service_port,
             conf.tor_control_port,
             path_network,
