@@ -1471,7 +1471,10 @@ mod tests {
         assert!(matches!(
             dbm.update_tracker_status(
                 uuid,
-                &ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED)
+                &ConfirmationStatus::Rejected {
+                    code: rpc_errors::RPC_VERIFY_REJECTED,
+                    permanent: false,
+                }
             ),
             Err(Error::MissingField)
         ));
@@ -1661,9 +1664,10 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
 
         assert!(matches!(
-            dbm.load_trackers_with_confirmation_status(ConfirmationStatus::Rejected(
-                rpc_errors::RPC_VERIFY_REJECTED
-            )),
+            dbm.load_trackers_with_confirmation_status(ConfirmationStatus::Rejected {
+                code: rpc_errors::RPC_VERIFY_REJECTED,
+                permanent: false
+            }),
             Err(Error::MissingField)
         ));
 

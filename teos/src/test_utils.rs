@@ -553,6 +553,8 @@ pub(crate) struct BitcoindMock {
 #[derive(Default)]
 pub(crate) struct MockOptions {
     error_code: Option<i64>,
+    /// Rejection message to answer with, so the reason parsing can be exercised.
+    error_message: Option<String>,
     in_mempool: bool,
 }
 
@@ -560,6 +562,17 @@ impl MockOptions {
     pub fn with_error(error_code: i64) -> Self {
         Self {
             error_code: Some(error_code),
+            error_message: None,
+            in_mempool: false,
+        }
+    }
+
+    /// Answers with a rejection carrying a message, the way `bitcoind` reports why a transaction
+    /// was turned down.
+    pub fn with_error_message(error_code: i64, error_message: &str) -> Self {
+        Self {
+            error_code: Some(error_code),
+            error_message: Some(error_message.to_owned()),
             in_mempool: false,
         }
     }
@@ -567,6 +580,7 @@ impl MockOptions {
     pub fn in_mempool() -> Self {
         Self {
             error_code: None,
+            error_message: None,
             in_mempool: true,
         }
     }
@@ -577,8 +591,13 @@ impl BitcoindMock {
         let mut io = IoHandler::default();
 
         if let Some(error) = options.error_code {
+            let message = options.error_message;
             io.add_sync_method("error", move |_params: Params| {
-                Err(JsonRpcError::new(JsonRpcErrorCode::ServerError(error)))
+                let mut e = JsonRpcError::new(JsonRpcErrorCode::ServerError(error));
+                if let Some(message) = &message {
+                    e.message = message.clone();
+                }
+                Err(e)
             });
             io.add_alias("sendrawtransaction", "error");
             io.add_alias("getrawtransaction", "error");

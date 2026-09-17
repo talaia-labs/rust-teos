@@ -94,14 +94,16 @@ impl Carrier {
                 ConfirmationStatus::InMempoolSince(self.block_height)
             }
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
-                // Since we're pushing a raw transaction to the network we can face several rejections
-                rpc_errors::RPC_VERIFY_REJECTED => {
+                // Since we're pushing a raw transaction to the network we can face several rejections.
+                // Both of these codes lump together reasons we can retry, such as a full mempool, and
+                // reasons we cannot, such as a script that will never verify, so the message is what
+                // tells them apart.
+                rpc_errors::RPC_VERIFY_REJECTED | rpc_errors::RPC_VERIFY_ERROR => {
                     log::error!("Transaction couldn't be broadcast. {rpcerr:?}");
-                    ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED)
-                }
-                rpc_errors::RPC_VERIFY_ERROR => {
-                    log::error!("Transaction couldn't be broadcast. {rpcerr:?}");
-                    ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
+                    ConfirmationStatus::Rejected {
+                        code: rpcerr.code,
+                        permanent: rpc_errors::is_permanent_rejection(rpcerr.code, &rpcerr.message),
+                    }
                 }
                 rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {
                     log::info!(
@@ -118,12 +120,18 @@ impl Carrier {
                     // Adding this here just for completeness. We should never end up here. The Carrier only sends txs handed by the Responder,
                     // who receives them from the Watcher, who checks that the tx can be properly deserialized.
                     log::info!("Transaction cannot be deserialized: {}", tx.compute_txid());
-                    ConfirmationStatus::Rejected(rpc_errors::RPC_DESERIALIZATION_ERROR)
+                    ConfirmationStatus::Rejected {
+                        code: rpc_errors::RPC_DESERIALIZATION_ERROR,
+                        permanent: true,
+                    }
                 }
                 _ => {
                     // If something else happens (unlikely but possible) log it so we can treat it in future releases.
                     log::error!("Unexpected rpc error when calling sendrawtransaction: {rpcerr:?}");
-                    ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION)
+                    ConfirmationStatus::Rejected {
+                        code: errors::UNKNOWN_JSON_RPC_EXCEPTION,
+                        permanent: false,
+                    }
                 }
             },
             Err(JsonRpcError(TransportError(_))) => {
@@ -135,7 +143,10 @@ impl Carrier {
             Err(e) => {
                 // TODO: This may need finer catching.
                 log::error!("Unexpected error when calling sendrawtransaction: {e:?}");
-                ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION)
+                ConfirmationStatus::Rejected {
+                    code: errors::UNKNOWN_JSON_RPC_EXCEPTION,
+                    permanent: false,
+                }
             }
         };
 
@@ -266,6 +277,29 @@ mod tests {
     }
 
     #[test]
+    fn test_send_transaction_permanently_rejected() {
+        // The reason, and not just the code, is what tells a dead penalty from a congested one
+        let bitcoind_mock = BitcoindMock::new(MockOptions::with_error_message(
+            rpc_errors::RPC_VERIFY_REJECTED as i64,
+            "block-script-verify-flag-failed (Operation not valid with the current stack size)",
+        ));
+        let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
+        let bitcoin_cli = Arc::new(BitcoindClient::new(bitcoind_mock.url(), Auth::None).unwrap());
+        start_server(bitcoind_mock.server);
+
+        let mut carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, START_HEIGHT as u32);
+        let tx = consensus::deserialize(&Vec::from_hex(TX_HEX).unwrap()).unwrap();
+
+        assert_eq!(
+            carrier.send_transaction(&tx),
+            ConfirmationStatus::Rejected {
+                code: rpc_errors::RPC_VERIFY_REJECTED,
+                permanent: true,
+            }
+        );
+    }
+
+    #[test]
     fn test_send_transaction_verify_rejected() {
         let bitcoind_mock = BitcoindMock::new(MockOptions::with_error(
             rpc_errors::RPC_VERIFY_REJECTED as i64,
@@ -281,7 +315,10 @@ mod tests {
 
         assert_eq!(
             r,
-            ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_REJECTED)
+            ConfirmationStatus::Rejected {
+                code: rpc_errors::RPC_VERIFY_REJECTED,
+                permanent: false,
+            }
         );
 
         // Check the receipt is on the cache
@@ -303,7 +340,10 @@ mod tests {
 
         assert_eq!(
             r,
-            ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
+            ConfirmationStatus::Rejected {
+                code: rpc_errors::RPC_VERIFY_ERROR,
+                permanent: false,
+            }
         );
 
         // Check the receipt is on the cache
@@ -345,7 +385,10 @@ mod tests {
 
         assert_eq!(
             r,
-            ConfirmationStatus::Rejected(errors::UNKNOWN_JSON_RPC_EXCEPTION)
+            ConfirmationStatus::Rejected {
+                code: errors::UNKNOWN_JSON_RPC_EXCEPTION,
+                permanent: false,
+            }
         );
 
         // Check the receipt is on the cache

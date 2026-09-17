@@ -1,6 +1,6 @@
 //! Logic related to the Responder, the components in charge of making sure breaches get properly punished.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use bitcoin::hashes::Hash;
@@ -24,13 +24,27 @@ use crate::watcher::Breach;
 /// Number of missed confirmations to wait before rebroadcasting a transaction.
 const CONFIRMATIONS_BEFORE_RETRY: u8 = 6;
 
+/// Number of blocks a penalty that cannot be published is retried for before giving up on it (~1 week).
+const MAX_UNPUBLISHED_BLOCKS: u32 = 1008;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// The confirmation status of a given penalty transaction.
 pub enum ConfirmationStatus {
     ConfirmedIn(u32),
+    /// The penalty is unconfirmed and gets rebroadcast every [CONFIRMATIONS_BEFORE_RETRY] blocks. It
+    /// need not be in the node's mempool: it may have been evicted, or turned down for something that
+    /// can clear up later, such as a full mempool.
+    ///
+    /// TODO(#240): Penalties the backend never took deserve their own status, same as reorged out ones
+    /// (see [Responder::reorged_trackers]). Without it there is nowhere to record how long one has been
+    /// unpublished, hence no giving up on it.
     InMempoolSince(u32),
     IrrevocablyResolved,
-    Rejected(i32),
+    // The penalty was rejected by the backend. The `permanent` field tells whether it can be retried or not.
+    Rejected {
+        code: i32,
+        permanent: bool,
+    },
 }
 
 impl ConfirmationStatus {
@@ -61,6 +75,35 @@ impl ConfirmationStatus {
         matches!(
             self,
             ConfirmationStatus::ConfirmedIn(_) | &ConfirmationStatus::InMempoolSince(_)
+        )
+    }
+
+    /// Whether the transaction was rejected for good, that is, it can never be accepted as-is.
+    ///
+    /// Told apart by the [Carrier](crate::carrier::Carrier) out of the rejection reason, defaulting to
+    /// retrying whenever the reason is not one we recognise: dropping a penalty that may still make it
+    /// to the network means giving up on punishing a breach.
+    ///
+    /// Notice this only sharpens the classification. Whoever crafts the penalty also picks the reason
+    /// the backend reports, so it does not bound how long an unpublishable one is kept around.
+    pub fn is_permanently_rejected(&self) -> bool {
+        matches!(
+            self,
+            ConfirmationStatus::Rejected {
+                permanent: true,
+                ..
+            }
+        )
+    }
+
+    /// Whether the transaction was rejected in a way that may be solved by retrying later on.
+    pub fn is_transiently_rejected(&self) -> bool {
+        matches!(
+            self,
+            ConfirmationStatus::Rejected {
+                permanent: false,
+                ..
+            }
         )
     }
 }
@@ -145,6 +188,10 @@ pub struct Responder {
     dbm: Arc<Mutex<DBM>>,
     /// A list of all the reorged trackers that might need to be republished after reorg resolution.
     reorged_trackers: Mutex<HashSet<UUID>>,
+    /// Heights at which penalties the backend keeps turning down were first found to be unpublishable.
+    ///
+    /// TODO(#240): Move to the tracker row, same as [Responder::reorged_trackers].
+    unpublished_since: Mutex<HashMap<UUID, u32>>,
 }
 
 impl Responder {
@@ -162,6 +209,7 @@ impl Responder {
             dbm,
             gatekeeper,
             reorged_trackers: Mutex::new(HashSet::new()),
+            unpublished_since: Mutex::new(HashMap::new()),
         }
     }
 
@@ -184,27 +232,48 @@ impl Responder {
     ///
     /// Breaches can either be added to the [Responder] in the form of a [TransactionTracker] if the [penalty transaction](Breach::penalty_tx)
     /// is accepted by the `bitcoind` or rejected otherwise.
+    ///
+    /// Notice a rejection is not necessarily final. A penalty that is only
+    /// [transiently rejected](ConfirmationStatus::is_transiently_rejected) is tracked all the same, as
+    /// [ConfirmationStatus::InMempoolSince], so that [Responder::rebroadcast_stale_txs] keeps trying to
+    /// publish it. The caller must therefore not wipe the appointment data in that case. Only
+    /// [permanent rejections](ConfirmationStatus::is_permanently_rejected) are final.
     pub(crate) fn handle_breach(
         &self,
         uuid: UUID,
         breach: Breach,
         user_id: UserId,
     ) -> ConfirmationStatus {
-        let mut carrier = self.carrier.lock().unwrap();
-        let tx_index = self.tx_index.lock().unwrap();
+        let (status, height) = {
+            let mut carrier = self.carrier.lock().unwrap();
+            let tx_index = self.tx_index.lock().unwrap();
+            let height = carrier.block_height();
 
-        // Check whether the transaction is in mempool or part of our internal txindex. Send it to our node otherwise.
-        let status = if let Some(block_hash) = tx_index.get(&breach.penalty_tx.compute_txid()) {
-            ConfirmationStatus::ConfirmedIn(tx_index.get_height(block_hash).unwrap() as u32)
-        } else if carrier.in_mempool(&breach.penalty_tx.compute_txid()) {
-            // If it's in mempool we assume it was just included
-            ConfirmationStatus::InMempoolSince(carrier.block_height())
-        } else {
-            carrier.send_transaction(&breach.penalty_tx)
+            // Check whether the transaction is in mempool or part of our internal txindex. Send it to our node otherwise.
+            let status = if let Some(block_hash) = tx_index.get(&breach.penalty_tx.compute_txid()) {
+                ConfirmationStatus::ConfirmedIn(tx_index.get_height(block_hash).unwrap() as u32)
+            } else if carrier.in_mempool(&breach.penalty_tx.compute_txid()) {
+                // If it's in mempool we assume it was just included
+                ConfirmationStatus::InMempoolSince(height)
+            } else {
+                carrier.send_transaction(&breach.penalty_tx)
+            };
+
+            (status, height)
         };
 
         if status.accepted() {
             self.add_tracker(uuid, breach, user_id, status);
+        } else if status.is_transiently_rejected() {
+            // The penalty may still make it to the network, so it is tracked as any other unconfirmed
+            // one instead of being dropped. From here on it is just another stale tracker to retry.
+            log::warn!("Penalty transaction couldn't be broadcast, will be retried (uuid={uuid})");
+            self.add_tracker(
+                uuid,
+                breach,
+                user_id,
+                ConfirmationStatus::InMempoolSince(height),
+            );
         }
 
         status
@@ -238,6 +307,17 @@ impl Responder {
                 "Failed to store tracker in database (uuid={uuid}). It might be already stored."
             );
         }
+    }
+
+    /// Whether a penalty has been impossible to publish for long enough to give up on it.
+    ///
+    /// The clock starts on the first rebroadcast that finds it still unpublishable, so it does not
+    /// survive a restart. Erring on the generous side there just means retrying for longer.
+    fn unpublishable_for_too_long(&self, uuid: UUID, height: u32) -> bool {
+        let mut unpublished_since = self.unpublished_since.lock().unwrap();
+        let since = *unpublished_since.entry(uuid).or_insert(height);
+
+        height.saturating_sub(since) >= MAX_UNPUBLISHED_BLOCKS
     }
 
     /// Checks whether a given tracker can be found in the [Responder].
@@ -322,9 +402,9 @@ impl Responder {
                     );
                     true
                 }
-                ConfirmationStatus::Rejected(e) => {
+                ConfirmationStatus::Rejected { code, .. } => {
                     log::error!(
-                        "Reorged dispute tx (txid={}) rejected during rebroadcast (reason: {e:?})",
+                        "Reorged dispute tx (txid={}) rejected during rebroadcast (reason: {code:?})",
                         dispute_txid
                     );
                     false
@@ -337,7 +417,7 @@ impl Responder {
 
             if should_publish_penalty {
                 // Try to rebroadcast the penalty tx.
-                if let ConfirmationStatus::Rejected(_) =
+                if let ConfirmationStatus::Rejected { .. } =
                     carrier.send_transaction(&tracker.penalty_tx)
                 {
                     rejected.push(uuid)
@@ -361,7 +441,8 @@ impl Responder {
     /// This covers the case where a transaction is not getting confirmations (most likely due to low
     /// fess and needs to be bumped, but there is not much we can do until anchors).
     ///
-    /// Returns a vector of rejected trackers during rebroadcast if any were rejected, [None] otherwise.
+    /// Returns a vector of trackers rejected for good during rebroadcast if any were, [None] otherwise.
+    /// Transiently rejected ones are kept around and tried again on a later block.
     fn rebroadcast_stale_txs(&self, height: u32) -> Option<Vec<UUID>> {
         let dbm = self.dbm.lock().unwrap();
         let mut carrier = self.carrier.lock().unwrap();
@@ -384,9 +465,22 @@ impl Responder {
             );
             // Rebroadcast the penalty transaction.
             let status = carrier.send_transaction(&tracker.penalty_tx);
-            if let ConfirmationStatus::Rejected(_) = status {
+            if status.is_permanently_rejected() {
                 rejected.push(uuid);
+            } else if status.is_transiently_rejected() {
+                if self.unpublishable_for_too_long(uuid, height) {
+                    log::warn!("Giving up on a penalty we cannot publish (uuid={uuid})");
+                    rejected.push(uuid);
+                } else {
+                    // The penalty may still be accepted later on, so the tracker is kept. Re-stamping
+                    // the height is what puts the next attempt `CONFIRMATIONS_BEFORE_RETRY` blocks away
+                    // instead of on the very next one.
+                    dbm.update_tracker_status(uuid, &ConfirmationStatus::InMempoolSince(height))
+                        .unwrap();
+                }
             } else {
+                // It finally made it, so the clock stops
+                self.unpublished_since.lock().unwrap().remove(&uuid);
                 // DISCUSS: What if the tower was down for some time and was later force updated while this penalty got on-chain?
                 // Sending it will yield `ConfirmationStatus::IrrevocablyResolved` which would panic here.
                 // We might want to replace `ConfirmationStatus::IrrevocablyResolved` variant with
@@ -446,6 +540,12 @@ impl chain::Listen for Responder {
             trackers_to_delete.extend(trackers);
         }
 
+        // No entry outlives the horizon: either we just gave up on it, or its tracker is long gone
+        self.unpublished_since
+            .lock()
+            .unwrap()
+            .retain(|_, since| height.saturating_sub(*since) < MAX_UNPUBLISHED_BLOCKS);
+
         if !trackers_to_delete.is_empty() {
             self.gatekeeper
                 .delete_appointments(trackers_to_delete, false);
@@ -492,7 +592,7 @@ mod tests {
     use crate::rpc_errors;
     use crate::test_utils::{
         create_carrier, generate_dummy_appointment, generate_dummy_appointment_with_user,
-        generate_uuid, get_last_n_blocks, get_random_breach, get_random_tracker, get_random_tx,
+        get_last_n_blocks, get_random_breach, get_random_tracker, get_random_tx,
         store_appointment_and_its_user, BitcoindStopper, Blockchain, MockedServerQuery, DURATION,
         EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
@@ -528,6 +628,11 @@ mod tests {
 
         pub(crate) fn get_carrier(&self) -> &Mutex<Carrier> {
             &self.carrier
+        }
+
+        /// Height at which a penalty was first found to be unpublishable, if the clock is running.
+        pub(crate) fn unpublished_since(&self, uuid: UUID) -> Option<u32> {
+            self.unpublished_since.lock().unwrap().get(&uuid).copied()
         }
 
         pub(crate) fn add_random_tracker(&self, status: ConfirmationStatus) -> TransactionTracker {
@@ -632,7 +737,14 @@ mod tests {
             ConfirmationStatus::InMempoolSince(h).to_db_data(),
             Some((h, false))
         );
-        assert_eq!(ConfirmationStatus::Rejected(0).to_db_data(), None);
+        assert_eq!(
+            ConfirmationStatus::Rejected {
+                code: 0,
+                permanent: false
+            }
+            .to_db_data(),
+            None
+        );
         assert_eq!(ConfirmationStatus::IrrevocablyResolved.to_db_data(), None);
     }
 
@@ -755,19 +867,57 @@ mod tests {
     #[tokio::test]
     async fn test_handle_breach_rejected() {
         let (responder, _s) = init_responder(MockedServerQuery::Error(
-            rpc_errors::RPC_VERIFY_ERROR as i64,
+            rpc_errors::RPC_DESERIALIZATION_ERROR as i64,
         ))
         .await;
 
-        let user_id = get_random_user_id();
-        let uuid = generate_uuid();
+        // Notice the appointment is stored, so a tracker *could* be created for it. Otherwise this would
+        // pass on the foreign key alone, no matter what the rejection is classified as.
+        let (user_id, uuid) = responder.store_dummy_appointment_to_db();
+        let breach = get_random_breach();
+
+        // A penalty rejected for good is not worth tracking, it can never be published
+        assert_eq!(
+            responder.handle_breach(uuid, breach, user_id),
+            ConfirmationStatus::Rejected {
+                code: rpc_errors::RPC_DESERIALIZATION_ERROR,
+                permanent: true,
+            }
+        );
+        assert!(!responder.has_tracker(uuid));
+    }
+
+    #[tokio::test]
+    async fn test_handle_breach_transiently_rejected() {
+        let (responder, _s) = init_responder(MockedServerQuery::Error(
+            rpc_errors::RPC_VERIFY_REJECTED as i64,
+        ))
+        .await;
+
+        let (user_id, uuid) = responder.store_dummy_appointment_to_db();
         let breach = get_random_breach();
 
         assert_eq!(
             responder.handle_breach(uuid, breach, user_id),
-            ConfirmationStatus::Rejected(rpc_errors::RPC_VERIFY_ERROR)
+            ConfirmationStatus::Rejected {
+                code: rpc_errors::RPC_VERIFY_REJECTED,
+                permanent: false,
+            }
         );
-        assert!(!responder.has_tracker(uuid));
+
+        // The penalty may still make it to the network, so it is tracked as any other unconfirmed one.
+        // `rebroadcast_stale_txs` takes over from here.
+        assert!(responder.has_tracker(uuid));
+        assert_eq!(
+            responder
+                .dbm
+                .lock()
+                .unwrap()
+                .load_tracker(uuid)
+                .unwrap()
+                .status,
+            ConfirmationStatus::InMempoolSince(START_HEIGHT as u32)
+        );
     }
 
     #[tokio::test]
@@ -1116,8 +1266,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_rebroadcast_stale_txs_rejected() {
+        // Notice this covers penalties rejected for good. Transiently rejected ones are kept around
+        // for a retry, see `test_rebroadcast_stale_txs_transiently_rejected`.
         let (responder, _s) = init_responder(MockedServerQuery::Error(
-            rpc_errors::RPC_VERIFY_ERROR as i64,
+            rpc_errors::RPC_DESERIALIZATION_ERROR as i64,
         ))
         .await;
         let mut statues = HashMap::new();
@@ -1160,6 +1312,106 @@ mod tests {
             // All tracker statues shouldn't change since the submitted ones were all rejected.
             assert_eq!(status, former_status);
         }
+    }
+
+    #[tokio::test]
+    async fn test_rebroadcast_stale_txs_transiently_rejected() {
+        let (responder, _s) = init_responder(MockedServerQuery::Error(
+            rpc_errors::RPC_VERIFY_REJECTED as i64,
+        ))
+        .await;
+
+        // Several penalties rejected on the same block, which is what a single dispute breaching many
+        // users' appointments boils down to
+        let rejected_at = 100;
+        let uuids: Vec<_> = (0..5)
+            .map(|_| {
+                responder
+                    .add_random_tracker(ConfirmationStatus::InMempoolSince(rejected_at))
+                    .uuid()
+            })
+            .collect();
+        let status = |uuid| {
+            responder
+                .dbm
+                .lock()
+                .unwrap()
+                .load_tracker(uuid)
+                .unwrap()
+                .status
+        };
+
+        // A penalty the backend keeps turning down is kept instead of being handed back for deletion,
+        // and it is not retried on every block: it is only picked up once it has been stale for
+        // `CONFIRMATIONS_BEFORE_RETRY` blocks.
+        for height in rejected_at + 1..rejected_at + CONFIRMATIONS_BEFORE_RETRY as u32 {
+            assert!(responder.rebroadcast_stale_txs(height).is_none());
+            for uuid in uuids.iter() {
+                assert!(responder.has_tracker(*uuid));
+                assert_eq!(
+                    status(*uuid),
+                    ConfirmationStatus::InMempoolSince(rejected_at)
+                );
+            }
+        }
+
+        // And once they are, being rejected again re-stamps them, putting the following attempt another
+        // `CONFIRMATIONS_BEFORE_RETRY` blocks away instead of on the very next block. Notice they all
+        // move together: penalties queued by the same dispute stay in lockstep, so the tower rebroadcasts
+        // the whole batch at once every `CONFIRMATIONS_BEFORE_RETRY` blocks. That peak is no worse than
+        // handling the breach itself, which already broadcasts the batch in a single block.
+        let retried_at = rejected_at + CONFIRMATIONS_BEFORE_RETRY as u32;
+        assert!(responder.rebroadcast_stale_txs(retried_at).is_none());
+        for uuid in uuids.iter() {
+            assert_eq!(
+                status(*uuid),
+                ConfirmationStatus::InMempoolSince(retried_at)
+            );
+        }
+
+        assert!(responder.rebroadcast_stale_txs(retried_at + 1).is_none());
+        for uuid in uuids.iter() {
+            assert_eq!(
+                status(*uuid),
+                ConfirmationStatus::InMempoolSince(retried_at)
+            );
+        }
+
+        // We don't keep at it forever though: once a penalty has been impossible to publish for
+        // `MAX_UNPUBLISHED_BLOCKS`, it is handed back so the caller can wipe it.
+        let gave_up_at = retried_at + MAX_UNPUBLISHED_BLOCKS;
+        assert_eq!(
+            HashSet::<UUID>::from_iter(responder.rebroadcast_stale_txs(gave_up_at).unwrap()),
+            HashSet::from_iter(uuids)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unpublished_clock_stops_once_published() {
+        let (responder, _s) = init_responder(MockedServerQuery::Error(
+            rpc_errors::RPC_VERIFY_REJECTED as i64,
+        ))
+        .await;
+
+        let rejected_at = 100;
+        let uuid = responder
+            .add_random_tracker(ConfirmationStatus::InMempoolSince(
+                rejected_at - CONFIRMATIONS_BEFORE_RETRY as u32,
+            ))
+            .uuid();
+
+        // The clock starts the first time we find the penalty impossible to publish
+        assert!(responder.rebroadcast_stale_txs(rejected_at).is_none());
+        assert_eq!(responder.unpublished_since(uuid), Some(rejected_at));
+
+        // And stops once the backend finally takes it, so a penalty that comes and goes is not given up
+        // on based on how long ago it first failed
+        let (carrier, _as) = create_carrier(MockedServerQuery::Regular, rejected_at);
+        *responder.get_carrier().lock().unwrap() = carrier;
+
+        let published_at = rejected_at + CONFIRMATIONS_BEFORE_RETRY as u32;
+        assert!(responder.rebroadcast_stale_txs(published_at).is_none());
+        assert_eq!(responder.unpublished_since(uuid), None);
     }
 
     #[tokio::test]

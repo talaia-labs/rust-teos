@@ -18,7 +18,7 @@ use teos_common::{TowerId, UserId};
 use crate::dbm::DBM;
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::{Gatekeeper, MaxSlotsReached, UserInfo};
-use crate::responder::{ConfirmationStatus, Responder, TransactionTracker};
+use crate::responder::{Responder, TransactionTracker};
 use crate::tx_index::TxIndex;
 
 /// Structure holding data regarding a breach.
@@ -275,12 +275,16 @@ impl Watcher {
                     // ref: https://github.com/talaia-labs/rust-teos/pull/190#discussion_r1218235632
                     .unwrap();
 
-                if let ConfirmationStatus::Rejected(reason) = self.responder.handle_breach(
+                let status = self.responder.handle_breach(
                     uuid,
                     Breach::new(dispute_tx.clone(), penalty_tx),
                     user_id,
-                ) {
-                    log::warn!("Appointment bounced in the Responder. Reason: {reason:?}");
+                );
+
+                // Notice a transient rejection is not final: the Responder tracks the penalty and
+                // retries publishing it, so the data must not be wiped.
+                if status.is_permanently_rejected() {
+                    log::warn!("Appointment bounced in the Responder. Reason: {status:?}");
                     self.gatekeeper.delete_appointments(vec![uuid], false);
                     TriggeredAppointment::Rejected
                 } else {
@@ -389,11 +393,17 @@ impl Watcher {
                     &dispute_tx.compute_txid(),
                 ) {
                     Ok(penalty_tx) => {
-                        if let ConfirmationStatus::Rejected(_) = self.responder.handle_breach(
-                            uuid,
-                            Breach::new(dispute_tx.clone(), penalty_tx),
-                            appointment.user_id,
-                        ) {
+                        // Notice only penalties rejected for good are wiped. Transiently rejected ones
+                        // are tracked by the Responder, who will retry publishing them.
+                        if self
+                            .responder
+                            .handle_breach(
+                                uuid,
+                                Breach::new(dispute_tx.clone(), penalty_tx),
+                                appointment.user_id,
+                            )
+                            .is_permanently_rejected()
+                        {
                             invalid_breaches.push(uuid);
                         }
                     }
@@ -796,10 +806,11 @@ mod tests {
         assert!(!watcher.responder.has_tracker(uuid));
         assert!(!watcher.dbm.lock().unwrap().appointment_exists(uuid));
 
-        // Transaction rejected
+        // Transaction rejected for good (transient rejections are tracked and retried instead, see
+        // `test_store_triggered_appointment_transiently_rejected`)
         // Update the Responder with a new Carrier
         let (carrier, _as) = create_carrier(
-            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+            MockedServerQuery::Error(rpc_errors::RPC_DESERIALIZATION_ERROR as i64),
             chain.tip().deref().height,
         );
         *watcher.responder.get_carrier().lock().unwrap() = carrier;
@@ -932,9 +943,9 @@ mod tests {
         assert!(watcher.dbm.lock().unwrap().appointment_exists(uuid));
 
         // A properly formatted but invalid transaction should be rejected by the Responder
-        // Update the Responder with a new Carrier that will reject the transaction
+        // Update the Responder with a new Carrier that will reject the transaction for good
         let (carrier, _as) = create_carrier(
-            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+            MockedServerQuery::Error(rpc_errors::RPC_DESERIALIZATION_ERROR as i64),
             chain.tip().deref().height,
         );
         *watcher.responder.get_carrier().lock().unwrap() = carrier;
@@ -960,6 +971,123 @@ mod tests {
         // The appointment is not kept anywhere
         assert!(!watcher.responder.has_tracker(uuid));
         assert!(!watcher.dbm.lock().unwrap().appointment_exists(uuid));
+    }
+
+    #[tokio::test]
+    async fn test_store_triggered_appointment_transiently_rejected() {
+        let mut chain = Blockchain::default().with_height(START_HEIGHT);
+        let (watcher, _s) = init_watcher(&mut chain).await;
+
+        let (_, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        watcher.register(user_id).unwrap();
+
+        // Replace the carrier with one that rejects transactions, but not for good
+        let (carrier, _as) = create_carrier(
+            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_REJECTED as i64),
+            chain.tip().deref().height,
+        );
+        *watcher.responder.get_carrier().lock().unwrap() = carrier;
+
+        let dispute_tx = get_random_tx();
+        let (uuid, appointment) =
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
+
+        // The penalty may still make it to the network, so the appointment is accepted and tracked
+        assert_eq!(
+            watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx),
+            TriggeredAppointment::Accepted,
+        );
+        assert!(watcher.dbm.lock().unwrap().appointment_exists(uuid));
+        assert!(watcher.responder.has_tracker(uuid));
+    }
+
+    #[tokio::test]
+    async fn test_handle_breaches_transiently_rejected_by_responder_backend() {
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
+        let (watcher, _s) = init_watcher(&mut chain).await;
+
+        // Replace the carrier with one that rejects transactions, but not for good
+        let (carrier, _s) = create_carrier(
+            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_REJECTED as i64),
+            chain.tip().deref().height,
+        );
+        *watcher.responder.get_carrier().lock().unwrap() = carrier;
+
+        let breaches: HashMap<_, _> = (0..10)
+            .map(|_| get_random_tx())
+            .map(|tx| (Locator::new(tx.compute_txid()), tx))
+            .collect();
+
+        let (user_sk, user_pk) = get_random_keypair();
+        let user_id = UserId(user_pk);
+        watcher.register(user_id).unwrap();
+
+        let mut uuids = HashSet::new();
+        for tx in breaches.values() {
+            let (uuid, appointment) =
+                generate_dummy_appointment_with_user(user_id, Some(&tx.compute_txid()));
+            let appointment = appointment.inner;
+            let signature = cryptography::sign(&appointment.to_vec(), &user_sk);
+            watcher.add_appointment(appointment, signature).unwrap();
+            uuids.insert(uuid);
+        }
+
+        // None of them is invalid: the penalties may still make it to the network, so they are tracked
+        // and the appointment data is kept around.
+        assert!(watcher.handle_breaches(breaches).is_none());
+        for uuid in uuids {
+            assert!(watcher.dbm.lock().unwrap().appointment_exists(uuid));
+            assert!(watcher.responder.has_tracker(uuid));
+        }
+    }
+
+    #[tokio::test]
+    async fn exploit_shared_locator_amplification() {
+        let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
+        let (watcher, _s) = init_watcher(&mut chain).await;
+
+        let (carrier, _as) = create_carrier(
+            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_REJECTED as i64),
+            chain.tip().deref().height,
+        );
+        *watcher.responder.get_carrier().lock().unwrap() = carrier;
+
+        // A single on-chain transaction, with many *different* users pointing an appointment at its
+        // locator. One user can only have one appointment per locator (the UUID is a function of both),
+        // but registration is free and unlimited, so anyone can line up as many of these as they like
+        // and they get to pick the dispute transaction, hence its size.
+        let dispute_tx = get_random_tx();
+        let locator = Locator::new(dispute_tx.compute_txid());
+        let n_users = 50;
+        let mut uuids = Vec::new();
+
+        for _ in 0..n_users {
+            let (user_sk, user_pk) = get_random_keypair();
+            let user_id = UserId(user_pk);
+            watcher.register(user_id).unwrap();
+            let (uuid, appointment) =
+                generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
+            let signature = cryptography::sign(&appointment.inner.to_vec(), &user_sk);
+            watcher
+                .add_appointment(appointment.inner, signature)
+                .unwrap();
+            uuids.push(uuid);
+        }
+
+        let breaches = HashMap::from([(locator, dispute_tx.clone())]);
+        assert!(watcher.handle_breaches(breaches).is_none());
+
+        // The cost lands on the database, as one tracker per user each holding its own copy of the
+        // dispute. That is the very same cost the tower already pays when a penalty *is* accepted, so
+        // the amplification factor is not made any worse by keeping rejected ones around. Nothing is
+        // held in memory, which is what would scale badly.
+        for uuid in uuids.iter() {
+            assert!(watcher.dbm.lock().unwrap().appointment_exists(*uuid));
+            let tracker = watcher.dbm.lock().unwrap().load_tracker(*uuid).unwrap();
+            assert_eq!(tracker.dispute_tx, dispute_tx);
+        }
+        assert_eq!(watcher.responder.get_trackers_count(), n_users);
     }
 
     #[tokio::test]
@@ -1147,9 +1275,9 @@ mod tests {
         let mut chain = Blockchain::default().with_height_and_txs(START_HEIGHT, 10);
         let (watcher, _s) = init_watcher(&mut chain).await;
 
-        // Replace the carrier with an erroneous one
+        // Replace the carrier with one that rejects transactions for good
         let (carrier, _s) = create_carrier(
-            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+            MockedServerQuery::Error(rpc_errors::RPC_DESERIALIZATION_ERROR as i64),
             chain.tip().deref().height,
         );
         *watcher.responder.get_carrier().lock().unwrap() = carrier;
@@ -1343,9 +1471,10 @@ mod tests {
         watcher.add_appointment(appointment.inner, sig).unwrap();
 
         // Set the carrier response
-        // Both non-decryptable blobs and blobs with invalid transactions will yield an invalid trigger.
+        // Both non-decryptable blobs and blobs with transactions rejected for good will yield an
+        // invalid trigger. Transiently rejected ones are tracked and retried instead.
         let (carrier, _s) = create_carrier(
-            MockedServerQuery::Error(rpc_errors::RPC_VERIFY_ERROR as i64),
+            MockedServerQuery::Error(rpc_errors::RPC_DESERIALIZATION_ERROR as i64),
             chain.tip().deref().height,
         );
         *watcher.responder.get_carrier().lock().unwrap() = carrier;
