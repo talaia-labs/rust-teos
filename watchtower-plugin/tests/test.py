@@ -212,7 +212,13 @@ def test_misbehaving_watchtower(node_factory, bitcoind, teosd, directory):
 
 
 def test_get_appointment(node_factory, bitcoind, teosd, directory):
-    l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": WT_PLUGIN}])
+    l1, l2 = node_factory.line_graph(
+        2,
+        opts=[
+            {"broken_log": r"Could not find resolution for output [0-9]?: did \*we\* cheat\?"},
+            {"plugin": WT_PLUGIN},
+        ],
+    )
 
     # We need to register l2 with the tower
     tower_id = teosd.cli.gettowerinfo()["tower_id"]
