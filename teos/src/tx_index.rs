@@ -141,7 +141,7 @@ where
                         })
                         .collect();
 
-                    tx_index.update(block.header, &map);
+                    tx_index.push(block.header, &map);
                 }
             }
         }
@@ -165,8 +165,11 @@ where
         Some(self.tip as usize + pos + 1 - self.blocks.len())
     }
 
-    /// Updates the index by adding data from a new block. Removes the oldest block if the index is full afterwards.
-    pub fn update(&mut self, block_header: Header, data: &HashMap<K, V>) {
+    /// Adds the data of a block to the index, evicting the oldest one if the index is at capacity.
+    ///
+    /// This does not touch [TxIndex::tip], so it can be used to fill the index on bootstrap, where blocks
+    /// are added up to an already known tip instead of extending it.
+    fn push(&mut self, block_header: Header, data: &HashMap<K, V>) {
         self.blocks.push_back(block_header.block_hash());
 
         let ks = data
@@ -180,11 +183,15 @@ where
         self.tx_in_block.insert(block_header.block_hash(), ks);
 
         if self.is_full() {
-            // Avoid logging during bootstrap
-            log::debug!("New block added to index: {}", block_header.block_hash());
-            self.tip += 1;
             self.remove_oldest_block();
         }
+    }
+
+    /// Updates the index by adding data from a new block. Removes the oldest block if the index is full afterwards.
+    pub fn update(&mut self, block_header: Header, data: &HashMap<K, V>) {
+        log::debug!("New block added to index: {}", block_header.block_hash());
+        self.push(block_header, data);
+        self.tip += 1;
     }
 
     /// Fixes the index by removing disconnected data.
@@ -197,6 +204,10 @@ where
                 if h != block_hash {
                     log::error!("Disconnected block does not match the oldest block stored in the TxIndex ({block_hash} != {h})");
                 }
+                // `tip` is the height of the last block in the index, which just went one block back.
+                // Not keeping it in sync would make `get_height` overshoot for every block in the index
+                // until the index is refilled.
+                self.tip = self.tip.saturating_sub(1);
             }
         } else {
             log::warn!("The index is already empty");
@@ -316,6 +327,45 @@ mod tests {
 
         let fake_hash = &BlockHash::from_slice_delegated(&[0; 32]).unwrap();
         assert!(cache.get_height(fake_hash).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_height_across_a_reorg() {
+        // `get_height` derives heights from the position of a block in the queue relative to the tip, so the
+        // tip has to be kept in sync when blocks are disconnected. Otherwise every block in the index reports
+        // a height that overshoots by the number of blocks that have not been replaced yet.
+        let cache_size = 10;
+        let depth = 3;
+        let height = 50;
+        let mut chain = Blockchain::default().with_height_and_txs(height, 42);
+        let last_n_blocks = get_last_n_blocks(&mut chain, cache_size).await;
+
+        // `last_n_blocks` is ordered from latest to earliest.
+        let oldest = get_full_block(last_n_blocks.last().unwrap())
+            .header
+            .block_hash();
+        let oldest_height = height - cache_size + 1;
+        let mut cache: TxIndex<Locator, Transaction> = TxIndex::new(&last_n_blocks, height as u32);
+        assert_eq!(cache.get_height(&oldest).unwrap(), oldest_height);
+
+        // Disconnect the tip backwards, as `Responder::block_disconnected` does.
+        for block in last_n_blocks.iter().take(depth) {
+            cache.remove_disconnected_block(&get_full_block(block).header.block_hash());
+            assert_eq!(cache.get_height(&oldest).unwrap(), oldest_height);
+        }
+
+        // And connect the stronger chain back. The heights must hold all the way through, not only once
+        // the index has been refilled back to its size.
+        for i in 0..depth {
+            let block = chain.generate(None);
+            cache.update(block.header, &HashMap::new());
+
+            assert_eq!(
+                cache.get_height(&block.header.block_hash()).unwrap(),
+                height - depth + i + 1
+            );
+            assert_eq!(cache.get_height(&oldest).unwrap(), oldest_height);
+        }
     }
 
     #[tokio::test]

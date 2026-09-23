@@ -206,10 +206,14 @@ async fn main() {
 
         // If we are running in pruned mode some data may be missing (if we happen to have been offline for a while)
         if let Some(prune_height) = rpc.get_blockchain_info().unwrap().prune_height {
-            if last_known_header.height - IRREVOCABLY_RESOLVED + 1 < prune_height as u32 {
+            // The oldest block needed to bootstrap the caches. Make sure that a chain shorter than
+            // IRREVOCABLY_RESOLVED does not underflow (should only be reachable in regtest).
+            let oldest_needed_height = last_known_header
+                .height
+                .saturating_sub(IRREVOCABLY_RESOLVED - 1);
+            if oldest_needed_height < prune_height as u32 {
                 log::warn!(
-                    "Cannot load blocks in the range {}-{}. Chain has gone too far out of sync",
-                    last_known_header.height - IRREVOCABLY_RESOLVED + 1,
+                    "Cannot load blocks in the range {oldest_needed_height}-{}. Chain has gone too far out of sync",
                     last_known_header.height
                 );
                 if conf.force_update {
