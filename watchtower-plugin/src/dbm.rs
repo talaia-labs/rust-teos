@@ -299,6 +299,11 @@ impl DBM {
     }
 
     /// Stores an appointments receipt into the database representing an appointment accepted by a given tower.
+    ///
+    /// The same appointment can be accepted by the same tower more than once (e.g. CLN calling `commitment_revocation`
+    /// again for a commitment after a reconnection, or the retrier and the hook racing for a pending appointment).
+    /// In that case the stored receipt is replaced by the latest one instead of failing. An UPSERT is used instead of
+    /// `INSERT OR REPLACE` so the row is updated in place and `misbehaving_proofs` (which references it) is not cascaded.
     pub fn store_appointment_receipt(
         &mut self,
         tower_id: TowerId,
@@ -308,8 +313,12 @@ impl DBM {
     ) -> Result<(), SqliteError> {
         let tx = self.get_mut_connection().transaction().unwrap();
         tx.execute(
-            "INSERT INTO appointment_receipts (locator, tower_id, start_block, user_signature, tower_signature) 
-                VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO appointment_receipts (locator, tower_id, start_block, user_signature, tower_signature)
+                VALUES (?1, ?2, ?3, ?4, ?5)
+                ON CONFLICT (locator, tower_id) DO UPDATE SET
+                    start_block = excluded.start_block,
+                    user_signature = excluded.user_signature,
+                    tower_signature = excluded.tower_signature",
             params![
                 locator.to_vec(),
                 tower_id.to_vec(),
@@ -901,6 +910,43 @@ mod tests {
         }
 
         assert_eq!(dbm.load_appointment_receipts(tower_id), receipts);
+    }
+
+    #[test]
+    fn test_store_duplicate_appointment_receipt() {
+        let mut dbm = DBM::in_memory().unwrap();
+
+        let tower_id = get_random_user_id();
+        let net_addr = "talaia.watch";
+        let receipt = get_random_registration_receipt();
+        dbm.store_tower_record(tower_id, net_addr, &receipt)
+            .unwrap();
+
+        let appointment = generate_random_appointment(None);
+        let first = AppointmentReceipt::with_signature(
+            "user_signature".to_owned(),
+            42,
+            "tower_signature".to_owned(),
+        );
+        dbm.store_appointment_receipt(tower_id, appointment.locator, 10, &first)
+            .unwrap();
+
+        // The same tower accepting the same appointment again must not fail, and the latest receipt is kept
+        let second = AppointmentReceipt::with_signature(
+            "user_signature".to_owned(),
+            43,
+            "tower_signature_2".to_owned(),
+        );
+        dbm.store_appointment_receipt(tower_id, appointment.locator, 9, &second)
+            .unwrap();
+
+        let stored = dbm
+            .load_appointment_receipt(tower_id, appointment.locator)
+            .unwrap();
+        assert_eq!(stored.start_block(), 43);
+        assert_eq!(stored.signature(), second.signature());
+        assert_eq!(dbm.load_tower_record(tower_id).unwrap().available_slots, 9);
+        assert_eq!(dbm.load_appointment_receipts(tower_id).len(), 1);
     }
 
     #[test]
