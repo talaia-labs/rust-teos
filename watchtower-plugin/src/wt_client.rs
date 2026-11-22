@@ -224,9 +224,16 @@ impl WTClient {
             // DISCUSS: It may be nice to independently compute the slots and compare
             tower.available_slots = available_slots;
 
-            self.dbm
-                .store_appointment_receipt(tower_id, locator, available_slots, receipt)
-                .unwrap();
+            // Never panic here: callers hold the WTClient mutex, and a panic would poison it and
+            // break every later commitment_revocation hook call until the plugin is restarted.
+            if let Err(e) =
+                self.dbm
+                    .store_appointment_receipt(tower_id, locator, available_slots, receipt)
+            {
+                log::error!(
+                    "Cannot store appointment receipt (tower_id: {tower_id}, locator: {locator}): {e}"
+                );
+            }
         } else {
             log::error!("Cannot add appointment receipt to tower. Unknown tower_id: {tower_id}");
         }
@@ -511,6 +518,52 @@ mod tests {
             &TowerSummary::from(tower_info.clone())
         );
         assert_eq!(wt_client.load_tower_info(tower_id).unwrap(), tower_info);
+    }
+
+    #[tokio::test]
+    async fn test_add_appointment_receipt_db_error() {
+        let tmp_path = TempDir::new(&format!("watchtower_{}", get_random_user_id())).unwrap();
+        let mut wt_client =
+            WTClient::new(tmp_path.path().to_path_buf(), unbounded_channel().0).await;
+
+        let (tower_sk, tower_pk) = cryptography::get_random_keypair();
+        let tower_id = TowerId(tower_pk);
+        let registration_receipt = get_random_registration_receipt();
+        wt_client
+            .add_update_tower(tower_id, "talaia.watch", &registration_receipt)
+            .unwrap();
+
+        // Make every write to appointment_receipts fail, using a second connection to the same database
+        let conn = rusqlite::Connection::open(tmp_path.path().join("watchtowers_db.sql3")).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_receipts BEFORE INSERT ON appointment_receipts
+                BEGIN SELECT RAISE(ABORT, 'forced failure'); END;",
+        )
+        .unwrap();
+
+        // Storing the receipt fails, but this must not panic (callers hold the WTClient mutex)
+        let locator = generate_random_appointment(None).locator;
+        let appointment_receipt = get_random_appointment_receipt(tower_sk);
+        wt_client.add_appointment_receipt(tower_id, locator, 42, &appointment_receipt);
+        assert_eq!(wt_client.towers.get(&tower_id).unwrap().available_slots, 42);
+        assert!(wt_client
+            .dbm
+            .load_appointment_receipt(tower_id, locator)
+            .is_none());
+
+        // Once the database works again, receipts are stored as usual
+        conn.execute_batch("DROP TRIGGER fail_receipts;").unwrap();
+        let locator = generate_random_appointment(None).locator;
+        let appointment_receipt = get_random_appointment_receipt(tower_sk);
+        wt_client.add_appointment_receipt(tower_id, locator, 41, &appointment_receipt);
+        assert_eq!(
+            wt_client
+                .dbm
+                .load_appointment_receipt(tower_id, locator)
+                .unwrap()
+                .signature(),
+            appointment_receipt.signature()
+        );
     }
 
     #[tokio::test]
